@@ -19,6 +19,8 @@ import { scoreNum } from "@/lib/format";
 import { pendingActOpenerStart } from "@/lib/act-envelope.mjs";
 import { cleanMessages } from "@/lib/assistant-history.mjs";
 import { cn } from "@/lib/cn";
+import { persistCliId, pickDefaultInstalled, readSavedCliId } from "@/lib/saved-cli";
+import { keepIfInstalled } from "@/lib/cli-pick.mjs";
 
 // ── message model: messages are PART arrays so a live worker card can render
 // inline next to text, both fed by the single JobsProvider store ──────────────
@@ -29,8 +31,8 @@ type Part =
   | { type: "batch"; batchId: string; jobIds: string[] }
   | { type: "confirm"; cid: string; summary: string; state: "pending" | "done" | "cancelled" };
 type Msg = { role: "user" | "assistant"; parts: Part[] };
+type AssistantCli = { id: string; name: string; installed: boolean };
 
-const CONFIG_KEY = "career-ops:config";
 const CHAT_KEY = "career-ops:chat";
 const SIZE_KEY = "career-ops:assistant-size";
 
@@ -136,6 +138,7 @@ function msgText(m: Msg): string {
 export function AssistantConsole() {
   const [open, setOpen] = useState(false);
   const [cliId, setCliId] = useState<string | null>(null);
+  const [availableClis, setAvailableClis] = useState<AssistantCli[]>([]);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [chats, setChats] = useState<{ id: string; title: string; revision: number }[]>([]);
   const [chatReady, setChatReady] = useState(false);
@@ -203,20 +206,38 @@ export function AssistantConsole() {
     if (input) el.style.height = `${Math.min(el.scrollHeight, INPUT_MAX_PX[size])}px`;
   }, [input, size, open]);
 
-  // selected CLI from Config (reacts to changes in other tabs)
+  // Detect installed CLIs here as well as in Config. A first-time user with
+  // several installed CLIs must not land in a disabled assistant.
   useEffect(() => {
     function read() {
+      setCliId(readSavedCliId());
+    }
+    async function detect() {
       try {
-        const raw = localStorage.getItem(CONFIG_KEY);
-        setCliId(raw ? JSON.parse(raw).cliId || null : null);
+        const response = await fetch("/api/clis");
+        if (!response.ok) return;
+        const data = (await response.json()) as { clis?: AssistantCli[] };
+        const list = (data.clis ?? []).filter((cli) => cli.installed);
+        setAvailableClis(list);
+        const saved = readSavedCliId();
+        const next = keepIfInstalled(saved, list) ?? pickDefaultInstalled(list);
+        if (next && next !== saved) persistCliId(next);
+        setCliId(next);
       } catch {
-        setCliId(null);
+        // Keep a saved choice usable when detection has a transient failure.
       }
     }
     read();
+    void detect();
     window.addEventListener("storage", read);
     return () => window.removeEventListener("storage", read);
   }, []);
+
+  function chooseCli(next: string) {
+    if (!availableClis.some((cli) => cli.id === next)) return;
+    persistCliId(next);
+    setCliId(next);
+  }
 
   async function chatRequest(url: string, init?: RequestInit) {
     const response = await fetch(url, init);
@@ -677,7 +698,19 @@ export function AssistantConsole() {
             <CoMark size={26} />
             <div className="flex-1">
               <div className="text-sm font-semibold tracking-tight">Assistant</div>
-              <div className="text-xs text-faint">{cliId ? `via ${cliId}` : "no CLI configured"}</div>
+              {availableClis.length ? (
+                <select
+                  aria-label="Agente de IA"
+                  value={cliId ?? ""}
+                  onChange={(event) => chooseCli(event.target.value)}
+                  disabled={busy}
+                  className="max-w-44 bg-transparent text-xs text-faint outline-none"
+                >
+                  {availableClis.map((cli) => <option key={cli.id} value={cli.id}>{cli.name}</option>)}
+                </select>
+              ) : (
+                <div className="text-xs text-faint">Sem agente configurado</div>
+              )}
             </div>
             <Button variant="ghost" size="icon" onClick={cycleSize} className="text-muted" aria-label={SIZE_LABEL[size]} title={SIZE_LABEL[size]}>
               {size === "full" ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}

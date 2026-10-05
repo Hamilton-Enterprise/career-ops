@@ -40,19 +40,18 @@ const CODEX_READ_ONLY = "read-only";
 const CODEX_WORKSPACE_WRITE = "workspace-write";
 
 /**
- * Refuse Hermes for workers that write. This is a check by name, outside FENCERS,
- * and it covers Hermes alone: every other runtime passes, including the ones
- * absent from FENCERS, which still run write-capable workers with their default
- * access (fencingReport reports them as unfenced). Hermes is limited to workers
- * whose capability record has `writes: false` because career-ops has no verified
- * way to translate that record into Hermes's own approval/sandbox controls.
+ * Refuse read-only runtimes for workers that write. This is a check by name,
+ * outside FENCERS: every other runtime passes, including the ones absent from
+ * FENCERS, which still run write-capable workers with their default access.
+ * Hermes has no verified permission adapter; Cursor is deliberately invoked in
+ * Ask mode, which does not edit files.
  *
  * @param {string} cliId
  * @param {import("./worker-capabilities.mjs").Capabilities} capabilities
  * @returns {boolean}
  */
 export function isCliAllowedForCapabilities(cliId, { writes }) {
-  return cliId !== "hermes" || !writes;
+  return !["hermes", "cursor"].includes(cliId) || !writes;
 }
 
 
@@ -317,6 +316,20 @@ export const CODEX_REQUIRED_EXEC_FLAGS = Object.freeze([
   CODEX_WORKSPACE_WRITE,
 ]);
 
+function verifyCursorArgs(args, capabilities) {
+  const mode = args.indexOf("--mode");
+  if (capabilities.writes) {
+    throw new Error("cli-fencing: Cursor Ask mode cannot run a write-capable worker.");
+  }
+  if (!args.includes("-p") || mode === -1 || args[mode + 1] !== "ask") {
+    throw new Error("cli-fencing: Cursor must run headlessly in read-only Ask mode.");
+  }
+  if (args.some((arg) => ["-f", "--force", "--yolo", "--mode=agent"].includes(arg))) {
+    throw new Error("cli-fencing: Cursor Ask mode cannot carry write-enabling flags.");
+  }
+  return args;
+}
+
 /**
  * Per-CLI fencing. The single table: a CLI is fenceable iff it appears here.
  *
@@ -337,6 +350,7 @@ export const CODEX_REQUIRED_EXEC_FLAGS = Object.freeze([
 const FENCERS = Object.freeze({
   claude: verifyClaudeArgs,
   codex: fenceCodexArgs,
+  cursor: verifyCursorArgs,
 });
 
 /**
@@ -362,6 +376,12 @@ const FENCERS = Object.freeze({
  * @returns {FencingReport}
  */
 export function fencingReport({ cliId, cliName, capabilities }) {
+  if (cliId === "cursor" && capabilities.writes) {
+    return {
+      level: "none",
+      notice: `${cliName} ${UNFENCED_MARKER} for write-capable work`,
+    };
+  }
   if (!Object.hasOwn(FENCERS, cliId)) {
     return {
       level: "none",

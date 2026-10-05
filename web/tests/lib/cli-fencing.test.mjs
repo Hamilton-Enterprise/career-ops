@@ -55,6 +55,28 @@ test("Hermes is blocked for write-capable run kinds", () => {
   assert.equal(isCliAllowedForCapabilities("claude", capabilitiesFor("evaluate")), true, "fenced runtimes must remain available for write-capable runs");
 });
 
+test("Cursor Agent is limited to read-only workers", () => {
+  assert.equal(isCliAllowedForCapabilities("cursor", capabilitiesFor("pdf")), true);
+  assert.equal(isCliAllowedForCapabilities("cursor", capabilitiesFor("research")), true);
+  assert.equal(isCliAllowedForCapabilities("cursor", capabilitiesFor("evaluate")), false);
+  assert.equal(isCliAllowedForCapabilities("cursor", capabilitiesFor("fix-portal")), false);
+});
+
+test("Cursor Ask mode is verified as read-only", () => {
+  const original = ["-p", "--mode", "ask", "--trust", "PROMPT"];
+  const { args } = fenceArgs({ cliId: "cursor", args: original, capabilities: CAPS.networkReadOnly });
+  assert.deepEqual(args, original);
+  assert.equal(fencingReport({ cliId: "cursor", cliName: "Cursor Agent", capabilities: CAPS.networkReadOnly }).level, "full");
+  assert.throws(
+    () => fenceArgs({ cliId: "cursor", args: ["-p", "PROMPT"], capabilities: CAPS.localReadOnly }),
+    /Ask mode/,
+  );
+  assert.throws(
+    () => fenceArgs({ cliId: "cursor", args: original, capabilities: CAPS.workspaceWrite }),
+    /write-capable/,
+  );
+});
+
 test("a local read-only worker gets a true read-only sandbox", () => {
   // Given a worker that reads local files and never fetches (pdf, cv/ingest,
   // apply/prefill, the drive planner)
@@ -527,7 +549,7 @@ test("fencingReport answers for the runtimes the routes actually ask about", () 
     // reassuring answer.
     assert.equal(fencingReport({ cliId, cliName: cliId, capabilities: CAPS.localReadOnly }).level, "none");
   }
-  for (const cliId of ["claude", "codex"]) {
+  for (const cliId of ["claude", "codex", "cursor"]) {
     assert.equal(fencingReport({ cliId, cliName: cliId, capabilities: CAPS.localReadOnly }).level, "full");
   }
 });
