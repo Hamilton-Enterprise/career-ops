@@ -48,11 +48,11 @@ export async function POST(req: Request) {
   try {
     body = await req.json();
   } catch {
-    return Response.json({ error: "bad json" }, { status: 400 });
+    return Response.json({ error: "Pedido inválido." }, { status: 400 });
   }
   const query = (body.query || "").trim();
   const requestedCliId = body.cliId;
-  if (!query || !requestedCliId) return Response.json({ error: "query and cliId required" }, { status: 400 });
+  if (!query || !requestedCliId) return Response.json({ error: "Faltam os termos da pesquisa e o agente." }, { status: 400 });
 
   const resolved = resolveCliOrFallback(requestedCliId);
   if (!resolved) return Response.json(cliUnavailableError(requestedCliId), { status: 404 });
@@ -68,7 +68,7 @@ export async function POST(req: Request) {
   try {
     mode = fs.readFileSync(path.join(careerOpsRoot(), "modes", "discover.md"), "utf8");
   } catch {
-    return Response.json({ code: "MODE_MISSING", error: "AI search needs a newer career-ops — update to enable it." }, { status: 400 });
+    return Response.json({ code: "MODE_MISSING", error: "A pesquisa com IA exige uma versão mais recente do career-ops." }, { status: 400 });
   }
 
   const { lines } = assembleDedupContext();
@@ -85,7 +85,7 @@ export async function POST(req: Request) {
       {
         code: "CODEX_UNSUPPORTED",
         error:
-          "Codex CLI does not support the required read-only execution flags. Update Codex and try again.",
+          "O Codex instalado não suporta as opções de execução só de leitura exigidas. Atualiza-o e volta a tentar.",
       },
       { status: 400 },
     );
@@ -106,7 +106,7 @@ export async function POST(req: Request) {
       return Response.json(
         {
           code: "CODEX_TEMP_DIR_FAILED",
-          error: "AI search could not create an isolated Codex workspace.",
+          error: "A pesquisa com IA não conseguiu criar um espaço isolado para o Codex.",
         },
         { status: 400 },
       );
@@ -190,7 +190,7 @@ export async function POST(req: Request) {
     // in this route's own error shape rather than letting the throw escape POST
     // as an unhandled rejection and an unstructured 500.
     cleanupChildCwd();
-    return Response.json({ error: e instanceof Error ? e.message : "failed to start the CLI" }, { status: 500 });
+    return Response.json({ error: e instanceof Error ? e.message : "Não foi possível iniciar o agente." }, { status: 500 });
   }
 
   const encoder = new TextEncoder();
@@ -403,7 +403,7 @@ export async function POST(req: Request) {
 `,
             );
           } else if (!emitted) {
-            safeEnqueue("_(no final output from Codex)_");
+            safeEnqueue("_(o Codex não devolveu um resultado final)_");
           }
 
           cleanupChildCwd();
@@ -411,7 +411,7 @@ export async function POST(req: Request) {
           return;
         }
 
-        if (!emitted) safeEnqueue("_(no output — is the CLI authenticated?)_");
+        if (!emitted) safeEnqueue("_(o agente não devolveu conteúdo; confirma se tem sessão iniciada)_");
         safeClose();
       });
     },

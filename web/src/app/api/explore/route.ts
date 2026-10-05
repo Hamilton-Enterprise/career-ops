@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
       try {
         offers = await runDiscovery(filters, (e: ScanEvent) => send(e));
       } catch (err) {
-        send({ kind: "error", message: err instanceof Error ? err.message : "discovery failed" } satisfies ScanEvent);
+        send({ kind: "error", message: err instanceof Error ? err.message : "Não foi possível procurar ofertas." } satisfies ScanEvent);
       }
       send({ kind: "done", count: offers.length, offers, cost: { tokens: 0, usd: 0 } } satisfies ScanEvent);
       controller.close();
