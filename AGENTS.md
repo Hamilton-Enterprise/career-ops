@@ -333,13 +333,13 @@ Default modes are in `modes/` (English). Market-specific mode sets (each include
 
 ```yaml
 language:
-  output: en
+  output: pt-PT
   modes_dir: modes/de
 ```
 
 Two separate axes:
 
-- `language.output` controls **human-facing output**: reports, tracker notes, PDFs, cover letters, outreach, interview prep, form answers, any user-visible prose. Default: `en` when absent.
+- `language.output` controls **human-facing output**: reports, tracker notes, PDFs, cover letters, outreach, interview prep, form answers, any user-visible prose. Default in this local installation: `pt-PT` when absent.
 - `language.modes_dir` controls **market vocabulary and local evaluation rules** (e.g. `modes/de` supplies DACH concepts like 13. Monatsgehalt).
 
 **Composition rule:** `language.output` is authoritative for prose; `modes_dir` only supplies market context. English output with DACH vocabulary, French output with Japan-market vocabulary — any combination is valid.
@@ -359,7 +359,7 @@ Two separate axes:
 
 ```yaml
 language:
-  output: en
+  output: pt-PT
   modes_dir: [modes/de, modes/zh] # DACH and China
 ```
 
