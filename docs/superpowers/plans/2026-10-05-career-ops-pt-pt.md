@@ -47,7 +47,7 @@
 - [x] **Step 2: Executar os testes e confirmar a falha pelas funções e fallback ainda inexistentes.**
 - [x] **Step 3: Implementar os helpers mínimos, `lang="pt-PT"`, metadata PT-PT e fallback de output PT-PT.**
 - [x] **Step 4: Executar testes específicos e a suite web.**
-- [ ] **Step 5: Fazer commit do pacote.**
+- [x] **Step 5: Fazer commit do pacote.**
 
 ### Task 2: Navegação, início e descoberta
 
@@ -69,11 +69,11 @@
 - Consumes: `PT_PT_LOCALE` e `statusLabel` da Task 1.
 - Produces: navegação e percursos de procura/candidaturas integralmente PT-PT.
 
-- [ ] **Step 1: Registar, em teste de navegador, a copy inglesa observada nos percursos principais.**
-- [ ] **Step 2: Executar o teste contra a versão inicial e confirmar a falha.**
-- [ ] **Step 3: Reescrever navegação, início, procura, inbox e candidaturas em PT-PT, corrigindo a promessa de pesquisa em segundo plano.**
-- [ ] **Step 4: Executar o teste de navegador e a suite web.**
-- [ ] **Step 5: Fazer commit do pacote.**
+- [x] **Step 1: Registar, em teste de navegador, a copy inglesa observada nos percursos principais.**
+- [x] **Step 2: Executar o teste contra a versão inicial e confirmar a falha.**
+- [x] **Step 3: Reescrever navegação, início, procura, inbox e candidaturas em PT-PT, corrigindo a promessa de pesquisa em segundo plano.**
+- [x] **Step 4: Executar o teste de navegador e a suite web.**
+- [x] **Step 5: Fazer commit do pacote.**
 
 ### Task 3: Restantes áreas e estados de erro
 

@@ -67,12 +67,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <UsageMeter />
             <div className="space-y-1.5">
               <div className="flex items-center justify-between px-1">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-faint">Appearance</span>
-                <span className="font-mono text-[10px] text-faint">THEME</span>
+                <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-faint">Aspeto</span>
+                <span className="font-mono text-[10px] text-faint">TEMA</span>
               </div>
               <ThemeToggle showLabel />
               <div className="px-1">
-                <span className={`${instrumentSerif.className} text-sm text-faint`}>local-first · v0</span>
+                <span className={`${instrumentSerif.className} text-sm text-faint`}>dados locais · v0</span>
               </div>
             </div>
           </div>

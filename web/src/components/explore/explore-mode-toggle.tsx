@@ -1,6 +1,6 @@
 "use client";
 
-import { Compass, Sparkles } from "lucide-react";
+import { Compass, Search } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { CostBadge } from "@/components/cost/cost-badge";
 import type { ExploreMode } from "@/lib/explore";
@@ -29,7 +29,7 @@ export function ExploreModeToggle({
         )}
       >
         <Compass className="size-4" />
-        <span className="font-medium">Scan</span>
+        <span className="font-medium">Pesquisa direta</span>
         <span className="hidden sm:inline-flex">
           <CostBadge kind="free-network" size="xs" />
         </span>
@@ -43,12 +43,12 @@ export function ExploreModeToggle({
           mode === "ai" ? "bg-brand-soft text-brand" : "text-muted hover:text-foreground",
         )}
       >
-        <Sparkles className="size-4" />
-        <span className="font-medium">AI search</span>
+        <Search className="size-4" />
+        <span className="font-medium">Pesquisa assistida</span>
         <span className="hidden sm:inline-flex">
           <CostBadge kind="spend" size="xs" />
         </span>
-        {!cliConfigured && <span className="text-[10px] text-faint">needs a CLI</span>}
+        {!cliConfigured && <span className="text-[10px] text-faint">requer um agente</span>}
       </button>
     </div>
   );

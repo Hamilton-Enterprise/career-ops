@@ -59,7 +59,7 @@ function SourceChip({ ats, s }: { ats: AtsSource; s?: SourceState }) {
       )}
       <span className="text-[13px] font-medium text-foreground">{ATS_LABEL[ats]}</span>
       <div className="ml-auto flex flex-col items-end gap-1">
-        {state === "noisy" && <span className="text-[10px] text-faint">~{s?.unreachable} skipped</span>}
+        {state === "noisy" && <span className="text-[10px] text-faint">~{s?.unreachable} ignoradas</span>}
         <div className="co-src__track">
           <div className="co-src__bar" style={{ width: `${pct}%` }} />
         </div>
@@ -81,13 +81,13 @@ export function DiscoveringState() {
 
         <div className="co-ledger">
           <span className="size-1.5 rounded-full bg-emerald-500" />
-          0 tokens · $0.00 {companies > 0 && <span className="opacity-70">· {companies.toLocaleString()} companies</span>}
+          0 tokens · 0,00 € {companies > 0 && <span className="opacity-70">· {companies.toLocaleString("pt-PT")} empresas</span>}
         </div>
 
         <div>
           <div className={`${instrumentSerif.className} co-disc__counter text-foreground`}>{shown}</div>
           <p className="mt-1 text-sm text-muted">
-            {phase === "revealing" ? "fresh roles found — free" : matchCount > 0 ? "fresh roles and counting…" : "scanning the network…"}
+            {phase === "revealing" ? "ofertas recentes encontradas" : matchCount > 0 ? "ofertas encontradas; a pesquisa continua…" : "a pesquisar nas fontes…"}
           </p>
         </div>
 
@@ -99,7 +99,7 @@ export function DiscoveringState() {
 
         <p className="flex items-center gap-2 text-[13px] text-faint">
           <Loader2 className="size-3.5 animate-spin" />
-          {status || "Casting the net across the ATS network…"}
+          {status || "A consultar as plataformas de recrutamento…"}
         </p>
       </div>
     </>
