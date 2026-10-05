@@ -1,5 +1,9 @@
 # Career-Ops -- AI Job Search Pipeline
 
+## Contexto do projeto
+
+Antes de alterar código, lê integralmente os seis ficheiros em `docs/contexto/`. Atualiza `docs/contexto/memory.md` quando uma decisão, tentativa falhada ou limitação mudar a forma de trabalhar neste projeto.
+
 ## Origin
 
 Built and used by [santifer](https://santifer.io) to evaluate 740+ offers, generate 100+ tailored CVs, and land a Head of Applied AI role. The archetypes, scoring, and negotiation scripts reflect that search; his portfolio is also open source: [cv-santiago](https://github.com/santifer/cv-santiago).

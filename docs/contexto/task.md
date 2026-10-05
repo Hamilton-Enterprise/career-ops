@@ -1,0 +1,3 @@
+# Tarefa atual
+
+A adaptação da aplicação web para português de Portugal está implementada, compilada e verificada nos percursos principais. A copy, os erros visíveis, o assistente e as pesquisas guardadas foram revistos; os elementos decorativos sem função foram reduzidos. Claude, Codex e Cursor foram executados com sucesso; o Gemini está instalado e aguarda a escolha manual da conta Google. A versão de trabalho corre na porta 3427 para não interromper a instância do utilizador na porta 3417. O trabalho está guardado em commits locais e a worktree fica preservada até ser decidida a integração.

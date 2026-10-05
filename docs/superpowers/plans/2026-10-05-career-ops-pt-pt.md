@@ -97,11 +97,11 @@
 - Consumes: rótulos PT-PT da Task 1.
 - Produces: áreas secundárias, loading, confirmações e erros em PT-PT.
 
-- [ ] **Step 1: Acrescentar ao teste de navegador os ecrãs e estados alcançáveis sem efeitos externos.**
-- [ ] **Step 2: Confirmar que a versão inicial ainda apresenta inglês nesses estados.**
-- [ ] **Step 3: Reescrever a copy visível restante e manter intactos os tokens de protocolo.**
-- [ ] **Step 4: Executar testes específicos, suite web e typecheck.**
-- [ ] **Step 5: Fazer commit do pacote.**
+- [x] **Step 1: Acrescentar ao teste de navegador os ecrãs e estados alcançáveis sem efeitos externos.**
+- [x] **Step 2: Confirmar que a versão inicial ainda apresenta inglês nesses estados.**
+- [x] **Step 3: Reescrever a copy visível restante e manter intactos os tokens de protocolo.**
+- [x] **Step 4: Executar testes específicos, suite web e typecheck.**
+- [x] **Step 5: Fazer commit do pacote.**
 
 ### Task 4: Assistente e voz natural
 
@@ -116,11 +116,11 @@
 - Consumes: fallback `pt-PT` da Task 1.
 - Produces: assistente PT-PT, direto e sem linguagem promocional; envelopes de ação mantêm o contrato atual.
 
-- [ ] **Step 1: Escrever teste para o prompt do assistente e mensagens de ação observáveis.**
-- [ ] **Step 2: Confirmar que o teste falha com o prompt promocional e inglês atual.**
-- [ ] **Step 3: Reescrever instruções de voz e mensagens humanas, sem alterar ações, permissões ou confirmações de segurança.**
-- [ ] **Step 4: Executar testes específicos e suite web.**
-- [ ] **Step 5: Fazer commit do pacote.**
+- [x] **Step 1: Escrever teste para o prompt do assistente e mensagens de ação observáveis.**
+- [x] **Step 2: Confirmar que o teste falha com o prompt promocional e inglês atual.**
+- [x] **Step 3: Reescrever instruções de voz e mensagens humanas, sem alterar ações, permissões ou confirmações de segurança.**
+- [x] **Step 4: Executar testes específicos e suite web.**
+- [x] **Step 5: Fazer commit do pacote.**
 
 ### Task 5: Pesquisas guardadas e acabamento anti-slop
 
@@ -134,11 +134,11 @@
 - Consumes: `scheduledSuccessRate` e locale da Task 1.
 - Produces: ecrã de pesquisas guardadas factual, sem estatísticas vazias nem sucesso fictício.
 
-- [ ] **Step 1: Acrescentar casos para zero execuções, execuções reais e estados do scheduler.**
-- [ ] **Step 2: Confirmar a falha com o 100% atual e copy inglesa.**
-- [ ] **Step 3: Aplicar a copy PT-PT, esconder métricas sem dados e remover repetição/decoração sem função.**
-- [ ] **Step 4: Executar testes, typecheck, build e auditoria Impeccable.**
-- [ ] **Step 5: Fazer commit do pacote.**
+- [x] **Step 1: Acrescentar casos para zero execuções, execuções reais e estados do scheduler.**
+- [x] **Step 2: Confirmar a falha com o 100% atual e copy inglesa.**
+- [x] **Step 3: Aplicar a copy PT-PT, esconder métricas sem dados e remover repetição/decoração sem função.**
+- [x] **Step 4: Executar testes, typecheck, build e auditoria anti-slop.**
+- [x] **Step 5: Fazer commit do pacote.**
 
 ### Task 6: Verificação ponta a ponta
 
@@ -150,8 +150,8 @@
 - Consumes: aplicação completa das Tasks 1–5.
 - Produces: evidência de desktop, móvel, erros de consola, testes, typecheck e build.
 
-- [ ] **Step 1: Iniciar a worktree numa porta diferente, ligada ao mesmo data root em modo de leitura para a inspeção.**
-- [ ] **Step 2: Percorrer todos os destinos principais em desktop e móvel; verificar copy, truncagem, foco e consola.**
-- [ ] **Step 3: Executar suite web completa, typecheck, build e teste do fallback de idioma do núcleo.**
-- [ ] **Step 4: Rever o diff completo, corrigir findings importantes com RED → GREEN e repetir a suite.**
-- [ ] **Step 5: Fazer o commit final e preservar a worktree para decisão de integração.**
+- [x] **Step 1: Iniciar a worktree numa porta diferente, ligada ao diretório da própria worktree para a inspeção.**
+- [x] **Step 2: Percorrer os destinos principais em desktop e os ecrãs de configuração, pesquisas e candidatura em móvel; verificar copy, largura e consola.**
+- [x] **Step 3: Executar suite web completa, typecheck, build e teste do fallback de idioma do núcleo.**
+- [x] **Step 4: Rever o diff completo, corrigir o conflito entre o campo e o botão da candidatura móvel e repetir a suite.**
+- [x] **Step 5: Fazer o commit final e preservar a worktree para decisão de integração.**
