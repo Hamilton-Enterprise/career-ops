@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-import { atomicWriteFile, isIgnorableDirectoryFsyncError } from '../scan.mjs';
+import { atomicWriteFile, isIgnorableDirectoryFsyncError, normalizeReceiptOffer } from '../scan.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SCAN = join(ROOT, 'scan.mjs');
@@ -102,6 +102,55 @@ test('only unsupported directory fsync errors are ignored on Windows', () => {
   assert.equal(isIgnorableDirectoryFsyncError({ code: 'ENOSPC' }, 'win32'), false);
 });
 
+test('normalizeReceiptOffer emits a date and preserves structured salary with missing location', () => {
+  assert.deepEqual(normalizeReceiptOffer({
+    company: 'Fixture Defense',
+    title: 'Strategic Finance Manager',
+    url: 'https://boards.example.com/fixture/1001',
+    source: 'local-parser',
+    postedAt: Date.parse('2026-07-15T23:30:00Z'),
+    salary: { min: 125000, max: 150000, currency: 'USD' },
+  }), {
+    company: 'Fixture Defense',
+    title: 'Strategic Finance Manager',
+    location: '',
+    postedAt: '2026-07-15',
+    url: 'https://boards.example.com/fixture/1001',
+    source: 'local-parser',
+    salary: { min: 125000, max: 150000, currency: 'USD' },
+  });
+});
+
+test('--json includes local-parser offers during dry-run without creating pipeline or history', () => {
+  const root = workspace([
+    'tracked_companies:',
+    '  - name: Fixture Defense',
+    '    careers_url: https://boards.example.com/fixture',
+    '    parser:',
+    '      command: node',
+    '      script: tests/fixtures/noc-board.mjs',
+    'job_boards: []',
+    '',
+  ].join('\n'));
+  try {
+    const result = runJson(root);
+    assert.equal(result.status, 0, result.stderr);
+    const receipt = JSON.parse(result.stdout);
+    assert.equal(receipt.version, 'careerops.scan.receipt@1');
+    assert.equal(receipt.added, 3);
+    assert.deepEqual(receipt.offers.map(offer => offer.url), [
+      'https://example.invalid/jobs/1',
+      'https://example.invalid/jobs/2',
+      'https://example.invalid/jobs/3',
+    ]);
+    assert.ok(receipt.offers.every(offer => offer.source === 'local-parser'));
+    assert.equal(existsSync(join(root, 'data', 'pipeline.md')), false);
+    assert.equal(existsSync(join(root, 'data', 'scan-history.tsv')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('--json emits exactly one clean successful receipt', () => {
   const root = workspace('tracked_companies: []\njob_boards: []\n');
   try {
@@ -119,6 +168,7 @@ test('--json emits exactly one clean successful receipt', () => {
       duplicates: 0,
       added: 0,
       added_urls: [],
+      offers: [],
       errors: [],
       unverified_zero: [],
       dry_run: true,

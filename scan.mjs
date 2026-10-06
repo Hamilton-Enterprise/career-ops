@@ -2884,6 +2884,19 @@ function postedAtIsoDate(postedAt) {
   if (typeof postedAt !== 'number' || !Number.isFinite(postedAt) || postedAt <= 0) return '';
   return new Date(postedAt).toISOString().slice(0, 10);
 }
+
+export function normalizeReceiptOffer(offer) {
+  return {
+    company: normalizeScanScalar(offer.company),
+    title: normalizeScanScalar(offer.title),
+    location: normalizeScanScalar(offer.location),
+    postedAt: postedAtIsoDate(offer.postedAt),
+    url: normalizeScanUrl(offer.url),
+    source: normalizeScanScalar(offer.source),
+    ...(offer.salary && typeof offer.salary === 'object' ? { salary: offer.salary } : {}),
+  };
+}
+
 export function formatScanHistoryRow(offer, date, status = 'added') {
   const record = {
     url: normalizeScanUrl(offer.url),
@@ -4552,6 +4565,7 @@ async function main() {
       duplicates: totalDupes,
       added: verifiedOffers.length,
       added_urls: verifiedOffers.map(offer => offer.url),
+      offers: verifiedOffers.map(normalizeReceiptOffer),
       errors: errors.map(({ company, error }) => ({ company, error })),
       unverified_zero: unverifiedZeroTargets,
       dry_run: dryRun,
