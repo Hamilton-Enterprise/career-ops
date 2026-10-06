@@ -684,11 +684,11 @@ export function AssistantConsole() {
       {!open && (
         <button
           onClick={() => setOpen(true)}
-          className="fixed bottom-5 right-5 z-50 flex items-center justify-center gap-2 rounded-full border border-border bg-surface/90 py-1.5 pl-1.5 pr-4 shadow-lg backdrop-blur transition-colors hover:bg-surface-hover max-sm:min-h-[44px]"
+          className="fixed bottom-5 right-5 z-50 flex items-center justify-center gap-2 rounded-full border border-border bg-surface/90 py-1.5 pl-1.5 pr-4 shadow-lg backdrop-blur transition-colors hover:bg-surface-hover max-sm:size-11 max-sm:p-0"
           aria-label="Abrir assistente"
         >
           <CoMark size={26} />
-          <span className="text-sm font-medium">Assistente</span>
+          <span className="hidden text-sm font-medium sm:inline">Assistente</span>
         </button>
       )}
 

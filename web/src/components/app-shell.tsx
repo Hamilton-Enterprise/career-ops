@@ -77,7 +77,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         </aside>
-        <main className="flex-1 overflow-x-hidden">{children}</main>
+        <main className="flex-1 overflow-x-hidden max-sm:pb-20">{children}</main>
         <AssistantConsole />
         <BackToTop />
         <FirstScoreView />
