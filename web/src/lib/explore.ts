@@ -59,6 +59,8 @@ export type DiscoveredOffer = {
   postedAt: string;
   ats: string;
   source: string;
+  sources?: string[];
+  salary?: { min?: number; max?: number; currency?: string; period?: string };
   /** which positive keyword matched the title (transparency, e.g. "ai" in "Nail") */
   matchedKeyword?: string;
   /** free, zero-token triage hint computed at discovery time from the posting
@@ -92,12 +94,18 @@ export type ScanEvent =
   | { kind: "atsStart"; ats: string; companies: number }
   | { kind: "progress"; ats: string; scanned: number; total: number; matches: number }
   | { kind: "atsDone"; ats: string; unreachable: number }
+  | { kind: "sourceStart"; source: string }
+  | { kind: "sourceDone"; source: string; count: number }
+  | { kind: "sourceError"; source: string; message: string }
   | { kind: "offer"; offer: DiscoveredOffer }
   | {
       kind: "summary";
       companiesScanned: number;
       unreachable: number;
       matches: number;
+      status?: "ok" | "partial" | "failed";
+      sources?: { source: string; state: "ok" | "error" | "skipped"; message?: string }[];
+      missingLocation?: number;
       // Authoritative degraded-vs-empty signals from the scanner's --json mode (#1199).
       // Absent on older local checkouts (the legacy human-stdout parse can't supply them).
       companiesAvailable?: number;
@@ -126,6 +134,7 @@ function clampNum(v: unknown, lo: number, hi: number, fallback: number): number 
 
 function cleanAts(v: unknown): AtsSource[] {
   if (!Array.isArray(v)) return [...ATS_SOURCES];
+  if (v.length === 0) return [];
   const out = v
     .map((a) => String(a).toLowerCase())
     .filter((a): a is AtsSource => (ATS_SOURCES as string[]).includes(a));
@@ -192,7 +201,7 @@ export function paramsToFilters(sp: URLSearchParams, base: ExploreFilters = DEFA
       blockHard: split(sp.get("hardno")),
       alwaysAllow: split(sp.get("home")),
       since: sp.get("since") ?? undefined,
-      ats: split(sp.get("ats")),
+      ats: sp.has("ats") ? (split(sp.get("ats")) ?? []) : undefined,
       markets: sp.has("markets") ? decodeMarkets(sp.get("markets")) : undefined,
       limit: sp.get("limit") ?? undefined,
     },

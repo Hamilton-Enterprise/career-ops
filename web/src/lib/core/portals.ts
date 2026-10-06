@@ -6,6 +6,7 @@ import * as yaml from "js-yaml";
 import { careerOpsRoot } from "@/lib/career-ops";
 import { DEFAULT_FILTERS, cleanChips, type ExploreFilters } from "@/lib/explore";
 import { profileTargetKeywords } from "@/lib/profile-keywords.mjs";
+import { resolveScanTimeoutMs } from "./scan-timeout.mjs";
 
 /**
  * ACL for portals.yml — the core's scan-filter config (a CONTRACT entry-point,
@@ -57,6 +58,15 @@ function loadYaml(rel: string): Record<string, unknown> | null {
   }
 }
 
+/** Shared tolerant profile read for targeting and the scanner's existing budget. */
+export function loadProfileTargets(): string[] {
+  return profileTargetKeywords(loadYaml("config/profile.yml"));
+}
+
+export function readScanTimeoutMs(): number {
+  return resolveScanTimeoutMs(loadYaml("config/profile.yml"));
+}
+
 /**
  * Tolerantly seed first-search defaults from the user's real config. Reads
  * portals.yml (title_filter / location_filter) and falls back to
@@ -86,7 +96,7 @@ export function seedExploreFilters(): { filters: ExploreFilters; seededFrom: str
     // core on BOTH fields — `primary` read as a string when it is a list,
     // `archetypes` spread raw when its entries are objects — so this fallback
     // returned nothing for every profile.yml the app itself writes.
-    const fromRoles = listFrom(profileTargetKeywords(loadYaml("config/profile.yml")));
+    const fromRoles = listFrom(loadProfileTargets());
     if (fromRoles.length) {
       filters.positive = fromRoles;
       seededFrom.push("profile.yml");

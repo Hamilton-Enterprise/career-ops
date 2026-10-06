@@ -1,14 +1,13 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
-import * as yaml from "js-yaml";
 import { careerOpsRoot, rootScript } from "@/lib/career-ops";
-import { writeTempPortals, cleanupTempPortals } from "./portals";
-import { profileTargetKeywords } from "@/lib/profile-keywords.mjs";
+import { writeTempPortals, cleanupTempPortals, loadProfileTargets, readScanTimeoutMs } from "@/lib/core/portals";
 import { titleFit } from "@/lib/title-fit.mjs";
-import { resolveScanTimeoutMs, scanTimeoutMessage } from "./scan-timeout.mjs";
+import { scanTimeoutMessage } from "./scan-timeout.mjs";
 import { ATS_LABEL, ATS_SOURCES, type AtsSource, type DiscoveredOffer, type ExploreFilters, type FitBand, type ScanEvent } from "@/lib/explore";
 import { mergeScanResults, timedOutMessage } from "./scan-merge.mjs";
+import { runMarketDiscovery } from "@/lib/core/market-scan";
+import { mergeDiscoveredOffers } from "./market-merge.mjs";
 
 export type { DiscoveredOffer, ScanEvent, AtsSource } from "@/lib/explore";
 export { ATS_SOURCES } from "@/lib/explore";
@@ -43,21 +42,6 @@ function firstMatch(title: string, positives: string[]): string | undefined {
   const lower = title.toLowerCase();
   for (const k of positives) if (k && lower.includes(k.toLowerCase())) return k;
   return undefined;
-}
-
-/**
- * Profile target roles for the free fit band (#3260), loaded ONCE per scan run
- * (tolerantly: missing/unreadable profile.yml just means no chips — same
- * posture as seedExploreFilters in portals.ts). Annotation only: the result
- * never feeds filtering, ordering, or the summary counts.
- */
-function loadProfileTargets(): string[] {
-  try {
-    const doc = yaml.load(fs.readFileSync(path.join(careerOpsRoot(), "config", "profile.yml"), "utf8"));
-    return profileTargetKeywords(doc && typeof doc === "object" ? (doc as Record<string, unknown>) : null);
-  } catch {
-    return [];
-  }
 }
 
 /** Spread-in helper: {} when there is no band (keeps `fit` truly absent rather
@@ -154,18 +138,6 @@ type ScanJson = {
   stoppedEarly?: boolean;
   offers?: JsonOffer[];
 };
-
-// Scan budget (ms) from config/profile.yml `scan.timeout_seconds` — the same
-// place `scan.extractor` lives. Never throws: a missing/malformed profile keeps
-// the default (a broken config must not block scanning).
-function readScanTimeoutMs(): number {
-  try {
-    const parsed = yaml.load(fs.readFileSync(path.join(careerOpsRoot(), "config", "profile.yml"), "utf8"));
-    return resolveScanTimeoutMs(parsed);
-  } catch {
-    return resolveScanTimeoutMs(undefined);
-  }
-}
 
 type ScannerRun = {
   /** --json mode: the parsed result object, or null if the child produced none. */
@@ -360,7 +332,8 @@ function runScanner(
     child.on("error", (e) => {
       settle({ json: null, timedOut, failed: e instanceof Error ? e.message : "scanner failed to start" });
     });
-    child.on("close", () => {
+    child.on("close", (code) => {
+      const failure = code !== 0 && !timedOut ? { failed: `O scanner terminou com código ${code ?? "desconhecido"}.` } : {};
       if (useJson) {
         let j: ScanJson | null = null;
         try {
@@ -368,18 +341,18 @@ function runScanner(
         } catch {
           j = null;
         }
-        settle({ json: j && Array.isArray(j.offers) ? j : null, timedOut });
+        settle({ json: j && Array.isArray(j.offers) ? j : null, timedOut, ...failure });
         return;
       }
       if (outBuf.trim()) handleLine(outBuf);
-      settle({ json: null, timedOut });
+      settle({ json: null, timedOut, ...failure });
     });
   });
 }
 
 const NO_OUTPUT = "The scanner returned no readable output.";
 
-export async function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) => void): Promise<DiscoveredOffer[]> {
+async function runAtsDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) => void): Promise<DiscoveredOffer[]> {
   const tempPortals = writeTempPortals(filters);
   const ats = (filters.ats.length ? filters.ats : [...ATS_SOURCES]).filter((a) => (ATS_SOURCES as readonly string[]).includes(a));
   const useJson = scannerSupportsJson();
@@ -424,7 +397,7 @@ export async function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEve
     // finished: its offers and counts are kept, and it is still named as incomplete.
     const stopped = runs.map((r) => r.timedOut || r.json?.stoppedEarly === true);
     const timedOut = ats.filter((_, i) => stopped[i]);
-    const incomplete = ats.filter((_, i) => !runs[i].json || stopped[i]);
+    const incomplete = ats.filter((_, i) => !runs[i].json || stopped[i] || runs[i].failed);
 
     if (finished.length === 0) {
       const failed = runs.find((r) => r.failed)?.failed;
@@ -450,4 +423,58 @@ export async function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEve
   } finally {
     cleanupTempPortals(tempPortals);
   }
+}
+
+export async function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) => void): Promise<DiscoveredOffer[]> {
+  const ats = filters.ats.filter(a => ATS_SOURCES.includes(a));
+  type Summary = Extract<ScanEvent, { kind: "summary" }>;
+  let atsSummary: Summary | undefined;
+  const atsErrors: string[] = [];
+  const discoverAts = async () => {
+    for (const source of ats) onEvent({ kind: "sourceStart", source });
+    if (!fs.existsSync(rootScript("scan-ats-full"))) {
+      atsErrors.push("O scanner ATS não está disponível nesta instalação.");
+      return [] as DiscoveredOffer[];
+    }
+    try {
+      return await runAtsDiscovery({ ...filters, ats }, event => {
+        if (event.kind === "summary") atsSummary = event;
+        else if (event.kind === "error") atsErrors.push(event.message);
+        else onEvent(event);
+      });
+    } catch (error) {
+      atsErrors.push(error instanceof Error ? error.message : NO_OUTPUT);
+      return [] as DiscoveredOffer[];
+    }
+  };
+  // Both selected paths start before either is awaited. A single selected path
+  // runs alone, so an unavailable sibling scanner cannot affect that search.
+  const atsPromise = ats.length ? discoverAts() : null;
+  const marketPromise = filters.markets.length ? runMarketDiscovery(filters, onEvent).catch(error => ({
+    offers: [] as DiscoveredOffer[], valid: false, status: "failed" as const, missingLocation: 0, scanned: 0,
+    sources: filters.markets.map(source => ({ source, state: "error" as const, message: error instanceof Error ? error.message : NO_OUTPUT })),
+  })) : null;
+  const atsOffers = atsPromise ? await atsPromise : [];
+  const marketRun = marketPromise ? await marketPromise : null;
+  const offers = mergeDiscoveredOffers(atsOffers, marketRun?.offers ?? []);
+  const atsValid = Boolean(atsSummary) || atsOffers.length > 0;
+  const sources: NonNullable<Summary["sources"]> = ats.map(source => {
+    const failed = !atsValid || atsSummary?.incomplete?.includes(source);
+    return { source, state: failed ? "error" : "ok", ...(failed ? { message: atsErrors[0] ?? "A fonte não terminou." } : {}) };
+  });
+  sources.push(...(marketRun?.sources ?? []));
+  for (const source of sources.slice(0, ats.length)) {
+    onEvent(source.state === "ok" ? { kind: "sourceDone", source: source.source, count: atsOffers.filter(o => o.ats === source.source).length } :
+      { kind: "sourceError", source: source.source, message: source.message ?? NO_OUTPUT });
+  }
+  const valid = (ats.length > 0 && atsValid) || marketRun?.valid === true;
+  const status = !valid ? "failed" : sources.some(s => s.state !== "ok") || atsErrors.length > 0 || marketRun?.status === "partial" ? "partial" : "ok";
+  if (!valid) onEvent({ kind: "error", message: atsErrors[0] ?? "Nenhuma fonte selecionada devolveu um resultado válido." });
+  onEvent({
+    ...(atsSummary ?? { kind: "summary", companiesScanned: 0, unreachable: 0, matches: 0 }),
+    companiesScanned: (atsSummary?.companiesScanned ?? 0) + (marketRun?.scanned ?? 0),
+    matches: offers.length, status, sources, missingLocation: marketRun?.missingLocation ?? 0,
+    ...(sources.some(s => s.state !== "ok") ? { incomplete: sources.filter(s => s.state !== "ok").map(s => s.source) } : {}),
+  });
+  return offers;
 }
