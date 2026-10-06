@@ -53,6 +53,13 @@ struct CareerOpsCoreTests {
         assert(navigationDisposition(nil, origin: origin) == .blocked)
         assert(navigationDisposition(URL(string: "/today"), origin: origin) == .blocked)
         assert(navigationDisposition(URL(string: "javascript:alert(1)"), origin: origin) == .blocked)
+        let localBlob = URL(string: "blob:http://127.0.0.1:54321/conversation")!
+        assert(navigationDisposition(localBlob, origin: origin) == .blocked)
+        assert(navigationDisposition(localBlob, origin: origin, allowingBlobDownload: true) == .download)
+        assert(navigationDisposition(URL(string: "blob:http://127.0.0.1:54322/conversation"), origin: origin,
+                                     allowingBlobDownload: true) == .blocked)
+        assert(navigationDisposition(URL(string: "http://127.0.0.1:54321/export"), origin: origin,
+                                     allowingBlobDownload: true) == .internalPage)
         let env = serverEnvironment(config, inherited: ["CAREER_OPS_ROOT": "/wrong", "CAREER_OPS_DATA_DIR": "/wrong", "CAREER_OPS_CODE_ROOT": "/wrong", "CAREER_OPS_WEB_ALLOWED_HOSTS": "*", "PATH": "/bin"])
         assert(env["CAREER_OPS_ROOT"] == root.path)
         assert(env["CAREER_OPS_CODE_ROOT"] == root.path)

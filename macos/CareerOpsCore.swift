@@ -67,11 +67,21 @@ struct ServerURLParser {
     }
 }
 
-enum NavigationDisposition { case internalPage, external, blocked }
+enum NavigationDisposition { case internalPage, download, external, blocked }
 
-func navigationDisposition(_ url: URL?, origin: URL) -> NavigationDisposition {
-    guard let url, let scheme = url.scheme?.lowercased(),
-          !["javascript", "data", "blob", "about"].contains(scheme) else { return .blocked }
+func navigationDisposition(_ url: URL?, origin: URL,
+                           allowingBlobDownload: Bool = false) -> NavigationDisposition {
+    guard let url, let scheme = url.scheme?.lowercased() else { return .blocked }
+    if scheme == "blob" {
+        guard allowingBlobDownload,
+              let embedded = URL(string: String(url.absoluteString.dropFirst("blob:".count))),
+              embedded.user == nil, embedded.password == nil,
+              embedded.scheme == origin.scheme, embedded.host == origin.host, embedded.port == origin.port else {
+            return .blocked
+        }
+        return .download
+    }
+    guard !["javascript", "data", "about"].contains(scheme) else { return .blocked }
     if ["http", "https"].contains(scheme), url.host == nil { return .blocked }
     if url.user == nil, url.password == nil, scheme == origin.scheme,
        url.host == origin.host, url.port == origin.port { return .internalPage }

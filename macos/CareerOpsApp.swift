@@ -310,8 +310,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let origin else { decisionHandler(.cancel); return }
-        switch navigationDisposition(navigationAction.request.url, origin: origin) {
+        switch navigationDisposition(navigationAction.request.url, origin: origin,
+                                     allowingBlobDownload: webView === self.webView && navigationAction.shouldPerformDownload) {
         case .internalPage: decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
+        case .download: decisionHandler(.download)
         case .external:
             if let url = navigationAction.request.url { NSWorkspace.shared.open(url) }
             decisionHandler(.cancel)
@@ -325,7 +327,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             switch navigationDisposition(url, origin: origin) {
             case .internalPage: webView.load(navigationAction.request)
             case .external: NSWorkspace.shared.open(url)
-            case .blocked: break
+            case .download, .blocked: break
             }
         }
         return nil
@@ -349,12 +351,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
-        guard let origin, navigationDisposition(navigationResponse.response.url, origin: origin) == .internalPage else {
+        guard let origin else { decisionHandler(.cancel); return }
+        switch navigationDisposition(navigationResponse.response.url, origin: origin) {
+        case .internalPage: decisionHandler(navigationResponse.canShowMIMEType ? .allow : .download)
+        case .external:
             if let url = navigationResponse.response.url { NSWorkspace.shared.open(url) }
             decisionHandler(.cancel)
-            return
+        case .download, .blocked: decisionHandler(.cancel)
         }
-        decisionHandler(navigationResponse.canShowMIMEType ? .allow : .download)
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) { download.delegate = self }
@@ -387,12 +391,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     func download(_ download: WKDownload, willPerformHTTPRedirection response: HTTPURLResponse,
                   newRequest request: URLRequest, decisionHandler: @escaping (WKDownload.RedirectPolicy) -> Void) {
-        guard let origin, navigationDisposition(request.url, origin: origin) == .internalPage else {
+        guard let origin else { decisionHandler(.cancel); return }
+        switch navigationDisposition(request.url, origin: origin) {
+        case .internalPage: decisionHandler(.allow)
+        case .external:
             if let url = request.url { NSWorkspace.shared.open(url) }
             decisionHandler(.cancel)
-            return
+        case .download, .blocked: decisionHandler(.cancel)
         }
-        decisionHandler(.allow)
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
