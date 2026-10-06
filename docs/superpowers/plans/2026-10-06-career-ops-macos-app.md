@@ -114,7 +114,14 @@ Compile with `swiftc` and the AppKit/WebKit frameworks, copy `Info.plist`, gener
 
 Run: `macos/build-app.sh --test-only`
 
-Run: `macos/build-app.sh --checkout /Users/hamiltonsilva/Developer/worktrees/career-ops/pt-pt-copy --node /opt/homebrew/bin/node --data-root /Users/hamiltonsilva/Developer/career-ops-data --destination "$HOME/Applications/Career Ops.app"`
+Resolve the installation inputs without committing machine-specific paths:
+
+```bash
+career_ops_checkout="$(pwd -P)"
+career_ops_node="$(command -v node)"
+career_ops_data_root="$(cat "$(dirname "$(git rev-parse --git-common-dir)")/.career-ops-data")"
+macos/build-app.sh --checkout "$career_ops_checkout" --node "$career_ops_node" --data-root "$career_ops_data_root" --destination "$HOME/Applications/Career Ops.app"
+```
 
 Run: `codesign --verify --deep --strict "$HOME/Applications/Career Ops.app"`
 
