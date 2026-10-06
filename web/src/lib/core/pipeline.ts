@@ -36,12 +36,13 @@ export function addOffersToPipeline(offers: DiscoveredOffer[]): Promise<AddResul
 
   // Data-only / pre-scan-ats checkout has no scan.mjs writers → fail with an
   // actionable message instead of a silent added:0.
-  if (!fs.existsSync(rootScript("scan"))) {
+  const scanScript = rootScript("scan");
+  if (!fs.existsSync(scanScript)) {
     return Promise.resolve({ added: 0, error: "Esta instalação contém apenas dados e não inclui o módulo que atualiza as oportunidades (scan.mjs)." });
   }
 
-  const scanUrl = pathToFileURL(rootScript("scan")).href;
-  const localTodayUrl = pathToFileURL(path.join(careerOpsRoot(), "lib", "local-today.mjs")).href;
+  const scanUrl = pathToFileURL(scanScript).href;
+  const localTodayUrl = pathToFileURL(path.join(path.dirname(scanScript), "lib", "local-today.mjs")).href;
   const code = `
 import { appendToPipeline, appendToScanHistory } from ${JSON.stringify(scanUrl)};
 import { localToday } from ${JSON.stringify(localTodayUrl)};

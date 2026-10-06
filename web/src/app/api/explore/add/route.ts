@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { addOffersToPipeline } from "@/lib/core/pipeline";
 import type { DiscoveredOffer } from "@/lib/explore";
 
@@ -19,5 +19,5 @@ export async function POST(req: NextRequest) {
   if (offers.length === 0) return Response.json({ added: 0 });
 
   const result = await addOffersToPipeline(offers);
-  return Response.json(result);
+  return Response.json(result, result.error ? { status: 500 } : undefined);
 }

@@ -371,7 +371,11 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ offers: fresh }),
       });
-      const d = (await r.json()) as { added?: number };
+      const d = (await r.json().catch(() => ({}))) as { added?: number; error?: string };
+      if (!r.ok || d.error) {
+        setError(`Não foi possível adicionar à pipeline${d.error ? `: ${d.error}` : ` (${r.status})`}.`);
+        return 0;
+      }
       if (d.added && d.added > 0) {
         setAdded((s) => new Set([...s, ...fresh.map((o) => o.url)]));
         // The new inbox rows were written server-side. Invalidate the Next router
@@ -384,7 +388,8 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
         }
       }
       return d.added ?? 0;
-    } catch {
+    } catch (e) {
+      setError(`Não foi possível adicionar à pipeline${e instanceof Error && e.message ? `: ${e.message}` : ""}.`);
       return 0;
     } finally {
       setAdding((s) => {
