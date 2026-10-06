@@ -1,6 +1,43 @@
 import AppKit
 import WebKit
 
+@MainActor
+func presentJavaScriptAlert(_ message: String, in window: NSWindow?, completion: @escaping () -> Void) {
+    guard let window, window.attachedSheet == nil else { completion(); return }
+    let alert = NSAlert()
+    alert.messageText = "Career Ops"
+    alert.informativeText = message
+    alert.addButton(withTitle: "OK")
+    alert.beginSheetModal(for: window) { _ in completion() }
+}
+
+@MainActor
+func presentJavaScriptConfirm(_ message: String, in window: NSWindow?, completion: @escaping (Bool) -> Void) {
+    guard let window, window.attachedSheet == nil else { completion(false); return }
+    let alert = NSAlert()
+    alert.messageText = "Confirmação"
+    alert.informativeText = message
+    alert.addButton(withTitle: "Confirmar")
+    alert.addButton(withTitle: "Cancelar").keyEquivalent = "\u{1b}"
+    alert.beginSheetModal(for: window) { completion($0 == .alertFirstButtonReturn) }
+}
+
+@MainActor
+func presentJavaScriptPrompt(_ prompt: String, defaultText: String?, in window: NSWindow?,
+                             completion: @escaping (String?) -> Void) {
+    guard let window, window.attachedSheet == nil else { completion(nil); return }
+    let field = NSTextField(string: defaultText ?? "")
+    field.frame.size = NSSize(width: 360, height: 24)
+    let alert = NSAlert()
+    alert.messageText = prompt
+    alert.accessoryView = field
+    alert.addButton(withTitle: "Confirmar")
+    alert.addButton(withTitle: "Cancelar").keyEquivalent = "\u{1b}"
+    alert.beginSheetModal(for: window) {
+        completion($0 == .alertFirstButtonReturn ? field.stringValue : nil)
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
     private var window: NSWindow!
     private var webView: WKWebView!
@@ -294,6 +331,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         return nil
     }
 
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        presentJavaScriptAlert(message, in: window, completion: completionHandler)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        presentJavaScriptConfirm(message, in: window, completion: completionHandler)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
+                 defaultText: String?, initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping (String?) -> Void) {
+        presentJavaScriptPrompt(prompt, defaultText: defaultText, in: window, completion: completionHandler)
+    }
+
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
         guard let origin, navigationDisposition(navigationResponse.response.url, origin: origin) == .internalPage else {
@@ -351,6 +404,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 }
 
+#if !CAREER_OPS_UI_TESTS
 @main
 struct CareerOpsApp {
     static func main() {
@@ -361,3 +415,4 @@ struct CareerOpsApp {
         withExtendedLifetime(delegate) { app.run() }
     }
 }
+#endif

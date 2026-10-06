@@ -1,4 +1,8 @@
 import Foundation
+#if CAREER_OPS_UI_TESTS
+import AppKit
+import WebKit
+#endif
 
 @main
 struct CareerOpsCoreTests {
@@ -81,6 +85,63 @@ struct CareerOpsCoreTests {
         let danglingLink = root.appendingPathComponent("dangling.pdf")
         try files.createSymbolicLink(atPath: danglingLink.path, withDestinationPath: root.appendingPathComponent("missing.pdf").path)
         assert(availableDownloadDestination(danglingLink) == nil)
+#if CAREER_OPS_UI_TESTS
+        testJavaScriptDialogs()
+#endif
         print("CareerOpsCore: all assertions passed")
     }
+
+#if CAREER_OPS_UI_TESTS
+    @MainActor
+    private static func testJavaScriptDialogs() {
+        _ = NSApplication.shared
+        let delegate = AppDelegate()
+        for selector in [
+            "webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:completionHandler:",
+            "webView:runJavaScriptConfirmPanelWithMessage:initiatedByFrame:completionHandler:",
+            "webView:runJavaScriptTextInputPanelWithPrompt:defaultText:initiatedByFrame:completionHandler:",
+        ] {
+            assert(delegate.responds(to: NSSelectorFromString(selector)), selector)
+        }
+        let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 320),
+                            styleMask: [.titled], backing: .buffered, defer: false)
+
+        var alertCalls = 0
+        presentJavaScriptAlert("Mensagem", in: host) { alertCalls += 1 }
+        finishSheet(on: host, with: .alertFirstButtonReturn)
+        assert(alertCalls == 1)
+
+        var confirmation: [Bool] = []
+        presentJavaScriptConfirm("Confirmar?", in: host) { confirmation.append($0) }
+        finishSheet(on: host, with: .alertSecondButtonReturn)
+        assert(confirmation == [false])
+
+        presentJavaScriptConfirm("Confirmar?", in: host) { confirmation.append($0) }
+        finishSheet(on: host, with: .alertFirstButtonReturn)
+        assert(confirmation == [false, true])
+
+        var answer: [String?] = []
+        presentJavaScriptPrompt("Nome", defaultText: "Inicial", in: host) { answer.append($0) }
+        finishSheet(on: host, with: .alertFirstButtonReturn)
+        assert(answer.count == 1 && answer[0] == "Inicial")
+
+        var cancelledAnswer: [String?] = []
+        presentJavaScriptPrompt("Nome", defaultText: nil, in: host) { cancelledAnswer.append($0) }
+        finishSheet(on: host, with: .alertSecondButtonReturn)
+        assert(cancelledAnswer.count == 1 && cancelledAnswer[0] == nil)
+
+        var unavailableConfirmation: [Bool] = []
+        presentJavaScriptConfirm("Confirmar?", in: nil) { unavailableConfirmation.append($0) }
+        assert(unavailableConfirmation == [false])
+    }
+
+    @MainActor
+    private static func finishSheet(on host: NSWindow, with response: NSApplication.ModalResponse) {
+        guard let sheet = host.attachedSheet else { assertionFailure("Expected JavaScript dialog sheet"); return }
+        host.endSheet(sheet, returnCode: response)
+        let deadline = Date().addingTimeInterval(1)
+        while host.attachedSheet != nil && RunLoop.current.run(mode: .default, before: deadline) && Date() < deadline {}
+        assert(host.attachedSheet == nil)
+    }
+#endif
 }
