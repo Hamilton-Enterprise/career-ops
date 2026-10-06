@@ -104,6 +104,11 @@ export function TodayDashboard({
                     <span className="text-brand tabular-nums">{overdue}</span> {overdue === 1 ? "acompanhamento pendente" : "acompanhamentos pendentes"}
                   </>
                 )}
+                {newThisWeek === 0 && overdue === 0 && awaiting.length > 0 && (
+                  <>
+                    <span className="text-brand tabular-nums">{awaiting.length}</span> {awaiting.length === 1 ? "decisão pendente" : "decisões pendentes"}
+                  </>
+                )}
               </>
             )}
           </h1>
