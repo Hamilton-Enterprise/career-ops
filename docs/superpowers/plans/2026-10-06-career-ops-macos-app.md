@@ -15,7 +15,7 @@
 - Use only macOS frameworks and tools already installed; do not add Electron, Tauri, Xcode project generators or package dependencies.
 - Bind the service to `127.0.0.1` and use a system-selected port.
 - Launch processes without a shell and preserve paths containing spaces.
-- Store checkout, Node and data paths in local preferences; never store credentials.
+- Store checkout, Node and data paths in local preferences under `CareerOpsCheckoutPath`, `CareerOpsNodePath` and `CareerOpsDataRootPath`; never store credentials.
 - Terminate only the child process started by this app.
 - Keep the app outside App Sandbox because it must launch Node and read the chosen local directories.
 - Install locally in `~/Applications`; signing is ad hoc and notarization is out of scope.
@@ -27,8 +27,9 @@
 - Quitting the wrapper while Next is running must not leave an orphan; Task 1 tests signal forwarding.
 - Finder does not inherit the terminal PATH; Task 2 validates and persists an explicit Node executable.
 - Startup output may contain ANSI colour and arrive in chunks; Task 2 tests incremental URL parsing.
-- External HTTPS destinations must leave the WebView while loopback navigation stays inside; Task 2 tests the decision helper.
+- External destinations must leave the WebView while only the server's exact origin stays inside; Task 2 tests the decision helper and `target=_blank` handling.
 - A moved checkout, missing build or invalid data path must show a recoverable error instead of an empty window; Task 2 tests validation and the manual flow.
+- Finder does not provide a controlled environment: Task 2 removes inherited Career Ops root and network variables, then sets the canonical root values explicitly.
 
 ---
 
@@ -40,11 +41,11 @@
 
 **Interfaces:**
 - Produces: asynchronous child lifecycle in `server.mjs`, preserving existing argv, bind warnings and exit status.
-- Produces: SIGINT and SIGTERM forwarding from the wrapper to the exact Next child.
+- Produces: SIGINT and SIGTERM forwarding from the wrapper to the exact Next child, followed by a bounded SIGKILL escalation when that child ignores graceful termination.
 
 - [ ] **Step 1: Write a failing lifecycle test**
 
-Run a stub Next process that records SIGTERM in a temporary file. Start `server.mjs` asynchronously, terminate the wrapper and assert the child records the signal and exits. Keep the existing bind and exit-code tests unchanged.
+Run stub Next processes that record SIGTERM in a temporary file. Start `server.mjs` asynchronously, terminate the wrapper and assert the child records the signal and exits. Add a second stub that ignores SIGTERM and prove the wrapper escalates only its child after the bounded timeout. Keep the existing bind and exit-code tests unchanged.
 
 - [ ] **Step 2: Run the launcher suite and confirm the intended failure**
 
@@ -54,7 +55,7 @@ Expected: the child does not receive the wrapper's termination signal.
 
 - [ ] **Step 3: Replace the blocking spawn with owned asynchronous lifecycle**
 
-Use `spawn` with inherited streams, register signal handlers once, forward a received termination signal to the child and exit after the child closes. Preserve platform-native non-zero signal status and startup failures.
+Use `spawn` with inherited streams, register signal handlers once, forward a received termination signal to the child and exit after the child closes. If it does not close within the bounded timeout, send SIGKILL to that same child. Remove timers and listeners on close. Preserve platform-native non-zero signal status and startup failures.
 
 - [ ] **Step 4: Verify launcher and web suites**
 
@@ -81,15 +82,15 @@ Commit message: `fix(web): stop owned Next child with launcher`
 - Produces: `LaunchConfiguration` with checkout, Node and optional data-root URLs.
 - Produces: `validateConfiguration`, incremental `ServerURLParser` and `navigationDisposition` pure helpers.
 - Produces: `macos/build-app.sh [--checkout PATH] [--node PATH] [--data-root PATH] [--destination PATH]`.
-- Produces: `Career Ops.app` with bundle identifier `io.career-ops.local`.
+- Produces: `Career Ops.app` with bundle identifier `io.career-ops.local`, a single-instance activation policy and `applicationShouldTerminateAfterLastWindowClosed`.
 
 - [ ] **Step 1: Write failing Swift helper tests**
 
-Cover spaces in paths, Node major version below 22, missing `.next/BUILD_ID`, ANSI and chunked `Local:` output, loopback URLs, external HTTPS URLs and malformed URLs. Compile the test executable against the missing helper API and confirm compilation fails for those symbols.
+Cover spaces in paths, Node versions below `22.6.0`, missing `.next/BUILD_ID`, ANSI and chunked `Local:` output, valid port range, loopback URLs, same-origin navigation, other loopback ports, external HTTPS URLs and malformed URLs. Compile the test executable against the missing helper API and confirm compilation fails for those symbols.
 
 - [ ] **Step 2: Implement the pure helper layer**
 
-Use Foundation only. Parse the port from Next's announced loopback URL, retain an incomplete trailing line between chunks and return concrete PT-PT validation messages.
+Use Foundation only. Parse the port from Next's announced `http` URL only when the host is `127.0.0.1` or `localhost` and the port is in `1...65535`; retain an incomplete trailing line between chunks, stop at the first valid URL and return concrete PT-PT validation messages.
 
 - [ ] **Step 3: Run the Swift helper tests**
 
@@ -99,11 +100,11 @@ Expected: every assertion passes and the command exits 0.
 
 - [ ] **Step 4: Implement the AppKit and WebKit lifecycle**
 
-Create one native window. Load saved preferences, validate paths, launch the Node wrapper with `Process`, wait for the parsed URL plus an HTTP response, then load it. Save process output to `~/Library/Logs/Career Ops/server.log`. On failure, show the cause with `Escolher pasta`, `Tentar novamente`, `Abrir registo` and `Fechar` where applicable.
+Create one native window. Load saved preferences, validate paths, launch the Node wrapper with `Process`, wait for the parsed URL plus an HTTP response, then load it. Apply a startup timeout and fail immediately if the process exits. Before launch, remove `CAREER_OPS_WEB_ALLOWED_HOSTS`, `CAREER_OPS_ROOT`, `CAREER_OPS_DATA_DIR` and `CAREER_OPS_CODE_ROOT`, then set `CAREER_OPS_ROOT` and `CAREER_OPS_CODE_ROOT` explicitly. Save process output to `~/Library/Logs/Career Ops/server.log`. On failure, show the cause with `Escolher pasta`, `Tentar novamente`, `Abrir registo` and `Fechar` where applicable.
 
 - [ ] **Step 5: Implement navigation and downloads**
 
-Keep loopback links in the WebView. Open external destinations with `NSWorkspace`. Handle `WKDownload` through `NSSavePanel`; never choose a destination or overwrite a file without the user's action.
+Keep only links with the exact scheme, host and port of the started server in the WebView. Open every other destination with `NSWorkspace`, including `target=_blank` through `WKUIDelegate`. Handle `WKDownload` through `NSSavePanel`; never choose a destination or overwrite a file without the user's action.
 
 - [ ] **Step 6: Build the app bundle**
 
@@ -113,7 +114,7 @@ Compile with `swiftc` and the AppKit/WebKit frameworks, copy `Info.plist`, gener
 
 Run: `macos/build-app.sh --test-only`
 
-Run: `macos/build-app.sh --destination "$HOME/Applications/Career Ops.app"`
+Run: `macos/build-app.sh --checkout /Users/hamiltonsilva/Developer/worktrees/career-ops/pt-pt-copy --node /opt/homebrew/bin/node --data-root /Users/hamiltonsilva/Developer/career-ops-data --destination "$HOME/Applications/Career Ops.app"`
 
 Run: `codesign --verify --deep --strict "$HOME/Applications/Career Ops.app"`
 
@@ -149,11 +150,11 @@ Open the installed app with no app-owned server running. Confirm the Today page 
 
 - [ ] **Step 3: Verify browser boundaries**
 
-Exercise internal navigation, one external link and one synthetic download. Confirm the external link leaves the WebView and the download asks for a destination. Cancel before writing if no disposable destination was prepared.
+Exercise internal navigation, the existing external documentation link in Configuração and a deterministic synthetic download served from the disposable data-root fixture. Confirm the external link leaves the WebView and the download asks for a destination. Cancel before writing if no disposable destination was prepared.
 
 - [ ] **Step 4: Verify recovery and ownership**
 
-Temporarily point the preference at a synthetic missing checkout and confirm the actionable error, then restore it. Quit the app and prove its wrapper and Next child ended while the independent server on port 3427 still answers HTTP 200.
+Temporarily point `CareerOpsCheckoutPath` at a synthetic missing checkout and confirm the actionable error, then restore the three named preferences. Quit the app and prove its wrapper and Next child ended while the independent server on port 3427 still answers HTTP 200.
 
 - [ ] **Step 5: Run the complete automated gate**
 

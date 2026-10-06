@@ -62,7 +62,7 @@ Estas partes só se justificam quando houver necessidade de distribuir o Career 
 - A app liga o serviço apenas a `127.0.0.1`; não o expõe na rede local.
 - A porta é escolhida pelo sistema no arranque. A app lê o endereço anunciado pelo servidor e só abre a interface depois de receber uma resposta HTTP válida.
 - Se o serviço falhar, a janela mostra o erro e permite tentar novamente ou abrir o registo local.
-- Ao fechar, a app envia primeiro um encerramento normal e usa terminação forçada apenas se o filho não responder dentro do limite definido.
+- Ao fechar, a app envia primeiro um encerramento normal e o launcher escala para terminação forçada apenas sobre o seu filho se este não responder dentro do limite definido.
 - A app nunca encerra processos apenas porque ocupam uma porta. Só termina o processo filho cujo identificador guardou.
 
 ## Pesquisa por mercados
@@ -185,7 +185,7 @@ Adicionar ao pipeline continua a exigir uma ação explícita do utilizador e us
 - Fechar a app termina o processo que ela iniciou.
 - Um processo alheio na mesma porta não é encerrado.
 - Caminho ou build em falta produz uma mensagem útil.
-- A janela mantém navegação, downloads e abertura de links externos com comportamento explícito.
+- A janela mantém apenas a origem exata do servidor dentro da WebView; downloads e abertura de links externos têm comportamento explícito.
 
 ### Pesquisa
 
