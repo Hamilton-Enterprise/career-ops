@@ -87,7 +87,7 @@ const SPANISH_CITIES = ["madrid", "barcelona", "valencia", "sevilla", "seville",
 
 /** Geographic policies are alternatives. A remote source proves remote work,
  *  never worldwide eligibility. Missing location fails closed on every market.
- *  @param {{ location?: unknown, source?: string, ats?: string, provider?: string }} offer
+ *  @param {{ location?: unknown, source?: string, sources?: string[], ats?: string, provider?: string }} offer
  *  @param {ReturnType<typeof buildMarketPlan>} plan
  *  @returns {{ accepted: boolean, reason?: "missing-location" | "outside-market", remote?: true, eligibility?: "unknown" }} */
 export function classifyMarketLocation(offer, plan) {
@@ -109,7 +109,7 @@ export function classifyMarketLocation(offer, plan) {
       return { accepted: true };
     }
     if (market === "remote") {
-      const origins = [offer.source, offer.ats, offer.provider].filter((v) => typeof v === "string").map(normalized);
+      const origins = [offer.source, offer.ats, offer.provider, ...(offer.sources ?? [])].filter((v) => typeof v === "string").map(v => normalized(v).replace(/-(api|full)$/, ""));
       const remoteSource = REMOTE_BOARDS.some(([name, id]) => origins.includes(normalized(name)) || origins.includes(id));
       if (remoteSource || containsWord(location, ["remote", "remoto", "remota"])) {
         return { accepted: true, remote: true, eligibility: "unknown" };

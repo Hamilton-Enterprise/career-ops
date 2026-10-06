@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   cleanMarkets, encodeMarkets, decodeMarkets, buildMarketPlan, classifyMarketLocation,
 } from "../../src/lib/market-presets.mjs";
+import { mergeDiscoveredOffers } from "../../src/lib/core/market-merge.mjs";
 
 test("market codec defaults empty and drops unknown and duplicate selections", () => {
   assert.deepEqual(cleanMarkets(undefined), []);
@@ -109,4 +110,28 @@ test("combined markets accept a match to any selected geographic policy", () => 
   assert.equal(classifyMarketLocation({ location: "Madrid, Spain" }, plan).accepted, true);
   assert.equal(classifyMarketLocation({ location: "Lisbon, Portugal" }, plan).accepted, true);
   assert.equal(classifyMarketLocation({ location: "Paris, France" }, plan).accepted, false);
+});
+
+test("remote provider suffixes remain evidence of remote work in every origin field", () => {
+  const plan = buildMarketPlan(["remote"], []);
+  for (const field of ["source", "ats", "provider"]) {
+    for (const origin of ["remotive-api", "remotive-full"]) {
+      assert.deepEqual(classifyMarketLocation({ location: "Worldwide", [field]: origin }, plan),
+        { accepted: true, remote: true, eligibility: "unknown" });
+    }
+  }
+});
+
+test("merged origins preserve remote evidence when the preferred URL belongs to ATS", () => {
+  const ats = { url: "https://acme.com/42", company: "Acme", title: "Engineer", location: "Worldwide", postedAt: "", ats: "greenhouse", source: "greenhouse-full" };
+  const [offer] = mergeDiscoveredOffers([ats], [{ ...ats, ats: "remotive-api", source: "remotive-api" }]);
+  assert.equal(offer.source, "greenhouse-full");
+  assert.deepEqual(offer.sources, ["greenhouse-full", "remotive-api"]);
+  assert.deepEqual(classifyMarketLocation(offer, buildMarketPlan(["remote"], [])),
+    { accepted: true, remote: true, eligibility: "unknown" });
+});
+
+test("non-remote origins with suffixes cannot admit a worldwide posting", () => {
+  assert.deepEqual(classifyMarketLocation({ location: "Worldwide", source: "greenhouse-full", ats: "greenhouse-full", provider: "landingjobs-api", sources: ["wttj-api", "notremotive-api"] }, buildMarketPlan(["remote"], [])),
+    { accepted: false, reason: "outside-market" });
 });

@@ -207,3 +207,14 @@ test("market scope filters provisional and terminal ATS offers and counts missin
     assert.equal(unrestricted.length, 4);
   }
 });
+
+test("final market scope keeps worldwide remote offers and their merged ATS origins", async t => {
+  const remoteOffer = { ...receipt.offers[0], location: "Worldwide", source: "remotive-api" };
+  const root = await sandbox(t, `console.log(${JSON.stringify(JSON.stringify({ ...receipt, offers: [remoteOffer] }))});`);
+  fs.writeFileSync(path.join(root, "scan-ats-full.mjs"), `// --json capHit\nconsole.log(JSON.stringify({companiesScanned:1,offers:[${JSON.stringify({ ...remoteOffer, source: "greenhouse-full" })}]}));`);
+  for (const ats of [[], ["greenhouse"]]) {
+    const offers = await runDiscovery({ ...filters, ats, markets: ["remote"] }, () => {});
+    assert.equal(offers.length, 1);
+    assert.deepEqual(offers[0].sources, ats.length ? ["greenhouse-full", "remotive-api"] : ["remotive-api"]);
+  }
+});
