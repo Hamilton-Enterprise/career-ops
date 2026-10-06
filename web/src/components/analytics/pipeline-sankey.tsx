@@ -24,10 +24,14 @@ type LogRow = { num: number; from: string; to: string };
 
 const LABELS: Record<string, string> = {
   Tracked: "Acompanhadas",
+  SKIP: "Ignoradas",
+  "Still evaluated": "Avaliadas",
+  "Discarded (no application recorded)": "Descartadas sem candidatura",
   Submitted: "Enviadas",
   Waiting: "À espera",
   "Company engaged": "Empresa respondeu",
   "Rejected (no interview)": "Recusadas sem entrevista",
+  Screening: "Triagem",
   Interview: "Entrevista",
   Offer: "Proposta",
   Hired: "Contratação",
