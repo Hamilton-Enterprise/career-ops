@@ -7,7 +7,7 @@ import type { DiscoveredOffer } from "@/lib/explore";
 import { CostBadge } from "@/components/cost/cost-badge";
 import { DiscoveryCard } from "./discovery-card";
 import { useExplore } from "./explore-provider";
-import { sourceLabel, summarizeDiscoveryState } from "@/lib/explore-state.mjs";
+import { discoverySourceReasons, summarizeDiscoveryState } from "@/lib/explore-state.mjs";
 
 export type EnrichedOffer = DiscoveredOffer & { inPipeline: boolean; evaluatedN?: string };
 
@@ -15,7 +15,7 @@ export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
   const { companiesScanned, sources, partial, error, addToPipeline, added, mode, running } = useExplore();
   const isAi = mode === "ai";
   const outcome = summarizeDiscoveryState(sources, offers.length);
-  const unavailable = Object.entries(sources).filter(([, s]) => s.state === "error" || s.state === "skipped").map(([id]) => sourceLabel(id));
+  const sourceReasons = discoverySourceReasons(sources);
   const [sort, setSort] = useState<"fresh" | "company">("fresh");
   const [q, setQ] = useState("");
 
@@ -44,7 +44,8 @@ export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
               ? "encontradas na web pública · disponibilidade por confirmar até à avaliação"
               : `${companiesScanned > 0 ? `${companiesScanned.toLocaleString("pt-PT")} empresas pesquisadas · ` : ""}0 tokens usados`}
           </p>
-          {!isAi && !running && partial && <p className="text-[12px] text-amber-700 dark:text-amber-300">{outcome === "all-failed" ? "Nenhuma fonte concluiu a pesquisa" : "Resultados parciais"}{unavailable.length > 0 ? ` · fontes não consultadas: ${unavailable.join(", ")}` : " · algumas fontes ou ofertas ficaram por consultar"}</p>}
+          {!isAi && !running && partial && <p className="text-[12px] text-amber-700 dark:text-amber-300">{outcome === "all-failed" ? "Nenhuma fonte concluiu a pesquisa" : "Resultados parciais"}</p>}
+          {!isAi && !running && sourceReasons.map(reason => <p key={reason} className="text-[12px] text-amber-700 dark:text-amber-300">{reason}</p>)}
           {error && <p className="text-[12px] text-amber-700 dark:text-amber-300">{error}</p>}
         </div>
 

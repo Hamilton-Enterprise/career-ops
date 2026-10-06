@@ -72,3 +72,16 @@ test("an empty receipt with only skipped providers is not a healthy empty search
   assert.equal(run.status, "failed");
   assert.deepEqual(run.sources.map(s => s.state), ["skipped"]);
 });
+
+test("mixed skipped providers never certify unidentified sources as complete", () => {
+  const plan = buildMarketPlan(["europe"], ["Engineer"]);
+  for (const offers of [[], [offer]]) {
+    const mixed = JSON.stringify({ ...JSON.parse(receipt(offers)), scanned: 3, skipped: 1 });
+    const run = parseMarketReceipt(mixed, 0, plan);
+    assert.equal(run.valid, true);
+    assert.equal(run.status, "partial");
+    assert.deepEqual(run.sources.map(s => s.state), ["partial", "partial", "partial", "partial"]);
+    assert.ok(run.sources.every(s => s.message));
+    assert.equal(run.offers.length, offers.length);
+  }
+});

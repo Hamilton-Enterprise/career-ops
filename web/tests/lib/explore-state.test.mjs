@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { summarizeDiscoveryState, applyDiscoveryOfferEvent, updateDiscoverySources, canDiscover, offerProvenance } from '../../src/lib/explore-state.mjs';
+import * as discoveryState from '../../src/lib/explore-state.mjs';
 
 test('completed sources distinguish results from a healthy empty search', () => {
   const sources = { greenhouse: { state: 'ok' }, 'Landing.jobs': { state: 'ok' } };
@@ -61,4 +62,26 @@ test('the terminal event never certifies unfinished sources', () => {
 test('origins are readable and unique and remote eligibility remains unknown', () => {
   assert.deepEqual(offerProvenance({ source: 'greenhouse-full', sources: ['Greenhouse', 'landingjobs-api'], ats: 'greenhouse', location: 'Lisboa' }), { origins: ['Greenhouse', 'Landing.jobs'], eligibilityUnknown: false });
   assert.deepEqual(offerProvenance({ source: 'remotive-api', sources: ['remotive-api', 'Remotive'], location: 'Remote' }), { origins: ['Remotive'], eligibilityUnknown: true });
+});
+
+test('summary preserves actionable source reasons and unidentified partial coverage', () => {
+  const sources = updateDiscoverySources({ Remotive: { state: 'error', message: 'Verifica a ligação à rede.' } }, {
+    kind: 'summary', companiesScanned: 3, unreachable: 0, matches: 0, status: 'partial',
+    sources: [{ source: 'Remotive', state: 'error' }, { source: 'Landing.jobs', state: 'partial', message: 'Um fornecedor foi ignorado.' }],
+    incomplete: ['Remotive', 'Landing.jobs'],
+  });
+  assert.equal(sources.Remotive.message, 'Verifica a ligação à rede.');
+  assert.equal(sources['Landing.jobs'].state, 'partial');
+});
+
+test('final source reasons request a role for WTTJ and keep provider actions', () => {
+  const reasons = discoveryState.discoverySourceReasons({
+    wttj: { state: 'skipped', message: 'missing-search-terms' },
+    Remotive: { state: 'error', message: 'Verifica a ligação à rede.' },
+    greenhouse: { state: 'ok' },
+  });
+  assert.equal(reasons.length, 2);
+  assert.match(reasons[0], /Welcome to the Jungle.*função/i);
+  assert.doesNotMatch(reasons.join(' '), /missing-search-terms|não responde/i);
+  assert.match(reasons[1], /Remotive.*Verifica a ligação à rede/);
 });

@@ -18,6 +18,14 @@ export function sourceLabel(source) {
   return SOURCE_LABEL[id] ?? source;
 }
 
+/** @param {DiscoverySources} sources */
+export function discoverySourceReasons(sources) {
+  return Object.entries(sources).filter(([, s]) => s.state !== 'ok').map(([id, s]) =>
+    `${sourceLabel(id)}: ${s.message === 'missing-search-terms'
+      ? 'Indica uma função nas palavras de pesquisa ou nas funções-alvo do perfil.'
+      : s.message || SOURCE_STATE_LABEL[s.state]}`);
+}
+
 /** @param {DiscoverySources} sourceStates @param {number} offerCount */
 export function summarizeDiscoveryState(sourceStates, offerCount) {
   const states = Object.values(sourceStates).map(s => s.state);
@@ -48,9 +56,9 @@ export function updateDiscoverySources(sources, event) {
     case 'summary': {
       for (const s of event.sources ?? []) {
         const old = next[s.source];
-        next[s.source] = { ...old, state: s.state === 'ok' && old?.state === 'partial' ? 'partial' : s.state, message: s.message };
+        next[s.source] = { ...old, state: s.state === 'ok' && old?.state === 'partial' ? 'partial' : s.state, message: s.message ?? old?.message };
       }
-      for (const id of event.incomplete ?? []) if (next[id]?.state !== 'skipped') next[id] = { ...next[id], state: 'error', message: next[id]?.message ?? 'A fonte não terminou' };
+      for (const id of event.incomplete ?? []) if (next[id]?.state !== 'skipped' && next[id]?.state !== 'partial') next[id] = { ...next[id], state: 'error', message: next[id]?.message ?? 'A fonte não terminou' };
       for (const [id, state] of Object.entries(event.datasetStatus ?? {})) {
         if (state !== 'ok' && next[id]?.state !== 'error') next[id] = { ...next[id], state: 'partial' };
       }

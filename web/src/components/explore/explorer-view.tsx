@@ -17,7 +17,7 @@ import { ResultsList, type EnrichedOffer } from "./results-list";
 import { useExplore } from "./explore-provider";
 import { ScheduleJobAction } from "./schedule-job-action";
 import { PT_PT_LOCALE } from "@/lib/pt-pt";
-import { canDiscover as hasDiscoverySelection } from "@/lib/explore-state.mjs";
+import { canDiscover as hasDiscoverySelection, discoverySourceReasons } from "@/lib/explore-state.mjs";
 
 // Same shape as core normalizeTextKey(s, " ") — never [^a-z0-9] (#2666).
 const norm = (s: string) => normalizeTextKey(s, " ");
@@ -44,10 +44,10 @@ export function ExplorerView({
   appsSnapshot: Application[];
   rootExists: boolean;
 }) {
-  const { filters, setFilters, initFilters, phase, running, offers, discover, loadFresh, status, error, scannerMissing, mode, setMode, aiIntent, setAiIntent, discoverAI, companiesScanned, companiesAvailable, capHit, droppedNoDate, partial } = useExplore();
+  const { filters, setFilters, initFilters, phase, running, offers, sources, discover, loadFresh, status, error, scannerMissing, mode, setMode, aiIntent, setAiIntent, discoverAI, companiesScanned, companiesAvailable, capHit, droppedNoDate, partial } = useExplore();
   const scanNote =
     companiesScanned > 0
-      ? `Foram pesquisadas ${companiesScanned.toLocaleString(PT_PT_LOCALE)}${companiesAvailable > companiesScanned ? ` de ${companiesAvailable.toLocaleString(PT_PT_LOCALE)}` : ""} ${companiesScanned === 1 ? "empresa" : "empresas"}${partial ? "; não foi possível consultar algumas fontes" : ""}.`
+      ? `Foram pesquisadas ${companiesScanned.toLocaleString(PT_PT_LOCALE)}${companiesAvailable > companiesScanned ? ` de ${companiesAvailable.toLocaleString(PT_PT_LOCALE)}` : ""} ${companiesScanned === 1 ? "empresa" : "empresas"}${partial ? "; a cobertura ficou incompleta" : ""}.`
       : undefined;
   const inited = useRef(false);
   const [refineOpen, setRefineOpen] = useState(false);
@@ -259,6 +259,7 @@ export function ExplorerView({
               capHit={capHit}
               droppedNoDate={droppedNoDate}
               partial={partial}
+              sourceReasons={discoverySourceReasons(sources)}
             />
           )}
           {phase === "failed" && <FailedCard msg={error || status} scannerMissing={scannerMissing} onRetry={() => void discover()} />}
@@ -308,6 +309,7 @@ function DegradedCard({
   capHit,
   droppedNoDate,
   partial,
+  sourceReasons,
 }: {
   onRetry: () => void;
   companiesScanned: number;
@@ -315,13 +317,14 @@ function DegradedCard({
   capHit: boolean;
   droppedNoDate: number;
   partial: boolean;
+  sourceReasons: string[];
 }) {
   // 0 results, but the scan was NOT a clean full search → never "all caught up".
   // Pick the most informative reason (authoritative when the scanner's --json mode
   // is available; otherwise the 0-companies fallback).
-  let title = "A pesquisa não conseguiu consultar nenhuma fonte";
+  let title = "A pesquisa ficou incompleta";
   let body =
-    "As plataformas públicas não responderam. Pode ser uma falha temporária de rede ou um limite de pedidos. Repete a pesquisa dentro de alguns minutos.";
+    "Algumas fontes ou ofertas ficaram por consultar. Revê os motivos e repete a pesquisa.";
   if (companiesScanned > 0 && capHit) {
     title = "Não houve resultados no conjunto pesquisado";
     body = `A pesquisa ficou limitada a ${companiesScanned.toLocaleString(PT_PT_LOCALE)}${companiesAvailable > companiesScanned ? ` de ${companiesAvailable.toLocaleString(PT_PT_LOCALE)}` : ""} empresas. Aumenta o alcance ou restringe as funções antes de repetir.`;
@@ -329,14 +332,14 @@ function DegradedCard({
     title = "Algumas ofertas não tinham data de publicação";
     body = `${droppedNoDate.toLocaleString(PT_PT_LOCALE)} ${droppedNoDate === 1 ? "oferta correspondia" : "ofertas correspondiam"} aos critérios, mas ${droppedNoDate === 1 ? "não tinha" : "não tinham"} uma data clara. Alarga o período para procurar alternativas com data.`;
   } else if (companiesScanned > 0 && partial) {
-    title = "Não foi possível consultar algumas fontes";
-    body = `Foram pesquisadas ${companiesScanned.toLocaleString(PT_PT_LOCALE)} empresas, mas uma ou mais fontes não responderam. Estes resultados são parciais.`;
+    body = `Foram pesquisadas ${companiesScanned.toLocaleString(PT_PT_LOCALE)} empresas. A cobertura das fontes ficou incompleta.`;
   }
   return (
     <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 text-center">
       <AlertTriangle className="mx-auto size-6 text-amber-500" />
       <p className="mt-2 text-sm font-medium text-foreground">{title}</p>
       <p className="mx-auto mt-1 max-w-md text-[13px] text-muted">{body}</p>
+      {sourceReasons.map(reason => <p key={reason} className="mx-auto mt-1 max-w-md text-[13px] text-amber-700 dark:text-amber-300">{reason}</p>)}
       <button onClick={onRetry} className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-brand-soft px-3 py-1.5 text-sm font-medium text-brand">
         <RotateCcw className="size-4" /> Repetir pesquisa
       </button>

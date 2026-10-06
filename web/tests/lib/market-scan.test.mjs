@@ -189,3 +189,21 @@ test("skipped market receipt is failed alone and partial beside a valid ATS resu
   assert.deepEqual(joined.find(e => e.kind === "summary").incomplete, ["Landing.jobs"]);
   assert.equal(joined.filter(e => e.kind === "error").length, 0);
 });
+
+test("market scope filters provisional and terminal ATS offers and counts missing locations", async t => {
+  const root = await sandbox(t, `console.log(${JSON.stringify(JSON.stringify({ ...receipt, offers: [] }))});`);
+  const raw = ["Lisboa", "Madrid, Spain", "New York, United States", ""].map((location, i) => ({ company: "Acme", title: "Engineer", url: `https://acme.com/${i}`, location, source: "greenhouse-full" }));
+  for (const json of [true, false]) {
+    const script = json
+      ? `// --json capHit\nconst offers = ${JSON.stringify(raw)}; for (const offer of offers) console.error(JSON.stringify({kind:'offer',...offer})); console.log(JSON.stringify({companiesScanned:1,offers}));`
+      : raw.map(o => `console.log(${JSON.stringify(`  + [greenhouse-full] n/a | ${o.company} | ${o.title} | ${o.location}\n${o.url}`)});`).join("\n");
+    fs.writeFileSync(path.join(root, "scan-ats-full.mjs"), script);
+    const events = [];
+    const offers = await runDiscovery({ ...filters, ats: ["greenhouse"] }, e => events.push(e));
+    assert.deepEqual(offers.map(o => o.location), ["Lisboa"]);
+    assert.deepEqual(events.filter(e => e.kind === "offer").map(e => e.offer.location), ["Lisboa"]);
+    assert.equal(events.find(e => e.kind === "summary").missingLocation, 1);
+    const unrestricted = await runDiscovery({ ...filters, ats: ["greenhouse"], markets: [] }, () => {});
+    assert.equal(unrestricted.length, 4);
+  }
+});

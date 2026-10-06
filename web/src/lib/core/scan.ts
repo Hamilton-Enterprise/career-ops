@@ -8,6 +8,7 @@ import { ATS_LABEL, ATS_SOURCES, type AtsSource, type DiscoveredOffer, type Expl
 import { mergeScanResults, timedOutMessage } from "./scan-merge.mjs";
 import { runMarketDiscovery } from "@/lib/core/market-scan";
 import { mergeDiscoveredOffers } from "./market-merge.mjs";
+import { buildMarketPlan, classifyMarketLocation } from "@/lib/market-presets.mjs";
 
 export type { DiscoveredOffer, ScanEvent, AtsSource } from "@/lib/explore";
 export { ATS_SOURCES } from "@/lib/explore";
@@ -427,6 +428,7 @@ async function runAtsDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) 
 
 export async function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) => void): Promise<DiscoveredOffer[]> {
   const ats = filters.ats.filter(a => ATS_SOURCES.includes(a));
+  const plan = buildMarketPlan(filters.markets, []);
   type Summary = Extract<ScanEvent, { kind: "summary" }>;
   let atsSummary: Summary | undefined;
   const atsErrors: string[] = [];
@@ -440,7 +442,7 @@ export async function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEve
       return await runAtsDiscovery({ ...filters, ats }, event => {
         if (event.kind === "summary") atsSummary = event;
         else if (event.kind === "error") atsErrors.push(event.message);
-        else onEvent(event);
+        else if (event.kind !== "offer" || classifyMarketLocation(event.offer, plan).accepted) onEvent(event);
       });
     } catch (error) {
       atsErrors.push(error instanceof Error ? error.message : NO_OUTPUT);
@@ -456,7 +458,12 @@ export async function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEve
   })) : null;
   const atsOffers = atsPromise ? await atsPromise : [];
   const marketRun = marketPromise ? await marketPromise : null;
-  const offers = mergeDiscoveredOffers(atsOffers, marketRun?.offers ?? []);
+  let missingLocation = marketRun?.missingLocation ?? 0;
+  const offers = mergeDiscoveredOffers(atsOffers, marketRun?.offers ?? []).filter(offer => {
+    const classification = classifyMarketLocation(offer, plan);
+    if (classification.reason === "missing-location") missingLocation++;
+    return classification.accepted;
+  });
   const atsValid = Boolean(atsSummary) || atsOffers.length > 0;
   const sources: NonNullable<Summary["sources"]> = ats.map(source => {
     const failed = !atsValid || atsSummary?.incomplete?.includes(source);
@@ -464,7 +471,7 @@ export async function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEve
   });
   sources.push(...(marketRun?.sources ?? []));
   for (const source of sources.slice(0, ats.length)) {
-    onEvent(source.state === "ok" ? { kind: "sourceDone", source: source.source, count: atsOffers.filter(o => o.ats === source.source).length } :
+    onEvent(source.state === "ok" ? { kind: "sourceDone", source: source.source, count: offers.filter(o => o.ats === source.source).length } :
       { kind: "sourceError", source: source.source, message: source.message ?? NO_OUTPUT });
   }
   const valid = (ats.length > 0 && atsValid) || marketRun?.valid === true;
@@ -473,7 +480,7 @@ export async function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEve
   onEvent({
     ...(atsSummary ?? { kind: "summary", companiesScanned: 0, unreachable: 0, matches: 0 }),
     companiesScanned: (atsSummary?.companiesScanned ?? 0) + (marketRun?.scanned ?? 0),
-    matches: offers.length, status, sources, missingLocation: marketRun?.missingLocation ?? 0,
+    matches: offers.length, status, sources, missingLocation,
     ...(sources.some(s => s.state !== "ok") ? { incomplete: sources.filter(s => s.state !== "ok").map(s => s.source) } : {}),
   });
   return offers;

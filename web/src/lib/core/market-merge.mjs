@@ -2,7 +2,7 @@ import { normalizeUrl } from "./url-key.mjs";
 import { classifyMarketLocation } from "../market-presets.mjs";
 
 /** @typedef {import('../explore').DiscoveredOffer} DiscoveredOffer */
-/** @typedef {{source:string, state:'ok'|'error'|'skipped', message?:string}} SourceState */
+/** @typedef {{source:string, state:'ok'|'partial'|'error'|'skipped', message?:string}} SourceState */
 /** @typedef {{offers:DiscoveredOffer[], sources:SourceState[], missingLocation:number, valid:boolean, status:'ok'|'partial'|'failed', scanned:number}} MarketRun */
 
 /** @param {DiscoveredOffer} offer */
@@ -37,7 +37,7 @@ export function mergeDiscoveredOffers(atsOffers, marketOffers) {
  * @param {ReturnType<import('../market-presets.mjs').buildMarketPlan>} plan
  * @param {boolean} timedOut @returns {MarketRun} */
 export function parseMarketReceipt(output, exitCode, plan, timedOut = false) {
-  const sources = plan.jobBoards.map(({ name }) => ({ source: name, state: /** @type {'ok'|'error'|'skipped'} */ ('ok') }));
+  const sources = plan.jobBoards.map(({ name }) => ({ source: name, state: /** @type {'ok'|'partial'|'error'|'skipped'} */ ('ok') }));
   sources.push(...plan.skippedSources.map(({ source, reason }) => ({ source, state: /** @type {'skipped'} */ ('skipped'), message: reason })));
   /** @type {MarketRun} */
   const run = { offers: [], sources, missingLocation: 0, valid: false, status: "failed", scanned: 0 };
@@ -97,6 +97,12 @@ export function parseMarketReceipt(output, exitCode, plan, timedOut = false) {
     for (const source of sources) if (source.state === "ok") {
       source.state = "error";
       source.message = timedOut ? "A fonte não terminou dentro do prazo." : "O scanner terminou antes de confirmar a conclusão desta fonte.";
+    }
+  }
+  if (receipt.skipped > 0) {
+    for (const source of sources) if (source.state === "ok") {
+      source.state = "partial";
+      source.message = "Um ou mais fornecedores não foram executados; o recibo não identifica quais.";
     }
   }
   run.status = !run.valid ? "failed" : timedOut || exitCode !== 0 || receipt.errors.length || sources.some(s => s.state !== "ok") ? "partial" : "ok";

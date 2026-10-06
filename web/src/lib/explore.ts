@@ -104,7 +104,7 @@ export type ScanEvent =
       unreachable: number;
       matches: number;
       status?: "ok" | "partial" | "failed";
-      sources?: { source: string; state: "ok" | "error" | "skipped"; message?: string }[];
+      sources?: { source: string; state: "ok" | "partial" | "error" | "skipped"; message?: string }[];
       missingLocation?: number;
       // Authoritative degraded-vs-empty signals from the scanner's --json mode (#1199).
       // Absent on older local checkouts (the legacy human-stdout parse can't supply them).
