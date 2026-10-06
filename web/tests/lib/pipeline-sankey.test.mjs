@@ -11,6 +11,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadBindings, transform } from "next/dist/build/swc/index.js";
 import "../helpers/web-ts-alias-loader.mjs";
+import { cn } from "../../src/lib/cn.ts";
 import { classifyLeaf, buildPipelineSankey, layoutSankey, NODE_DEFS, parseStatusLog, statusToken } from "../../src/lib/pipeline-sankey.mjs";
 
 test("PipelineSankey renders every canonical node label in PT-PT", async () => {
@@ -56,14 +57,14 @@ test("PipelineSankey renders every canonical node label in PT-PT", async () => {
       width: 920,
       height: 440,
       nodes: graph.nodes.map((node, index) => ({ ...node, x: index * 4, y: index * 4, width: 12, height: 30 })),
-      links: [],
+      links: graph.links.map((link) => ({ ...link, d: "M0,0 C1,1 2,2 3,3", thickness: 1 })),
     }),
   };
   const require = createRequire(import.meta.url);
   const module = { exports: {} };
   new Function("require", "module", "exports", code)(
     (id) => id === "@/lib/pipeline-sankey.mjs" ? graphBoundary
-      : id === "@/lib/cn" ? { cn: (...classes) => classes.join(" ") }
+      : id === "@/lib/cn" ? { cn }
         : require(id),
     module,
     module.exports,
@@ -80,6 +81,14 @@ test("PipelineSankey renders every canonical node label in PT-PT", async () => {
     assert.ok(visible.includes(label), `visible SVG text must include ${label}`);
     assert.ok(titles.includes(label), `native SVG title text must include ${label}`);
     assert.ok(table.includes(`<td>${label}</td>`), `screen-reader table must include ${label}`);
+  }
+  for (const [index, link] of links.entries()) {
+    const sourceLabel = expected[NODE_DEFS[index].label];
+    const targetLabel = expected[NODE_DEFS[index + 1].label];
+    assert.ok(
+      titles.includes(`<title>1 oportunidades: ${sourceLabel} → ${targetLabel}</title>`),
+      `SVG link title must translate ${sourceLabel} → ${targetLabel}`,
+    );
   }
 });
 
