@@ -309,10 +309,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String,
                   completionHandler: @escaping (URL?) -> Void) {
+        chooseDownloadDestination(suggestedFilename, completionHandler: completionHandler)
+    }
+
+    private func chooseDownloadDestination(_ filename: String, completionHandler: @escaping (URL?) -> Void) {
         let panel = NSSavePanel()
         panel.title = "Guardar ficheiro"
-        panel.nameFieldStringValue = suggestedFilename
-        panel.beginSheetModal(for: window) { completionHandler($0 == .OK ? panel.url : nil) }
+        panel.nameFieldStringValue = filename
+        panel.beginSheetModal(for: window) { result in
+            guard result == .OK, let chosen = panel.url else { completionHandler(nil); return }
+            if let destination = availableDownloadDestination(chosen) { completionHandler(destination); return }
+            let alert = NSAlert()
+            alert.messageText = "O ficheiro já existe"
+            alert.informativeText = "Career Ops não substitui ficheiros existentes. Escolha outro nome para guardar o download ou cancele."
+            alert.addButton(withTitle: "Escolher outro nome")
+            alert.addButton(withTitle: "Cancelar")
+            alert.beginSheetModal(for: self.window) { response in
+                if response == .alertFirstButtonReturn {
+                    self.chooseDownloadDestination(chosen.lastPathComponent, completionHandler: completionHandler)
+                } else { completionHandler(nil) }
+            }
+        }
     }
 
     func download(_ download: WKDownload, willPerformHTTPRedirection response: HTTPURLResponse,

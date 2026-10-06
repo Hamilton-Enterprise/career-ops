@@ -85,5 +85,14 @@ func serverEnvironment(_ config: LaunchConfiguration, inherited: [String: String
     }
     environment["CAREER_OPS_ROOT"] = (config.dataRoot ?? config.checkout).path
     environment["CAREER_OPS_CODE_ROOT"] = config.checkout.path
+    let path = inherited["PATH"].flatMap { $0.isEmpty ? nil : $0 } ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+    environment["PATH"] = "\(config.node.deletingLastPathComponent().path):\(path)"
     return environment
+}
+
+func availableDownloadDestination(_ proposed: URL?) -> URL? {
+    guard let proposed, proposed.isFileURL,
+          !FileManager.default.fileExists(atPath: proposed.path),
+          (try? FileManager.default.destinationOfSymbolicLink(atPath: proposed.path)) == nil else { return nil }
+    return proposed
 }

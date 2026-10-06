@@ -53,7 +53,28 @@ struct CareerOpsCoreTests {
         assert(env["CAREER_OPS_ROOT"] == root.path)
         assert(env["CAREER_OPS_CODE_ROOT"] == root.path)
         assert(env["CAREER_OPS_DATA_DIR"] == nil && env["CAREER_OPS_WEB_ALLOWED_HOSTS"] == nil)
-        assert(env["PATH"] == "/bin")
+        assert(env["PATH"] == "\(root.path):/bin")
+        let finderPath = "/usr/bin:/bin:/usr/sbin:/sbin"
+        let finderEnv = serverEnvironment(config, inherited: ["PATH": finderPath])
+        assert(finderEnv["PATH"] == "\(root.path):/usr/bin:/bin:/usr/sbin:/sbin")
+        let resolvedNode = finderEnv["PATH"]!.split(separator: ":").map {
+            URL(fileURLWithPath: String($0)).appendingPathComponent(node.lastPathComponent)
+        }.first { files.isExecutableFile(atPath: $0.path) }
+        assert(resolvedNode == node)
+        assert(serverEnvironment(config, inherited: [:])["PATH"] == "\(root.path):/usr/bin:/bin:/usr/sbin:/sbin")
+        assert(serverEnvironment(config, inherited: ["PATH": ""])["PATH"] == "\(root.path):/usr/bin:/bin:/usr/sbin:/sbin")
+        let destination = root.appendingPathComponent("download.pdf")
+        assert(availableDownloadDestination(destination) == destination)
+        try Data("keep this file".utf8).write(to: destination)
+        assert(availableDownloadDestination(destination) == nil)
+        let keptContents = try String(contentsOf: destination, encoding: .utf8)
+        assert(keptContents == "keep this file")
+        assert(availableDownloadDestination(root) == nil)
+        assert(availableDownloadDestination(nil) == nil)
+        assert(availableDownloadDestination(URL(string: "https://example.com/download.pdf")) == nil)
+        let danglingLink = root.appendingPathComponent("dangling.pdf")
+        try files.createSymbolicLink(atPath: danglingLink.path, withDestinationPath: root.appendingPathComponent("missing.pdf").path)
+        assert(availableDownloadDestination(danglingLink) == nil)
         print("CareerOpsCore: all assertions passed")
     }
 }
