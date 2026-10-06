@@ -32,6 +32,7 @@ if (!existsSync(sourcePath)) {
 const source = readFileSync(sourcePath, 'utf-8');
 
 const SYSTEM_PATHS = extractArrayFromSource(source, 'SYSTEM_PATHS');
+const BOOTSTRAP_PATHS = extractArrayFromSource(source, 'BOOTSTRAP_PATHS');
 const USER_PATHS = extractArrayFromSource(source, 'USER_PATHS');
 
 if (SYSTEM_PATHS.length === 0 || USER_PATHS.length === 0) {
@@ -181,7 +182,11 @@ if (process.argv.includes('--self-test')) {
   assert(covered('web/package.json') === true, 'web/ tree must be covered (isolation-contract prefix exclude)');
   assert(EXCLUDE_PREFIXES.includes('macos/'), 'macos/ must stay covered through the isolation-contract prefix exclude');
   assert(covered('macos/CareerOpsApp.swift') === true, 'macos source must stay covered through the isolation-contract prefix exclude');
-  assert(!SYSTEM_PATHS.includes('macos/'), 'macos/ must NOT be shipped through SYSTEM_PATHS');
+  assert(
+    ![...SYSTEM_PATHS, ...BOOTSTRAP_PATHS].some((path) => path === 'macos' || path.startsWith('macos/')),
+    'macos/ must NOT be shipped through SYSTEM_PATHS or BOOTSTRAP_PATHS',
+  );
+  assert(covered('macos-sibling/stray.swift') === false, 'macos-sibling/ must NOT ride the macos/ prefix exclude');
   assert(covered('web-dashboard/index.html') === false, 'web-dashboard/ must NOT ride the web/ prefix exclude');
   assert(covered('.npmignore') === true, '.npmignore must be covered (excluded)');
   // Asserted through the MECHANISM as well as covered(): if SIGNATURES.md ever
