@@ -92,7 +92,7 @@ export function BetaBanner() {
           <span className="size-1.5 animate-pulse rounded-full bg-brand" /> {meta.version} · {meta.channel}
         </span>
         {meta.sha && <span className="hidden font-mono text-faint sm:inline">{meta.sha}</span>}
-        <button aria-label="Comunicar erro" onClick={openReport} className="inline-flex items-center justify-center gap-1 rounded-full bg-brand-soft px-2 py-0.5 font-medium text-brand-text transition-colors hover:bg-brand/15 max-sm:size-11 max-sm:p-0 sm:ml-1">
+        <button aria-label="Comunicar erro" onClick={openReport} className="inline-flex items-center justify-center gap-1 rounded-full bg-brand-soft px-2 py-0.5 font-medium text-brand-text transition-colors hover:bg-brand/15 max-sm:size-11 max-sm:shrink-0 max-sm:p-0 sm:ml-1">
           <Bug className="size-3" /> <span className="hidden sm:inline">Comunicar erro</span>
         </button>
       </div>
