@@ -210,7 +210,7 @@ export function FilterBuilder({
             const on = filters.markets.includes(market);
             return (
               <button key={market} type="button" aria-pressed={on} onClick={() => toggleMarket(market)}
-                className={cn("min-h-[44px] min-w-[44px] rounded-full border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand", on ? "border-brand/40 bg-brand-soft text-brand" : "border-border text-muted hover:text-foreground")}>
+                className={cn("min-h-[44px] min-w-[44px] rounded-full border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand", on ? "border-brand/40 bg-brand-soft text-brand-text" : "border-border text-muted hover:text-foreground")}>
                 {MARKET_LABEL[market]}
               </button>
             );

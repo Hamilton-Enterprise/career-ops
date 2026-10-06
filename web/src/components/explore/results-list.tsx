@@ -48,7 +48,7 @@ export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
           {!isAi && error && <p className="text-[12px] text-amber-700 dark:text-amber-300">{error}</p>}
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
           <div className="flex min-h-[44px] items-center gap-1.5 rounded-lg border border-border bg-surface/40 px-2.5 py-1.5 focus-within:border-brand">
             <Search className="size-3.5 text-faint" />
             <input
