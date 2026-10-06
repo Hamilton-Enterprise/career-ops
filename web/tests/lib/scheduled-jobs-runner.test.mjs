@@ -112,6 +112,47 @@ test("scan command honors the selected engine and bounded filters", () => {
   });
 });
 
+test("market-only saved searches run the selected market instead of default ATS sources", () => {
+  assert.deepEqual(buildScanCommand({
+    engine: "full",
+    filters: { ats: [], markets: ["portugal"], positive: ["designer"], sinceDays: 7, limitPerAts: 150 },
+  }), {
+    script: "scan.mjs",
+    args: ["--since", "7", "--quiet"],
+  });
+});
+
+test("combined saved searches execute both ATS and market sources with a market-only overlay", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-market-"));
+  fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [engineer]\ncompanies:\n  - name: Existing\n    careers_url: https://example.com/jobs\n", "utf8");
+  const job = {
+    id: "11111111-1111-4111-8111-111111111111",
+    engine: "full",
+    filters: { ats: ["lever"], markets: ["portugal"], positive: ["designer"], sinceDays: 7, limitPerAts: 150 },
+  };
+  try {
+    const scripts = [];
+    const result = executeJob(temp, job, {
+      spawnFn: (_node, [script], options) => {
+        scripts.push(script);
+        const overlay = yaml.load(fs.readFileSync(options.env.CAREER_OPS_PORTALS, "utf8"));
+        if (script === "scan.mjs") {
+          assert.deepEqual(overlay.job_boards, [{ name: "Landing.jobs", provider: "landingjobs", enabled: true }]);
+          assert.equal(overlay.location_filter.strict, true);
+          assert.equal(overlay.companies, undefined);
+          return { status: 0, stdout: "New offers added:      3\n", stderr: "" };
+        }
+        return { status: 0, stdout: JSON.stringify({ postingsKept: 2 }), stderr: "" };
+      },
+    });
+    assert.deepEqual(scripts, ["scan-ats-full.mjs", "scan.mjs"]);
+    assert.equal(result.state, "success");
+    assert.equal(result.rolesFound, 5);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test("scheduled overlay falls back to portal title keywords and preserves hard location blocks", () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-filters-"));
   fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [engineer]\ntitle_filter_full:\n  positive: [architect]\nlocation_filter: {}\n", "utf8");

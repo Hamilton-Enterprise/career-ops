@@ -14,6 +14,8 @@ import {
 import { nextScheduledRun } from "../src/lib/scheduled-cadence.mjs";
 import { isMainModule } from "../../lib/is-main-module.mjs";
 import { scheduledRunnerResourcePath, scheduledStorePath } from "../src/lib/scheduled-runner-path.mjs";
+import { buildMarketPlan, cleanMarkets } from "../src/lib/market-presets.mjs";
+import { serializePortals } from "../src/lib/core/portals-serialize.mjs";
 import { getCareerOpsRoot } from "../../path-resolver.mjs";
 
 const CODE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -107,24 +109,34 @@ function numericFilter(value, fallback, minimum, maximum = Number.POSITIVE_INFIN
   return Math.min(maximum, Math.max(minimum, Math.round(number)));
 }
 
-export function buildScanCommand(job) {
+export function buildScanCommands(job) {
   const filters = job.filters || {};
   const sinceDays = numericFilter(filters.sinceDays, 7, 1);
   if (job.engine === "portals") {
-    return {
+    return [{
       script: "scan.mjs",
       args: ["--since", String(sinceDays), "--quiet"],
-    };
+    }];
   }
 
-  const ats = Array.isArray(filters.ats) && filters.ats.length
+  const ats = Array.isArray(filters.ats)
     ? filters.ats.join(",")
     : "greenhouse,lever,ashby,workday";
   const limit = numericFilter(filters.limitPerAts, 150, 50, 500);
-  return {
+  const commands = [];
+  if (ats) commands.push({
     script: "scan-ats-full.mjs",
     args: ["--since", String(sinceDays), "--ats", ats, "--limit", String(limit), "--json"],
-  };
+  });
+  if (cleanMarkets(filters.markets).length) commands.push({
+    script: "scan.mjs",
+    args: ["--since", String(sinceDays), "--quiet"],
+  });
+  return commands;
+}
+
+export function buildScanCommand(job) {
+  return buildScanCommands(job)[0];
 }
 
 export function extractRolesFound(engine, stdout) {
@@ -140,16 +152,17 @@ export function extractRolesFound(engine, stdout) {
   return match ? Number(match[1]) : 0;
 }
 
-function writeJobPortals(root, job) {
+function writeJobPortals(root, job, marketOnly = false) {
   if (!isSafeScheduledId(job.id)) throw new Error("Invalid scheduled job identifier.");
   const portalsPath = path.join(root, "portals.yml");
   const base = yaml.load(fs.readFileSync(portalsPath, "utf8"));
   if (!base || typeof base !== "object") throw new Error("portals.yml must contain a mapping");
 
   const filters = job.filters || {};
-  const positive = Array.isArray(filters.positive)
-    ? filters.positive.filter((value) => typeof value === "string" && value.trim())
+  const list = (value) => Array.isArray(value)
+    ? value.filter((item) => typeof item === "string" && item.trim())
     : [];
+  const positive = list(filters.positive);
   const fallbackPositive = Array.isArray(base.title_filter?.positive)
     ? base.title_filter.positive.filter((value) => typeof value === "string" && value.trim())
     : [];
@@ -170,10 +183,27 @@ function writeJobPortals(root, job) {
     always_allow: Array.isArray(filters.alwaysAllow) ? filters.alwaysAllow : [],
   };
 
+  const plan = buildMarketPlan(filters.markets, positive.length ? positive : fallbackPositive);
+
   const tempDir = path.join(root, "data", "tmp");
   fs.mkdirSync(tempDir, { recursive: true });
   const tempPath = path.join(tempDir, `scheduled-${job.id}-${randomUUID()}.yml`);
-  fs.writeFileSync(tempPath, yaml.dump(base, { lineWidth: 120, noRefs: true }), "utf8");
+  if (marketOnly) {
+    fs.writeFileSync(tempPath, serializePortals({
+      positive: positive.length ? positive : fallbackPositive,
+      negative: list(filters.negative),
+      allow: list(filters.allow),
+      block: list(filters.block),
+      blockHard: list(filters.blockHard),
+      alwaysAllow: list(filters.alwaysAllow),
+    }, plan.jobBoards, true), "utf8");
+  } else {
+    if (plan.jobBoards.length) {
+      base.job_boards = plan.jobBoards;
+      base.location_filter.strict = true;
+    }
+    fs.writeFileSync(tempPath, yaml.dump(base, { lineWidth: 120, noRefs: true }), "utf8");
+  }
   return tempPath;
 }
 
@@ -194,25 +224,45 @@ export function executeJob(root, job, options = {}) {
   let lastError = "Scan failed";
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    let tempPortals = null;
     try {
-      tempPortals = writeJobPortals(root, job);
-      const command = buildScanCommand(job);
-      const result = spawnFn(
-        process.execPath,
-        [command.script, ...command.args],
-        {
-          cwd: CODE_ROOT,
-          env: { ...process.env, CAREER_OPS_ROOT: root, CAREER_OPS_PORTALS: tempPortals },
-          encoding: "utf8",
-          timeout: SCAN_TIMEOUT_MS,
-          maxBuffer: MAX_OUTPUT_BYTES,
-          windowsHide: true,
-        },
-      );
+      const commands = buildScanCommands(job);
+      if (!commands.length) throw new Error("Scheduled scans require at least one ATS or market.");
+      let rolesFound = 0;
+      let completed = true;
+      for (const command of commands) {
+        let tempPortals = null;
+        try {
+          tempPortals = writeJobPortals(root, job, job.engine !== "portals" && command.script === "scan.mjs");
+          const result = spawnFn(
+            process.execPath,
+            [command.script, ...command.args],
+            {
+              cwd: CODE_ROOT,
+              env: { ...process.env, CAREER_OPS_ROOT: root, CAREER_OPS_PORTALS: tempPortals },
+              encoding: "utf8",
+              timeout: SCAN_TIMEOUT_MS,
+              maxBuffer: MAX_OUTPUT_BYTES,
+              windowsHide: true,
+            },
+          );
+          if (result.status !== 0) {
+            lastError = firstErrorLine(result);
+            completed = false;
+            break;
+          }
+          rolesFound += extractRolesFound(command.script === "scan-ats-full.mjs" ? "full" : "portals", result.stdout || "");
+        } finally {
+          if (tempPortals) {
+            try {
+              fs.rmSync(tempPortals, { force: true });
+            } catch {
+              // Temporary filter cleanup is best effort.
+            }
+          }
+        }
+      }
 
-      if (result.status === 0) {
-        const rolesFound = extractRolesFound(job.engine || "full", result.stdout || "");
+      if (completed) {
         return {
           state: "success",
           attempt,
@@ -221,17 +271,8 @@ export function executeJob(root, job, options = {}) {
           message: `Scan finished with ${rolesFound} matching role${rolesFound === 1 ? "" : "s"}.`,
         };
       }
-      lastError = firstErrorLine(result);
     } catch (error) {
       lastError = firstErrorLine({ error });
-    } finally {
-      if (tempPortals) {
-        try {
-          fs.rmSync(tempPortals, { force: true });
-        } catch {
-          // Temporary filter cleanup is best effort.
-        }
-      }
     }
   }
 
