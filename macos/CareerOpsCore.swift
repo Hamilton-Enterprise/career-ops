@@ -83,7 +83,7 @@ func serverEnvironment(_ config: LaunchConfiguration, inherited: [String: String
     for key in ["CAREER_OPS_WEB_ALLOWED_HOSTS", "CAREER_OPS_ROOT", "CAREER_OPS_DATA_DIR", "CAREER_OPS_CODE_ROOT"] {
         environment.removeValue(forKey: key)
     }
-    environment["CAREER_OPS_ROOT"] = (config.dataRoot ?? config.checkout).path
+    if let dataRoot = config.dataRoot { environment["CAREER_OPS_ROOT"] = dataRoot.path }
     environment["CAREER_OPS_CODE_ROOT"] = config.checkout.path
     let path = inherited["PATH"].flatMap { $0.isEmpty ? nil : $0 } ?? "/usr/bin:/bin:/usr/sbin:/sbin"
     environment["PATH"] = "\(config.node.deletingLastPathComponent().path):\(path)"

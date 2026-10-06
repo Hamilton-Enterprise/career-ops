@@ -54,6 +54,12 @@ struct CareerOpsCoreTests {
         assert(env["CAREER_OPS_CODE_ROOT"] == root.path)
         assert(env["CAREER_OPS_DATA_DIR"] == nil && env["CAREER_OPS_WEB_ALLOWED_HOSTS"] == nil)
         assert(env["PATH"] == "\(root.path):/bin")
+        let markerConfig = LaunchConfiguration(checkout: root, node: node, dataRoot: nil)
+        let markerEnv = serverEnvironment(markerConfig, inherited: ["CAREER_OPS_ROOT": "/wrong", "CAREER_OPS_DATA_DIR": "/wrong", "CAREER_OPS_CODE_ROOT": "/wrong", "PATH": "/bin"])
+        assert(markerEnv["CAREER_OPS_ROOT"] == nil, "An unset data root must leave marker resolution available")
+        assert(markerEnv["CAREER_OPS_DATA_DIR"] == nil)
+        assert(markerEnv["CAREER_OPS_CODE_ROOT"] == root.path)
+        assert(markerEnv["PATH"] == "\(root.path):/bin")
         let finderPath = "/usr/bin:/bin:/usr/sbin:/sbin"
         let finderEnv = serverEnvironment(config, inherited: ["PATH": finderPath])
         assert(finderEnv["PATH"] == "\(root.path):/usr/bin:/bin:/usr/sbin:/sbin")
