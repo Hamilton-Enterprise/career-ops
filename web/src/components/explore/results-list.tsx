@@ -7,12 +7,15 @@ import type { DiscoveredOffer } from "@/lib/explore";
 import { CostBadge } from "@/components/cost/cost-badge";
 import { DiscoveryCard } from "./discovery-card";
 import { useExplore } from "./explore-provider";
+import { sourceLabel, summarizeDiscoveryState } from "@/lib/explore-state.mjs";
 
 export type EnrichedOffer = DiscoveredOffer & { inPipeline: boolean; evaluatedN?: string };
 
 export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
-  const { companiesScanned, partial, error, addToPipeline, added, mode, running } = useExplore();
+  const { companiesScanned, sources, partial, error, addToPipeline, added, mode, running } = useExplore();
   const isAi = mode === "ai";
+  const outcome = summarizeDiscoveryState(sources, offers.length);
+  const unavailable = Object.entries(sources).filter(([, s]) => s.state === "error" || s.state === "skipped").map(([id]) => sourceLabel(id));
   const [sort, setSort] = useState<"fresh" | "company">("fresh");
   const [q, setQ] = useState("");
 
@@ -39,18 +42,20 @@ export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
           <p className="text-[12px] text-faint">
             {isAi
               ? "encontradas na web pública · disponibilidade por confirmar até à avaliação"
-              : `${companiesScanned > 0 ? `${companiesScanned.toLocaleString("pt-PT")} empresas pesquisadas · ` : ""}0 tokens usados${partial ? " · não foi possível consultar algumas fontes" : ""}`}
+              : `${companiesScanned > 0 ? `${companiesScanned.toLocaleString("pt-PT")} empresas pesquisadas · ` : ""}0 tokens usados`}
           </p>
+          {!isAi && !running && partial && <p className="text-[12px] text-amber-700 dark:text-amber-300">{outcome === "all-failed" ? "Nenhuma fonte concluiu a pesquisa" : "Resultados parciais"}{unavailable.length > 0 ? ` · fontes não consultadas: ${unavailable.join(", ")}` : " · algumas fontes ou ofertas ficaram por consultar"}</p>}
           {!isAi && error && <p className="text-[12px] text-amber-700 dark:text-amber-300">{error}</p>}
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          <div className="flex items-center gap-1.5 rounded-lg border border-border bg-surface/40 px-2.5 py-1.5">
+          <div className="flex min-h-[44px] items-center gap-1.5 rounded-lg border border-border bg-surface/40 px-2.5 py-1.5 focus-within:border-brand">
             <Search className="size-3.5 text-faint" />
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Filtrar resultados…"
+              aria-label="Filtrar resultados"
               className="w-32 bg-transparent text-[13px] outline-none placeholder:text-faint"
             />
           </div>
@@ -60,7 +65,8 @@ export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
                 key={s}
                 type="button"
                 onClick={() => setSort(s)}
-                className={cn("rounded-md px-2.5 py-1 font-medium capitalize transition-colors", sort === s ? "bg-brand-soft text-brand" : "text-muted hover:text-foreground")}
+                aria-pressed={sort === s}
+                className={cn("min-h-[44px] min-w-[44px] rounded-md px-2.5 py-1 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand", sort === s ? "bg-brand-soft text-brand" : "text-muted hover:text-foreground")}
               >
                 {s === "fresh" ? "Recentes" : "Empresa"}
               </button>
@@ -70,7 +76,7 @@ export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
             <button
               type="button"
               onClick={() => addToPipeline(addable)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface/40 px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-brand-soft hover:text-brand"
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-border bg-surface/40 px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-brand-soft hover:text-brand focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
             >
               <Plus className="size-3.5" /> Adicionar todas ({addable.length})
             </button>

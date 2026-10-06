@@ -18,6 +18,7 @@ import {
 import { makeAiStreamParser, type AiTraceChunk } from "@/lib/explore-ai";
 import { MAX_OFFER_LIMIT } from "@/lib/whats-new.mjs";
 import { isScannerMissing } from "@/lib/explore-error.mjs";
+import { applyDiscoveryOfferEvent, updateDiscoverySources, summarizeDiscoveryState, sourceLabel, type DiscoverySourceState } from "@/lib/explore-state.mjs";
 
 export type Phase =
   | "idle"
@@ -32,14 +33,7 @@ export type Phase =
   | "hunting" // AI search streaming
   | "blocked"; // AI search needs a CLI
 export type AiCost = { searches: number; candidates: number; fetches: number };
-export type SourceState = {
-  state: "queued" | "active" | "swept" | "noisy";
-  companies?: number;
-  done?: number;
-  total?: number;
-  matches?: number;
-  unreachable?: number;
-};
+export type SourceState = DiscoverySourceState;
 
 type ExploreCtx = {
   filters: ExploreFilters;
@@ -50,7 +44,7 @@ type ExploreCtx = {
   phase: Phase;
   running: boolean;
   offers: DiscoveredOffer[];
-  sources: Partial<Record<AtsSource, SourceState>>;
+  sources: Record<string, SourceState>;
   matchCount: number;
   companiesScanned: number;
   companiesAvailable: number;
@@ -102,7 +96,7 @@ type ResultSnapshot = {
   companiesAvailable: number;
   capHit: boolean;
   droppedNoDate: number;
-  sources: Partial<Record<AtsSource, SourceState>>;
+  sources: Record<string, SourceState>;
   partial: boolean;
   status: string;
   error: string;
@@ -119,7 +113,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   const touched = useRef(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [offers, setOffers] = useState<DiscoveredOffer[]>([]);
-  const [sources, setSources] = useState<Partial<Record<AtsSource, SourceState>>>({});
+  const [sources, setSources] = useState<Record<string, SourceState>>({});
   const [matchCount, setMatchCount] = useState(0);
   const [companiesScanned, setCompaniesScanned] = useState(0);
   // Authoritative scan-health signals (scanner --json mode, #1199): tell a capped /
@@ -168,8 +162,8 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setPartial(false);
     setError("");
     setScannerMissing(false);
-    setStatus("A iniciar a pesquisa nas plataformas de recrutamento…");
-    const init: Partial<Record<AtsSource, SourceState>> = {};
+    setStatus("A iniciar a pesquisa nas fontes selecionadas…");
+    const init: Record<string, SourceState> = {};
     for (const a of f.ats) init[a] = { state: "queued" };
     setSources(init);
     if (typeof window !== "undefined") {
@@ -177,13 +171,16 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       window.history.replaceState(null, "", `/explore${qs ? `?${qs}` : ""}`);
     }
 
-    const acc: DiscoveredOffer[] = [];
+    let acc: DiscoveredOffer[] = [];
+    let sourceStates = init;
+    let sawDone = false;
     let sawError = "";
     let sawScannerMissing = false; // the structured 400 (data-only checkout), not a runtime scan error
     let companiesScannedAcc = 0; // 0 at the end = the directories never downloaded → degraded, not empty
     let capHitAcc = false; // scan was capped (only a slice of the universe searched)
     let datasetIssueAcc = false; // some ATS dataset was stale/empty/unreachable
     let droppedNoDateAcc = 0; // postings dropped for lacking a publish date
+    let hasSourceSummary = false;
     try {
       const r = await fetch("/api/explore", {
         method: "POST",
@@ -219,28 +216,36 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
             } catch {
               continue;
             }
+            sourceStates = updateDiscoverySources(sourceStates, ev);
+            setSources(sourceStates);
             switch (ev.kind) {
+              case "sourceStart":
+                setPhase("scanning");
+                setStatus(`A consultar ${sourceLabel(ev.source)}`);
+                break;
               case "atsStart":
                 setPhase("scanning");
                 setStatus(`A consultar ${ATS_LABEL[ev.ats as AtsSource] ?? ev.ats} · ${ev.companies.toLocaleString("pt-PT")} empresas`);
-                setSources((s) => ({ ...s, [ev.ats]: { ...s[ev.ats as AtsSource], state: "active", companies: ev.companies } }));
                 break;
               case "progress":
                 // `matches` is the engine's running total. Live `offer` events
                 // (stderr JSON in --json mode) populate the card list; this
                 // number still drives the hero counter.
                 setMatchCount((m) => Math.max(m, ev.matches));
-                setSources((s) => ({ ...s, [ev.ats]: { ...s[ev.ats as AtsSource], state: "active", done: ev.scanned, total: ev.total } }));
-                break;
-              case "atsDone":
-                setSources((s) => ({ ...s, [ev.ats]: { ...s[ev.ats as AtsSource], state: ev.unreachable > 0 ? "noisy" : "swept", unreachable: ev.unreachable } }));
                 break;
               case "offer":
-                acc.push(ev.offer);
-                setOffers((o) => [...o, ev.offer]);
+                acc = applyDiscoveryOfferEvent(acc, ev);
+                setOffers(acc);
                 setMatchCount((m) => Math.max(m, acc.length));
                 break;
+              case "done":
+                sawDone = true;
+                acc = applyDiscoveryOfferEvent(acc, ev);
+                setOffers(acc);
+                setMatchCount(acc.length);
+                break;
               case "summary": {
+                hasSourceSummary = !!ev.sources;
                 companiesScannedAcc = ev.companiesScanned;
                 setCompaniesScanned(ev.companiesScanned);
                 if (typeof ev.companiesAvailable === "number") setCompaniesAvailable(ev.companiesAvailable);
@@ -256,6 +261,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
                   droppedNoDateAcc = ev.postingsDroppedNoDate;
                   setDroppedNoDate(ev.postingsDroppedNoDate);
                 }
+                if (ev.status === "partial") setPartial(true);
                 if (ev.unreachable > 0 || datasetIssue) setPartial(true);
                 break;
               }
@@ -272,12 +278,12 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       sawError = e instanceof Error ? e.message : "Erro durante a receção dos resultados.";
     }
 
-    // Mark any still-active sources as swept (stream ended).
-    setSources((s) => {
-      const next = { ...s };
-      for (const k of Object.keys(next) as AtsSource[]) if (next[k]?.state === "active" || next[k]?.state === "queued") next[k] = { ...next[k]!, state: "swept" };
-      return next;
-    });
+    if (!sawDone && !sawError) sawError = "A pesquisa terminou sem confirmar os resultados.";
+    if (sawError) sourceStates = updateDiscoverySources(sourceStates, { kind: "error", message: sawError });
+    setSources(sourceStates);
+    const outcome = summarizeDiscoveryState(sourceStates, acc.length);
+    const incomplete = outcome === "partial" || outcome === "all-failed" || !!sawError || capHitAcc || datasetIssueAcc || droppedNoDateAcc > 0;
+    setPartial(incomplete);
 
     runningRef.current = false;
     if (acc.length > 0) {
@@ -288,15 +294,16 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
         setPartial(true);
         setError(sawError);
       }
+      else if (outcome === "all-failed") setError("Nenhuma fonte confirmou a conclusão da pesquisa. As ofertas recebidas podem estar incompletas.");
       setMatchCount(acc.length);
       setPhase("revealing");
-      setStatus(`${acc.length} ${acc.length === 1 ? "oferta recente encontrada" : "ofertas recentes encontradas"}.`);
+      setStatus(`${incomplete ? "Resultados parciais · " : ""}${acc.length} ${acc.length === 1 ? "oferta encontrada" : "ofertas encontradas"}`);
       window.setTimeout(() => setPhase("results"), 850);
-    } else if (sawError) {
-      setError(sawError);
+    } else if (sawError || outcome === "all-failed") {
+      setError(sawError || "Nenhuma fonte selecionada devolveu um resultado válido.");
       setScannerMissing(sawScannerMissing);
       setPhase("failed");
-    } else if (capHitAcc || datasetIssueAcc || droppedNoDateAcc > 0 || companiesScannedAcc === 0) {
+    } else if (incomplete || (!hasSourceSummary && companiesScannedAcc === 0)) {
       // Maintainer's RULE (#1199): it is NOT "all caught up" if the scan was capped,
       // a dataset was stale/unreachable, postings were dropped for missing a date, OR
       // nothing was searched at all (legacy 0-companies fallback when --json is absent).

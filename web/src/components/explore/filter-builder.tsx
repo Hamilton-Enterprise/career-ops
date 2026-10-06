@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { X, Ban, Clock, MapPin, ChevronDown, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { ATS_LABEL, ATS_SOURCES, cleanChips, type AtsSource, type ExploreFilters } from "@/lib/explore";
+import { ATS_LABEL, ATS_SOURCES, MARKET_IDS, cleanChips, type AtsSource, type MarketId, type ExploreFilters } from "@/lib/explore";
+import { MARKET_LABEL } from "@/lib/explore-state.mjs";
 
 const RECENCY = [
   { label: "24h", days: 1 },
@@ -17,6 +18,7 @@ const STYLE = `
 .co-fb__chip{display:inline-flex;align-items:center;gap:.3rem;border-radius:999px;padding:.2rem .5rem .2rem .6rem;font-size:12.5px;line-height:1.2;border:1px solid transparent}
 .co-fb__chip button{display:inline-flex;opacity:.6;transition:opacity .15s}
 .co-fb__chip button:hover{opacity:1}
+.co-fb__chip button:focus-visible{outline:2px solid hsl(26 73% 51%);outline-offset:2px}
 .co-fb__chip.inc{color:hsl(26 78% 42%);background:hsl(26 73% 51% / .11);border-color:hsl(26 73% 51% / .26)}
 html.dark .co-fb__chip.inc{color:hsl(26 86% 70%);background:hsl(26 80% 55% / .14);border-color:hsl(26 80% 55% / .28)}
 .co-fb__field{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;min-height:2.6rem;padding:.45rem .55rem;border-radius:.7rem}
@@ -115,7 +117,10 @@ export function FilterBuilder({
   const toggleAts = (a: AtsSource) => {
     const has = filters.ats.includes(a);
     const next = has ? filters.ats.filter((x) => x !== a) : [...filters.ats, a];
-    set({ ats: next.length ? next : filters.ats });
+    set({ ats: next });
+  };
+  const toggleMarket = (market: MarketId) => {
+    set({ markets: filters.markets.includes(market) ? filters.markets.filter((m) => m !== market) : [...filters.markets, market] });
   };
 
   return (
@@ -164,7 +169,7 @@ export function FilterBuilder({
                 type="button"
                 onClick={() => set({ sinceDays: r.days })}
                 className={cn(
-                  "rounded-md px-2.5 py-1 text-xs font-medium transition-colors max-sm:min-h-[44px]",
+                  "min-h-[44px] min-w-[44px] rounded-md px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
                   filters.sinceDays === r.days ? "bg-brand-soft text-brand" : "text-muted hover:text-foreground",
                 )}
               >
@@ -175,17 +180,18 @@ export function FilterBuilder({
         </div>
 
         <div>
-          <Label hint={filters.ats.length === 0 ? "escolhe pelo menos uma" : undefined}>Fontes</Label>
-          <div className="flex flex-wrap gap-1.5">
+          <Label>Plataformas ATS</Label>
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Plataformas ATS">
             {ATS_SOURCES.map((a) => {
               const on = filters.ats.includes(a);
               return (
                 <button
                   key={a}
                   type="button"
+                  aria-pressed={on}
                   onClick={() => toggleAts(a)}
                   className={cn(
-                    "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors max-sm:min-h-[44px]",
+                    "min-h-[44px] min-w-[44px] rounded-full border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
                     on ? "border-brand/40 bg-brand-soft text-brand" : "border-border text-muted hover:text-foreground",
                   )}
                 >
@@ -194,6 +200,21 @@ export function FilterBuilder({
               );
             })}
           </div>
+        </div>
+      </div>
+
+      <div>
+        <Label>Mercados</Label>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Mercados">
+          {MARKET_IDS.map((market) => {
+            const on = filters.markets.includes(market);
+            return (
+              <button key={market} type="button" aria-pressed={on} onClick={() => toggleMarket(market)}
+                className={cn("min-h-[44px] min-w-[44px] rounded-full border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand", on ? "border-brand/40 bg-brand-soft text-brand" : "border-border text-muted hover:text-foreground")}>
+                {MARKET_LABEL[market]}
+              </button>
+            );
+          })}
         </div>
       </div>
 

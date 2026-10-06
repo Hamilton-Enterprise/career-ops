@@ -4,7 +4,8 @@ import { useMemo, useState } from "react";
 import { ExternalLink, Plus, Check, Loader2, ShieldQuestion, Coins } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { instrumentSerif } from "@/lib/fonts";
-import { ATS_LABEL, type AtsSource, type DiscoveredOffer } from "@/lib/explore";
+import { type DiscoveredOffer } from "@/lib/explore";
+import { offerProvenance } from "@/lib/explore-state.mjs";
 import { useJobs } from "@/components/jobs/job-store";
 import { useExplore } from "./explore-provider";
 
@@ -56,7 +57,8 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
   const isAdded = added.has(offer.url) || inPipeline || working || doneEval;
   const isAdding = adding.has(offer.url);
   const unverified = offer.verification === "unconfirmed";
-  const fresh = freshness(offer.postedAt) || offer.postedHint || "";
+  const fresh = freshness(offer.postedAt) || "Data não indicada";
+  const provenance = offerProvenance(offer);
 
   const evaluate = () => {
     addToPipeline([offer]); // evaluating implies it's in the pipeline — record it
@@ -87,8 +89,7 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-        <span className="rounded border border-border px-1.5 py-0.5 font-medium text-muted">{ATS_LABEL[offer.ats as AtsSource] ?? offer.ats}</span>
-        {fresh && <span className="text-faint">{fresh}</span>}
+        <span className="text-muted">{fresh}</span>
         {unverified && (
           <span
             className="inline-flex items-center gap-1 rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-600 dark:text-amber-300"
@@ -116,6 +117,9 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
           </span>
         )}
       </div>
+
+      <p className="text-[12px] leading-snug text-muted">{provenance.origins.length === 1 ? "Origem" : "Origens"}: {provenance.origins.join(" · ") || "Não indicada"}</p>
+      {provenance.eligibilityUnknown && <p className="text-[12px] leading-snug text-muted">Países elegíveis não indicados</p>}
 
       {offer.why && (
         <p className="text-[12px] leading-snug text-brand/80">{offer.why}</p>

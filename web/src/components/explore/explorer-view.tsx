@@ -17,6 +17,7 @@ import { ResultsList, type EnrichedOffer } from "./results-list";
 import { useExplore } from "./explore-provider";
 import { ScheduleJobAction } from "./schedule-job-action";
 import { PT_PT_LOCALE } from "@/lib/pt-pt";
+import { canDiscover as hasDiscoverySelection } from "@/lib/explore-state.mjs";
 
 // Same shape as core normalizeTextKey(s, " ") — never [^a-z0-9] (#2666).
 const norm = (s: string) => normalizeTextKey(s, " ");
@@ -111,7 +112,7 @@ export function ExplorerView({
 
   const isAi = mode === "ai";
   const isResults = phase === "results";
-  const canDiscover = filters.ats.length > 0;
+  const canDiscover = hasDiscoverySelection(filters);
   const scanRunning = running && !isAi;
   // Keep one ResultsList mounted across scanning → revealing → results so
   // filter/sort/scroll and co-rise survive the 850ms reveal handoff.
@@ -138,7 +139,7 @@ export function ExplorerView({
           <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-muted">
             {isAi
               ? "Descreve a função, a localização e as condições. O agente procura na web pública; a disponibilidade é confirmada durante a avaliação."
-              : "Pesquisa ofertas públicas no Greenhouse, Lever, Ashby e Workday. Esta pesquisa não usa tokens."}
+              : "Pesquisa ofertas públicas nas plataformas ATS e nos mercados selecionados. Esta pesquisa não usa tokens."}
           </p>
         )}
       </header>
@@ -166,7 +167,7 @@ export function ExplorerView({
             {phase === "empty-loose" && (
               <EmptyState
                 tone="loose"
-                title="Não foram encontradas ofertas públicas."
+                title="Não foram encontradas ofertas públicas"
                 body="Alarga os critérios ou usa a pesquisa direta nas plataformas de recrutamento."
                 onRerun={() => setMode("scan")}
                 rerunLabel="Usar a pesquisa direta"
@@ -227,8 +228,8 @@ export function ExplorerView({
           {phase === "empty-current" && (
             <EmptyState
               tone="good"
-              title="Não há ofertas novas."
-              body="Não foram encontradas ofertas publicadas desde a última pesquisa."
+              title="Não foram encontradas ofertas"
+              body="As fontes consultadas não devolveram ofertas que correspondam aos filtros."
               note={scanNote}
               onRerun={() => {
                 setFilters({ ...filters, sinceDays: Math.max(filters.sinceDays, 30) });
@@ -240,7 +241,7 @@ export function ExplorerView({
           {phase === "empty-loose" && (
             <EmptyState
               tone="loose"
-              title="Não foram encontradas ofertas recentes."
+              title="Não foram encontradas ofertas recentes"
               body="Alarga o período e retira os filtros de localização para repetir a pesquisa."
               note={scanNote}
               onRerun={() => {
@@ -318,17 +319,17 @@ function DegradedCard({
   // 0 results, but the scan was NOT a clean full search → never "all caught up".
   // Pick the most informative reason (authoritative when the scanner's --json mode
   // is available; otherwise the 0-companies fallback).
-  let title = "A pesquisa não conseguiu consultar nenhuma fonte.";
+  let title = "A pesquisa não conseguiu consultar nenhuma fonte";
   let body =
     "As plataformas públicas não responderam. Pode ser uma falha temporária de rede ou um limite de pedidos. Repete a pesquisa dentro de alguns minutos.";
   if (companiesScanned > 0 && capHit) {
-    title = "Não houve resultados no conjunto pesquisado.";
+    title = "Não houve resultados no conjunto pesquisado";
     body = `A pesquisa ficou limitada a ${companiesScanned.toLocaleString(PT_PT_LOCALE)}${companiesAvailable > companiesScanned ? ` de ${companiesAvailable.toLocaleString(PT_PT_LOCALE)}` : ""} empresas. Aumenta o alcance ou restringe as funções antes de repetir.`;
   } else if (companiesScanned > 0 && droppedNoDate > 0) {
-    title = "Algumas ofertas não tinham data de publicação.";
+    title = "Algumas ofertas não tinham data de publicação";
     body = `${droppedNoDate.toLocaleString(PT_PT_LOCALE)} ${droppedNoDate === 1 ? "oferta correspondia" : "ofertas correspondiam"} aos critérios, mas ${droppedNoDate === 1 ? "não tinha" : "não tinham"} uma data clara. Alarga o período para procurar alternativas com data.`;
   } else if (companiesScanned > 0 && partial) {
-    title = "Não foi possível consultar algumas fontes.";
+    title = "Não foi possível consultar algumas fontes";
     body = `Foram pesquisadas ${companiesScanned.toLocaleString(PT_PT_LOCALE)} empresas, mas uma ou mais fontes não responderam. Estes resultados são parciais.`;
   }
   return (
@@ -391,7 +392,7 @@ function FailedCard({ msg, scannerMissing, onRetry }: { msg: string; scannerMiss
   return (
     <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 text-center">
       <AlertTriangle className="mx-auto size-6 text-amber-500" />
-      <p className="mt-2 text-sm font-medium text-foreground">Não foi possível concluir a pesquisa.</p>
+      <p className="mt-2 text-sm font-medium text-foreground">Não foi possível concluir a pesquisa</p>
       <p className="mt-1 text-[13px] text-muted">{msg}</p>
       <button onClick={onRetry} className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-brand-soft px-3 py-1.5 text-sm font-medium text-brand">
         <RotateCcw className="size-4" /> Tentar de novo
