@@ -78,9 +78,10 @@ export function TodayDashboard({
   // ordering lives in lib/home/awaiting.mjs so it can be tested — see the file
   // for why "first six in the array" was a bug waiting for #3529.
   const awaiting = useMemo(() => pickAwaitingDecision(applications, scoreNum), [applications]);
+  const awaitingCount = applications.length; // todaySnapshot keeps every pending decision.
 
   const newThisWeek = freshCount;
-  const allClear = newThisWeek === 0 && overdue === 0 && awaiting.length === 0;
+  const allClear = newThisWeek === 0 && overdue === 0 && awaitingCount === 0;
   const inboxUrls = useMemo(() => new Set(inbox.map((j) => j.url)), [inbox]);
 
   return (
@@ -104,9 +105,9 @@ export function TodayDashboard({
                     <span className="text-brand tabular-nums">{overdue}</span> {overdue === 1 ? "acompanhamento pendente" : "acompanhamentos pendentes"}
                   </>
                 )}
-                {newThisWeek === 0 && overdue === 0 && awaiting.length > 0 && (
+                {newThisWeek === 0 && overdue === 0 && awaitingCount > 0 && (
                   <>
-                    <span className="text-brand tabular-nums">{awaiting.length}</span> {awaiting.length === 1 ? "decisão pendente" : "decisões pendentes"}
+                    <span className="text-brand tabular-nums">{awaitingCount}</span> {awaitingCount === 1 ? "decisão pendente" : "decisões pendentes"}
                   </>
                 )}
               </>
