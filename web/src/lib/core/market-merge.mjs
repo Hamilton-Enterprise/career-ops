@@ -45,7 +45,7 @@ export function parseMarketReceipt(output, exitCode, plan, timedOut = false) {
   try { receipt = JSON.parse(output); } catch { receipt = null; }
   if (!receipt || receipt.version !== "careerops.scan.receipt@1" || receipt.dry_run !== true ||
       !Array.isArray(receipt.offers) || !Array.isArray(receipt.errors) ||
-      !Number.isFinite(receipt.scanned) || (exitCode !== 0 && exitCode !== 2 && !timedOut)) {
+      !Number.isFinite(receipt.scanned)) {
     for (const source of sources) if (source.state !== "skipped") {
       source.state = "error";
       source.message = timedOut ? "A fonte não terminou dentro do prazo." : "O scanner não devolveu um recibo válido.";
@@ -56,6 +56,12 @@ export function parseMarketReceipt(output, exitCode, plan, timedOut = false) {
   for (const error of receipt.errors) {
     const state = sources.find(s => s.source === error?.company);
     if (state) { state.state = "error"; state.message = typeof error.error === "string" ? error.error : "Falha na fonte."; }
+  }
+  if (receipt.scanned === 0 && receipt.skipped > 0 && receipt.offers.length === 0 && receipt.errors.length === 0) {
+    for (const source of sources) if (source.state === "ok") {
+      source.state = "skipped";
+      source.message = "Nenhum fornecedor foi executado.";
+    }
   }
   for (const raw of receipt.offers) {
     if (!raw || typeof raw !== "object") continue;
@@ -84,7 +90,15 @@ export function parseMarketReceipt(output, exitCode, plan, timedOut = false) {
     run.offers.push(offer);
   }
   run.offers = mergeDiscoveredOffers([], run.offers);
-  run.valid = sources.some(s => s.state === "ok") || run.offers.length > 0;
-  run.status = !run.valid ? "failed" : timedOut || exitCode === 2 || receipt.errors.length || sources.some(s => s.state !== "ok") ? "partial" : "ok";
+  run.valid = ((exitCode === 0 || exitCode === 2 || timedOut) && sources.some(s => s.state === "ok")) || run.offers.length > 0;
+  // Only exit 2 with identified source errors can certify the other sources.
+  // A timeout or unexplained child failure leaves every remaining source incomplete.
+  if (timedOut || (exitCode !== 0 && (exitCode !== 2 || !sources.some(s => s.state === "error")))) {
+    for (const source of sources) if (source.state === "ok") {
+      source.state = "error";
+      source.message = timedOut ? "A fonte não terminou dentro do prazo." : "O scanner terminou antes de confirmar a conclusão desta fonte.";
+    }
+  }
+  run.status = !run.valid ? "failed" : timedOut || exitCode !== 0 || receipt.errors.length || sources.some(s => s.state !== "ok") ? "partial" : "ok";
   return run;
 }

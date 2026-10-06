@@ -50,9 +50,13 @@ test("missing scanner and malformed output produce failed source states", async 
 
 test("timeout preserves a flushed receipt as partial and cleans ephemeral config", async t => {
   const root = await sandbox(t, `import fs from 'node:fs'; fs.writeFileSync('temp-path', process.env.CAREER_OPS_PORTALS); process.on('SIGTERM', () => { console.log(${JSON.stringify(JSON.stringify(receipt))}); process.exit(2); }); setInterval(() => {}, 1000);`, "scan:\n  timeout_seconds: 1\n");
-  const run = await runMarketDiscovery(filters, () => {});
+  const events = [];
+  const run = await runMarketDiscovery(filters, e => events.push(e));
   assert.equal(run.status, "partial");
   assert.equal(run.offers.length, 1);
+  assert.equal(run.sources[0].state, "error");
+  assert.ok(events.some(e => e.kind === "sourceError"));
+  assert.equal(events.filter(e => e.kind === "sourceDone").length, 0);
   assert.equal(fs.existsSync(fs.readFileSync(path.join(root, "temp-path"), "utf8")), false);
 });
 
@@ -151,4 +155,37 @@ test("an ATS child failure keeps its readable receipt but marks the joint search
   assert.equal(events.find(e => e.kind === "summary").status, "partial");
   assert.ok(events.some(e => e.kind === "sourceError" && e.source === "greenhouse"));
   assert.equal(events.filter(e => e.kind === "error").length, 0);
+});
+
+test("nonzero market receipt reconciles source errors, incomplete summary and terminal offers", async t => {
+  await sandbox(t, `console.log(${JSON.stringify(JSON.stringify(receipt))}); process.exit(2);`);
+  const { POST } = await import("@/app/api/explore/route");
+  const response = await POST(new Request("http://localhost/api/explore", { method: "POST", body: JSON.stringify(filters) }));
+  const events = (await response.text()).trim().split("\n").map(JSON.parse);
+  const summary = events.find(e => e.kind === "summary");
+  assert.equal(summary.status, "partial");
+  assert.deepEqual(summary.incomplete, ["Landing.jobs"]);
+  assert.equal(summary.sources[0].state, "error");
+  assert.ok(events.some(e => e.kind === "sourceError" && e.source === "Landing.jobs"));
+  assert.equal(events.filter(e => e.kind === "sourceDone").length, 0);
+  assert.equal(events.at(-1).kind, "done");
+  assert.equal(events.at(-1).offers.length, 1);
+  assert.equal(events.filter(e => e.kind === "error").length, 0);
+});
+
+test("skipped market receipt is failed alone and partial beside a valid ATS result", async t => {
+  const payload = { ...receipt, scanned: 0, skipped: 1, offers: [] };
+  const root = await sandbox(t, `console.log(${JSON.stringify(JSON.stringify(payload))});`);
+  const events = [];
+  assert.deepEqual(await runDiscovery(filters, e => events.push(e)), []);
+  assert.equal(events.find(e => e.kind === "summary").status, "failed");
+  assert.deepEqual(events.find(e => e.kind === "summary").incomplete, ["Landing.jobs"]);
+  assert.equal(events.find(e => e.kind === "summary").sources[0].state, "skipped");
+  assert.equal(events.filter(e => e.kind === "sourceDone").length, 0);
+  fs.writeFileSync(path.join(root, "scan-ats-full.mjs"), "// --json capHit\nconsole.log(JSON.stringify({companiesScanned:1,offers:[]}));");
+  const joined = [];
+  assert.deepEqual(await runDiscovery({ ...filters, ats: ["greenhouse"] }, e => joined.push(e)), []);
+  assert.equal(joined.find(e => e.kind === "summary").status, "partial");
+  assert.deepEqual(joined.find(e => e.kind === "summary").incomplete, ["Landing.jobs"]);
+  assert.equal(joined.filter(e => e.kind === "error").length, 0);
 });

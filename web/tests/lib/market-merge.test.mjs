@@ -51,3 +51,24 @@ test("remote provider receipt ids prove remote work without inventing worldwide 
   assert.deepEqual(run.offers[0].sources, ["remoteok-api"]);
   assert.equal(run.offers[0].verification, "unconfirmed");
 });
+
+test("timeout and unexplained nonzero exits retain valid offers and mark sources incomplete", () => {
+  const plan = buildMarketPlan(["portugal"], []);
+  for (const [code, timedOut] of [[2, true], [2, false], [1, false], [null, true]]) {
+    const run = parseMarketReceipt(receipt([offer]), code, plan, timedOut);
+    assert.equal(run.offers.length, 1);
+    assert.equal(run.valid, true);
+    assert.equal(run.status, "partial");
+    assert.deepEqual(run.sources.map(s => s.state), ["error"]);
+    assert.ok(run.sources[0].message);
+  }
+});
+
+test("an empty receipt with only skipped providers is not a healthy empty search", () => {
+  const skipped = JSON.stringify({ ...JSON.parse(receipt([])), scanned: 0, skipped: 1 });
+  const run = parseMarketReceipt(skipped, 0, buildMarketPlan(["portugal"], []));
+  assert.equal(run.offers.length, 0);
+  assert.equal(run.valid, false);
+  assert.equal(run.status, "failed");
+  assert.deepEqual(run.sources.map(s => s.state), ["skipped"]);
+});
