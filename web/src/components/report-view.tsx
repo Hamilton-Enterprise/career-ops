@@ -83,7 +83,7 @@ export function ReportView({
   const url = field("URL");
   const decision = field("Decision");
   const line = applyLineLabel(score ?? "");
-  const recommended = line === "Recommended";
+  const recommended = line === "Recomendada";
   const quietApply = applyCtaQuiet({ score, legitimacy: meta?.legitimacy });
   const applyUrl = httpUrl(url);
   const pdfReady = (app?.pdf ?? "").includes("✅") || pdfReadyFromIndex;
