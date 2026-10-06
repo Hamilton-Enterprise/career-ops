@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import * as yaml from "js-yaml";
 import {
   isSafeScheduledId,
@@ -14,8 +14,9 @@ import {
 import { nextScheduledRun } from "../src/lib/scheduled-cadence.mjs";
 import { isMainModule } from "../../lib/is-main-module.mjs";
 import { scheduledRunnerResourcePath, scheduledStorePath } from "../src/lib/scheduled-runner-path.mjs";
-import { buildMarketPlan, cleanMarkets } from "../src/lib/market-presets.mjs";
+import { buildMarketPlan, classifyMarketLocation, cleanMarkets } from "../src/lib/market-presets.mjs";
 import { serializePortals } from "../src/lib/core/portals-serialize.mjs";
+import { mergeDiscoveredOffers, parseMarketReceipt } from "../src/lib/core/market-merge.mjs";
 import { getCareerOpsRoot } from "../../path-resolver.mjs";
 
 const CODE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -112,10 +113,13 @@ function numericFilter(value, fallback, minimum, maximum = Number.POSITIVE_INFIN
 export function buildScanCommands(job) {
   const filters = job.filters || {};
   const sinceDays = numericFilter(filters.sinceDays, 7, 1);
+  const marketScoped = cleanMarkets(filters.markets).length > 0;
   if (job.engine === "portals") {
     return [{
       script: "scan.mjs",
-      args: ["--since", String(sinceDays), "--quiet"],
+      args: marketScoped
+        ? ["--dry-run", "--json", "--since", String(sinceDays)]
+        : ["--since", String(sinceDays), "--quiet"],
     }];
   }
 
@@ -126,11 +130,11 @@ export function buildScanCommands(job) {
   const commands = [];
   if (ats) commands.push({
     script: "scan-ats-full.mjs",
-    args: ["--since", String(sinceDays), "--ats", ats, "--limit", String(limit), "--json"],
+    args: [...(marketScoped ? ["--dry-run"] : []), "--since", String(sinceDays), "--ats", ats, "--limit", String(limit), "--json"],
   });
-  if (cleanMarkets(filters.markets).length) commands.push({
+  if (marketScoped) commands.push({
     script: "scan.mjs",
-    args: ["--since", String(sinceDays), "--quiet"],
+    args: ["--dry-run", "--json", "--since", String(sinceDays)],
   });
   return commands;
 }
@@ -212,6 +216,54 @@ function firstErrorLine(result) {
   return String(raw).split(/\r?\n/).find(Boolean)?.slice(0, 300) || "Scan failed";
 }
 
+function acceptedAtsOffers(stdout, plan) {
+  let receipt;
+  try {
+    receipt = JSON.parse(stdout);
+  } catch {
+    throw new Error("The ATS scanner did not return valid JSON.");
+  }
+  if (!receipt || !Array.isArray(receipt.offers)) throw new Error("The ATS scanner did not return an offers list.");
+  return receipt.offers.map((offer) => {
+    const source = typeof offer?.source === "string" && offer.source.trim() ? offer.source.trim() : "ats-full";
+    return { ...offer, source, ats: source.replace(/-full$/, "") };
+  }).filter((offer) => offer && typeof offer.url === "string" && typeof offer.company === "string" &&
+    typeof offer.title === "string" && classifyMarketLocation(offer, plan).accepted);
+}
+
+function persistOffers(root, offers, spawnFn = spawnSync) {
+  if (!offers.length) return 0;
+  const scanUrl = pathToFileURL(path.join(CODE_ROOT, "scan.mjs")).href;
+  const localTodayUrl = pathToFileURL(path.join(CODE_ROOT, "lib", "local-today.mjs")).href;
+  const code = `
+import fs from "node:fs";
+import { appendToPipeline, appendToScanHistory } from ${JSON.stringify(scanUrl)};
+import { localToday } from ${JSON.stringify(localTodayUrl)};
+const offers = JSON.parse(fs.readFileSync(0, "utf8"));
+await appendToPipeline(offers);
+await appendToScanHistory(offers, localToday(), "added");
+process.stdout.write(JSON.stringify({ added: offers.length }));
+`;
+  const result = spawnFn(process.execPath, ["--input-type=module", "-e", code], {
+    cwd: CODE_ROOT,
+    env: { ...process.env, CAREER_OPS_ROOT: root },
+    input: JSON.stringify(offers),
+    encoding: "utf8",
+    timeout: SCAN_TIMEOUT_MS,
+    maxBuffer: MAX_OUTPUT_BYTES,
+    windowsHide: true,
+  });
+  if (result.status !== 0) throw new Error(firstErrorLine(result));
+  let receipt;
+  try {
+    receipt = JSON.parse(result.stdout || "");
+  } catch {
+    throw new Error("The pipeline writer did not return valid JSON.");
+  }
+  if (receipt.added !== offers.length) throw new Error("The pipeline writer did not confirm every accepted offer.");
+  return receipt.added;
+}
+
 /*
  * Keep the temporary portal overlay scoped to each retry. A thrown setup or
  * spawn error is retryable just like a non-zero scanner exit, while cleanup
@@ -220,6 +272,7 @@ function firstErrorLine(result) {
 
 export function executeJob(root, job, options = {}) {
   const spawnFn = options.spawnFn || spawnSync;
+  const writerSpawnFn = options.writerSpawnFn || spawnSync;
   const startedAt = Date.now();
   let lastError = "Scan failed";
 
@@ -227,6 +280,9 @@ export function executeJob(root, job, options = {}) {
     try {
       const commands = buildScanCommands(job);
       if (!commands.length) throw new Error("Scheduled scans require at least one ATS or market.");
+      const plan = buildMarketPlan(job.filters?.markets, job.filters?.positive);
+      const marketScoped = plan.markets.length > 0;
+      let accepted = [];
       let rolesFound = 0;
       let completed = true;
       for (const command of commands) {
@@ -250,7 +306,14 @@ export function executeJob(root, job, options = {}) {
             completed = false;
             break;
           }
-          rolesFound += extractRolesFound(command.script === "scan-ats-full.mjs" ? "full" : "portals", result.stdout || "");
+          if (marketScoped) {
+            const offers = command.script === "scan-ats-full.mjs"
+              ? acceptedAtsOffers(result.stdout || "", plan)
+              : parseMarketReceipt(result.stdout || "", result.status, plan).offers;
+            accepted = mergeDiscoveredOffers(accepted, offers);
+          } else {
+            rolesFound += extractRolesFound(command.script === "scan-ats-full.mjs" ? "full" : "portals", result.stdout || "");
+          }
         } finally {
           if (tempPortals) {
             try {
@@ -263,6 +326,7 @@ export function executeJob(root, job, options = {}) {
       }
 
       if (completed) {
+        if (marketScoped) rolesFound = persistOffers(root, accepted, writerSpawnFn);
         return {
           state: "success",
           attempt,

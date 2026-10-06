@@ -118,7 +118,7 @@ test("market-only saved searches run the selected market instead of default ATS 
     filters: { ats: [], markets: ["portugal"], positive: ["designer"], sinceDays: 7, limitPerAts: 150 },
   }), {
     script: "scan.mjs",
-    args: ["--since", "7", "--quiet"],
+    args: ["--dry-run", "--json", "--since", "7"],
   });
 });
 
@@ -132,22 +132,77 @@ test("combined saved searches execute both ATS and market sources with a market-
   };
   try {
     const scripts = [];
+    let marketRuns = 0;
+    let persisted = [];
     const result = executeJob(temp, job, {
-      spawnFn: (_node, [script], options) => {
+      spawnFn: (_node, [script, ...args], options) => {
         scripts.push(script);
         const overlay = yaml.load(fs.readFileSync(options.env.CAREER_OPS_PORTALS, "utf8"));
         if (script === "scan.mjs") {
           assert.deepEqual(overlay.job_boards, [{ name: "Landing.jobs", provider: "landingjobs", enabled: true }]);
           assert.equal(overlay.location_filter.strict, true);
           assert.equal(overlay.companies, undefined);
-          return { status: 0, stdout: "New offers added:      3\n", stderr: "" };
+          assert.deepEqual(args, ["--dry-run", "--json", "--since", "7"]);
+          marketRuns += 1;
+          if (marketRuns === 1) return { status: 1, stdout: "", stderr: "temporary market failure" };
+          const offers = Array.from({ length: 3 }, (_, index) => ({
+            url: `https://market.example/${index}`, company: `Market ${index}`, title: "Designer",
+            location: "Lisboa, Portugal", source: "landingjobs-api",
+          }));
+          return { status: 0, stdout: JSON.stringify({
+            version: "careerops.scan.receipt@1", dry_run: true, scanned: 1, skipped: 0, offers, errors: [],
+          }), stderr: "" };
         }
-        return { status: 0, stdout: JSON.stringify({ postingsKept: 2 }), stderr: "" };
+        assert.ok(args.includes("--dry-run"));
+        return { status: 0, stdout: JSON.stringify({ postingsKept: 2, offers: [
+          { url: "https://ats.example/1", company: "ATS 1", title: "Designer", location: "Porto, Portugal", source: "lever-full" },
+          { url: "https://ats.example/2", company: "ATS 2", title: "Designer", location: "Lisboa, Portugal", source: "lever-full" },
+        ] }), stderr: "" };
+      },
+      writerSpawnFn: (_node, _args, options) => {
+        persisted = JSON.parse(options.input);
+        return { status: 0, stdout: JSON.stringify({ added: persisted.length }), stderr: "" };
       },
     });
-    assert.deepEqual(scripts, ["scan-ats-full.mjs", "scan.mjs"]);
+    assert.deepEqual(scripts, ["scan-ats-full.mjs", "scan.mjs", "scan-ats-full.mjs", "scan.mjs"]);
     assert.equal(result.state, "success");
     assert.equal(result.rolesFound, 5);
+    assert.equal(result.attempt, 2);
+    assert.equal(persisted.length, 5);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("saved Portugal searches persist and count only offers accepted by the canonical market classifier", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-portugal-"));
+  fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [designer]\n", "utf8");
+  const offers = [
+    { url: "https://jobs.example/pt", company: "PT", title: "Designer", location: "Lisboa, Portugal", source: "landingjobs-api" },
+    { url: "https://jobs.example/us", company: "US", title: "Designer", location: "New York, United States", source: "landingjobs-api" },
+    { url: "https://jobs.example/missing", company: "Missing", title: "Designer", location: "", source: "landingjobs-api" },
+  ];
+  try {
+    const result = executeJob(temp, {
+      id: "11111111-1111-4111-8111-111111111111",
+      engine: "portals",
+      filters: { ats: [], markets: ["portugal"], positive: ["designer"], sinceDays: 7, limitPerAts: 150 },
+    }, {
+      spawnFn: (_node, args) => {
+        assert.deepEqual(args.slice(1), ["--dry-run", "--json", "--since", "7"]);
+        return { status: 0, stdout: JSON.stringify({
+          version: "careerops.scan.receipt@1", dry_run: true, scanned: 1, skipped: 0, offers, errors: [],
+        }), stderr: "" };
+      },
+    });
+    assert.equal(result.state, "success");
+    assert.equal(result.rolesFound, 1);
+    const pipeline = fs.readFileSync(path.join(temp, "data", "pipeline.md"), "utf8");
+    const history = fs.readFileSync(path.join(temp, "data", "scan-history.tsv"), "utf8");
+    for (const text of [pipeline, history]) {
+      assert.match(text, /https:\/\/jobs\.example\/pt/);
+      assert.doesNotMatch(text, /https:\/\/jobs\.example\/(?:us|missing)/);
+    }
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
