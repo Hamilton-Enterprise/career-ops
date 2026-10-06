@@ -233,6 +233,14 @@ function acceptedAtsOffers(stdout, plan) {
 
 function persistOffers(root, offers, spawnFn = spawnSync) {
   if (!offers.length) return 0;
+  const writerOffers = offers.map(({ postedAt, ...offer }) => {
+    if (typeof postedAt === "number" && Number.isFinite(postedAt) && postedAt > 0) return { ...offer, postedAt };
+    if (typeof postedAt === "string" && /^\d{4}-\d{2}-\d{2}$/.test(postedAt)) {
+      const epoch = Date.parse(`${postedAt}T00:00:00.000Z`);
+      if (Number.isFinite(epoch)) return { ...offer, postedAt: epoch };
+    }
+    return offer;
+  });
   const scanUrl = pathToFileURL(path.join(CODE_ROOT, "scan.mjs")).href;
   const localTodayUrl = pathToFileURL(path.join(CODE_ROOT, "lib", "local-today.mjs")).href;
   const code = `
@@ -247,7 +255,7 @@ process.stdout.write(JSON.stringify({ added: offers.length }));
   const result = spawnFn(process.execPath, ["--input-type=module", "-e", code], {
     cwd: CODE_ROOT,
     env: { ...process.env, CAREER_OPS_ROOT: root },
-    input: JSON.stringify(offers),
+    input: JSON.stringify(writerOffers),
     encoding: "utf8",
     timeout: SCAN_TIMEOUT_MS,
     maxBuffer: MAX_OUTPUT_BYTES,
@@ -260,7 +268,7 @@ process.stdout.write(JSON.stringify({ added: offers.length }));
   } catch {
     throw new Error("The pipeline writer did not return valid JSON.");
   }
-  if (receipt.added !== offers.length) throw new Error("The pipeline writer did not confirm every accepted offer.");
+  if (receipt.added !== writerOffers.length) throw new Error("The pipeline writer did not confirm every accepted offer.");
   return receipt.added;
 }
 
@@ -307,9 +315,14 @@ export function executeJob(root, job, options = {}) {
             break;
           }
           if (marketScoped) {
-            const offers = command.script === "scan-ats-full.mjs"
-              ? acceptedAtsOffers(result.stdout || "", plan)
-              : parseMarketReceipt(result.stdout || "", result.status, plan).offers;
+            let offers;
+            if (command.script === "scan-ats-full.mjs") {
+              offers = acceptedAtsOffers(result.stdout || "", plan);
+            } else {
+              const marketRun = parseMarketReceipt(result.stdout || "", result.status, plan);
+              if (!marketRun.valid || marketRun.status === "failed") throw new Error("The market scanner did not complete a valid run.");
+              offers = marketRun.offers;
+            }
             accepted = mergeDiscoveredOffers(accepted, offers);
           } else {
             rolesFound += extractRolesFound(command.script === "scan-ats-full.mjs" ? "full" : "portals", result.stdout || "");

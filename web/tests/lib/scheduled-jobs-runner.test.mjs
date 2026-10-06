@@ -208,6 +208,84 @@ test("saved Portugal searches persist and count only offers accepted by the cano
   }
 });
 
+test("saved market searches preserve posting dates in the real pipeline and history writers", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-posted-at-"));
+  fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [designer]\n", "utf8");
+  try {
+    const result = executeJob(temp, {
+      id: "11111111-1111-4111-8111-111111111111",
+      engine: "portals",
+      filters: { markets: ["portugal"], positive: ["designer"] },
+    }, {
+      spawnFn: () => ({ status: 0, stdout: JSON.stringify({
+        version: "careerops.scan.receipt@1", dry_run: true, scanned: 1, skipped: 0, errors: [],
+        offers: [{
+          url: "https://jobs.example/dated", company: "Dated", title: "Designer",
+          location: "Lisboa, Portugal", postedAt: "2026-09-14", source: "landingjobs-api",
+        }],
+      }), stderr: "" }),
+    });
+    assert.equal(result.state, "success");
+    const pipeline = fs.readFileSync(path.join(temp, "data", "pipeline.md"), "utf8");
+    const history = fs.readFileSync(path.join(temp, "data", "scan-history.tsv"), "utf8");
+    assert.match(pipeline, /posted: 2026-09-14/);
+    const historyRows = history.trimEnd().split("\n").map((line) => line.split("\t"));
+    const postedAtIndex = historyRows[0].indexOf("posted_at");
+    assert.notEqual(postedAtIndex, -1);
+    assert.equal(historyRows.find((row) => row[0] === "https://jobs.example/dated")?.[postedAtIndex], "2026-09-14");
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("saved market searches retry malformed JSON receipts instead of reporting a healthy empty run", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-malformed-market-"));
+  fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [designer]\n", "utf8");
+  let attempts = 0;
+  try {
+    const result = executeJob(temp, {
+      id: "11111111-1111-4111-8111-111111111111",
+      engine: "portals",
+      filters: { markets: ["portugal"], positive: ["designer"] },
+    }, {
+      spawnFn: () => {
+        attempts += 1;
+        return { status: 0, stdout: "not-json", stderr: "" };
+      },
+    });
+    assert.equal(attempts, MAX_ATTEMPTS);
+    assert.equal(result.state, "failed");
+    assert.equal(result.attempt, MAX_ATTEMPTS);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("saved market searches retry all-skipped receipts instead of reporting a healthy empty run", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-skipped-market-"));
+  fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [designer]\n", "utf8");
+  let attempts = 0;
+  try {
+    const result = executeJob(temp, {
+      id: "11111111-1111-4111-8111-111111111111",
+      engine: "portals",
+      filters: { markets: ["portugal"], positive: ["designer"] },
+    }, {
+      spawnFn: () => {
+        attempts += 1;
+        return { status: 0, stdout: JSON.stringify({
+          version: "careerops.scan.receipt@1", dry_run: true, scanned: 0, skipped: 1, offers: [], errors: [],
+        }), stderr: "" };
+      },
+    });
+    assert.equal(attempts, MAX_ATTEMPTS);
+    assert.equal(result.state, "failed");
+    assert.equal(result.attempt, MAX_ATTEMPTS);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test("scheduled overlay falls back to portal title keywords and preserves hard location blocks", () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-filters-"));
   fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [engineer]\ntitle_filter_full:\n  positive: [architect]\nlocation_filter: {}\n", "utf8");
