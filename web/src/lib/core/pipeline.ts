@@ -75,12 +75,25 @@ process.stdin.on("end", async () => {
     child.stdout.on("data", (d: Buffer) => (out += d.toString()));
     child.stderr.on("data", (d: Buffer) => (err += d.toString()));
     child.on("error", (e) => resolve({ added: 0, error: e instanceof Error ? e.message : "spawn failed" }));
-    child.on("close", () => {
+    child.on("close", (code, signal) => {
+      const stderr = err.trim().slice(0, 200);
+      if (code !== 0 || signal) {
+        resolve({ added: 0, error: stderr || (signal ? `O processo de escrita terminou com ${signal}.` : `O processo de escrita terminou com o código ${code}.`) });
+        return;
+      }
+      if (!out.trim()) {
+        resolve({ added: 0, error: stderr || "O processo de escrita não devolveu um resultado." });
+        return;
+      }
       try {
-        const parsed = JSON.parse(out.trim() || "{}") as AddResult;
-        resolve({ added: parsed.added ?? 0, error: parsed.error });
+        const parsed = JSON.parse(out.trim()) as AddResult;
+        if (!Number.isFinite(parsed.added) || parsed.added < 0) {
+          resolve({ added: 0, error: stderr || "O processo de escrita devolveu um resultado inválido." });
+          return;
+        }
+        resolve({ added: parsed.added, error: parsed.error });
       } catch {
-        resolve({ added: 0, error: err.trim().slice(0, 200) || "writer returned no result" });
+        resolve({ added: 0, error: stderr || "O processo de escrita devolveu um resultado inválido." });
       }
     });
     child.stdin.write(JSON.stringify(clean));

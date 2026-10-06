@@ -69,5 +69,6 @@ test("a scan that ends in an error keeps its results as partial and shows the re
   const withResults = src.slice(start, src.indexOf("} else if (sawError) {", start));
   assert.match(withResults, /if \(sawError\) \{\s*setPartial\(true\);\s*setError\(sawError\);/);
   const list = readFileSync(join(SRC, "components/explore/results-list.tsx"), "utf8");
-  assert.match(list, /!isAi && error && </);
+  assert.match(list, /\{error && <p/);
+  assert.doesNotMatch(list, /!isAi && error && </);
 });

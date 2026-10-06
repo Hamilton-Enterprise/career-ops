@@ -45,7 +45,7 @@ export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
               : `${companiesScanned > 0 ? `${companiesScanned.toLocaleString("pt-PT")} empresas pesquisadas · ` : ""}0 tokens usados`}
           </p>
           {!isAi && !running && partial && <p className="text-[12px] text-amber-700 dark:text-amber-300">{outcome === "all-failed" ? "Nenhuma fonte concluiu a pesquisa" : "Resultados parciais"}{unavailable.length > 0 ? ` · fontes não consultadas: ${unavailable.join(", ")}` : " · algumas fontes ou ofertas ficaram por consultar"}</p>}
-          {!isAi && error && <p className="text-[12px] text-amber-700 dark:text-amber-300">{error}</p>}
+          {error && <p className="text-[12px] text-amber-700 dark:text-amber-300">{error}</p>}
         </div>
 
         <div className="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">

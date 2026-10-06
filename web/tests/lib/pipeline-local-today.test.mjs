@@ -96,6 +96,11 @@ test("a separate data root receives both writes and writer failures use non-2xx 
   const dataRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-data-root-")));
   const codeRoot = path.resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
   const missingCodeRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-route-code-")));
+  const brokenCodeRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-child-code-")));
+  fs.writeFileSync(
+    path.join(brokenCodeRoot, "scan.mjs"),
+    "export async function appendToPipeline() {}\nexport async function appendToScanHistory() {}\n",
+  );
   const saved = {
     CAREER_OPS_ROOT: process.env.CAREER_OPS_ROOT,
     CAREER_OPS_CODE_ROOT: process.env.CAREER_OPS_CODE_ROOT,
@@ -109,6 +114,7 @@ test("a separate data root receives both writes and writer failures use non-2xx 
     }
     fs.rmSync(dataRoot, { recursive: true, force: true });
     fs.rmSync(missingCodeRoot, { recursive: true, force: true });
+    fs.rmSync(brokenCodeRoot, { recursive: true, force: true });
   });
 
   const { addOffersToPipeline } = await import("@/lib/core/pipeline");
@@ -137,4 +143,16 @@ test("a separate data root receives both writes and writer failures use non-2xx 
   assert.equal(response.status, 500);
   assert.equal(body.added, 0);
   assert.match(body.error, /não inclui o módulo/i);
+
+  process.env.CAREER_OPS_CODE_ROOT = brokenCodeRoot;
+  const childFailure = await POST(new Request("http://localhost/api/explore/add", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ offers: [{ url: "https://jobs.example.com/child-failure" }] }),
+  }));
+  const childFailureBody = await childFailure.json();
+
+  assert.equal(childFailure.status, 500);
+  assert.equal(childFailureBody.added, 0);
+  assert.match(childFailureBody.error, /local-today|ERR_MODULE_NOT_FOUND|Cannot find module/i);
 });
