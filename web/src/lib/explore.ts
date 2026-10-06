@@ -4,6 +4,10 @@
 // can never drift between the two halves. Server-only logic (spawning the scanner,
 // writing temp files) lives in lib/core/{scan,portals,pipeline}.ts.
 
+import { cleanMarkets, encodeMarkets, decodeMarkets } from "./market-presets.mjs";
+export type MarketId = "portugal" | "spain" | "europe" | "remote";
+export { MARKET_IDS } from "./market-presets.mjs";
+
 export type AtsSource = "greenhouse" | "lever" | "ashby" | "workday";
 export const ATS_SOURCES: AtsSource[] = ["greenhouse", "lever", "ashby", "workday"];
 export const ATS_LABEL: Record<AtsSource, string> = {
@@ -25,6 +29,7 @@ export type ExploreFilters = {
   alwaysAllow: string[];
   sinceDays: number;
   ats: AtsSource[];
+  markets: MarketId[];
   limitPerAts: number;
 };
 
@@ -37,6 +42,7 @@ export const DEFAULT_FILTERS: ExploreFilters = {
   alwaysAllow: [],
   sinceDays: 7,
   ats: [...ATS_SOURCES],
+  markets: [],
   limitPerAts: 150,
 };
 
@@ -135,7 +141,7 @@ export function parseExplorePatch(
   base: ExploreFilters = DEFAULT_FILTERS,
   merge = false,
 ): ExploreFilters {
-  const next: ExploreFilters = { ...base, ats: [...base.ats] };
+  const next: ExploreFilters = { ...base, ats: [...base.ats], markets: [...(base.markets ?? [])] };
   const lists: [keyof ExploreFilters, string][] = [
     ["positive", "positive"],
     ["negative", "negative"],
@@ -154,6 +160,7 @@ export function parseExplorePatch(
   if (raw.limit !== undefined) next.limitPerAts = clampNum(raw.limit, 50, 500, base.limitPerAts);
   if (raw.limitPerAts !== undefined) next.limitPerAts = clampNum(raw.limitPerAts, 50, 500, base.limitPerAts);
   if (raw.ats !== undefined) next.ats = cleanAts(raw.ats);
+  if (raw.markets !== undefined) next.markets = cleanMarkets(merge ? [...next.markets, ...cleanMarkets(raw.markets)] : raw.markets);
   return next;
 }
 
@@ -168,6 +175,8 @@ export function filtersToParams(f: ExploreFilters): string {
   if (f.alwaysAllow.length) sp.set("home", f.alwaysAllow.join(","));
   if (f.sinceDays !== DEFAULT_FILTERS.sinceDays) sp.set("since", String(f.sinceDays));
   if (f.ats.length !== ATS_SOURCES.length) sp.set("ats", f.ats.join(","));
+  const markets = encodeMarkets(f.markets);
+  if (markets) sp.set("markets", markets);
   if (f.limitPerAts !== DEFAULT_FILTERS.limitPerAts) sp.set("limit", String(f.limitPerAts));
   return sp.toString();
 }
@@ -184,6 +193,7 @@ export function paramsToFilters(sp: URLSearchParams, base: ExploreFilters = DEFA
       alwaysAllow: split(sp.get("home")),
       since: sp.get("since") ?? undefined,
       ats: split(sp.get("ats")),
+      markets: sp.has("markets") ? decodeMarkets(sp.get("markets")) : undefined,
       limit: sp.get("limit") ?? undefined,
     },
     base,
