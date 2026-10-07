@@ -25,8 +25,10 @@ const seenCwds = new Set();
 const agents = [
   { id: "claude", bin: "claude", name: "Claude Code" },
   { id: "codex", bin: "codex", name: "Codex" },
-  { id: "gemini", bin: "gemini", name: "Gemini CLI" },
-  { id: "cursor", bin: "agent", name: "Cursor Agent" },
+];
+const blockedAgents = [
+  { id: "gemini", bin: "gemini", name: "Gemini CLI", reason: /plan|pol[ií]tica/i },
+  { id: "cursor", bin: "agent", name: "Cursor Agent", reason: /hook/i },
 ];
 const unsupportedAgents = [
   { id: "opencode", bin: "opencode", name: "OpenCode" },
@@ -46,7 +48,7 @@ function fixture(t, behavior = "success") {
   const recordFile = path.join(root, "invocations.jsonl");
   // Real OS processes exercise the real resolver, probe, fencer, stream and
   // cleanup. Only the external model binaries are replaced.
-  for (const { id, bin } of [...agents, ...unsupportedAgents]) {
+  for (const { id, bin } of [...agents, ...unsupportedAgents, ...blockedAgents]) {
     const script = `#!${process.execPath}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
@@ -54,13 +56,11 @@ if (args.includes("--help")) {
   process.stdout.write("--ask-for-approval <POLICY>\\n--search\\n--config <KEY>\\n--sandbox <MODE> [possible values: read-only, workspace-write]\\n--strict-config\\n--ignore-user-config\\n--ephemeral\\n--skip-git-repo-check\\n--output-last-message <FILE>\\n");
   process.exit(0);
 }
-const settingsPath = process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
-const settings = ${JSON.stringify(id)} === "gemini" && settingsPath && fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, "utf8")) : null;
 const resultPath = args[args.indexOf("--output-last-message") + 1];
 const resultDir = args.includes("--output-last-message") ? fs.realpathSync(require("node:path").dirname(resultPath)) : null;
 const behavior = ${JSON.stringify(behavior)};
 if (behavior === "ignore-term") process.on("SIGTERM", () => {});
-fs.appendFileSync(${JSON.stringify(recordFile)}, JSON.stringify({ id: ${JSON.stringify(id)}, args, cwd: process.cwd(), pid: process.pid, resultDir, home: process.env.HOME, settingsPath: settings && fs.realpathSync(settingsPath) || settingsPath || null, settings }) + "\\n");
+fs.appendFileSync(${JSON.stringify(recordFile)}, JSON.stringify({ id: ${JSON.stringify(id)}, args, cwd: process.cwd(), pid: process.pid, resultDir, home: process.env.HOME }) + "\\n");
 process.stderr.write("fatal SECRET_FROM_STDERR query=PRIVATE_PROMPT\\n");
 if (behavior === "hang" || behavior === "ignore-term") {
   setInterval(() => {}, 1000);
@@ -80,7 +80,7 @@ if (behavior === "hang" || behavior === "ignore-term") {
 `;
     fs.writeFileSync(path.join(bins, bin), script, { mode: 0o755 });
   }
-  const values = { PATH: bins, CAREER_OPS_ROOT: data, CAREER_OPS_DATA_DIR: data, CAREER_OPS_CODE_ROOT: code, GEMINI_CLI_SYSTEM_SETTINGS_PATH: "inherited-settings-must-be-overridden" };
+  const values = { PATH: bins, CAREER_OPS_ROOT: data, CAREER_OPS_DATA_DIR: data, CAREER_OPS_CODE_ROOT: code };
   const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
   Object.assign(process.env, values);
   t.after(() => {
@@ -151,17 +151,6 @@ for (const { id, name } of agents) {
       for (const flag of ["--strict-config", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check"]) assert.ok(args.includes(flag));
       assert.equal(record.resultDir, record.cwd);
       assert.doesNotMatch(text, /PRIVATE_CODEX_TRANSCRIPT/);
-    } else if (id === "gemini") {
-      assert.equal(args[args.indexOf("--approval-mode") + 1], "plan");
-      assert.ok(args.includes("--skip-trust"));
-      assert.equal(args[args.indexOf("--output-format") + 1], "text");
-      assert.ok(!args.includes("--yolo"));
-      assert.equal(path.dirname(record.settingsPath), record.cwd);
-      assert.deepEqual(record.settings, { hooksConfig: { enabled: false }, mcp: { allowed: [] } });
-      assert.equal(fs.existsSync(record.settingsPath), false);
-    } else {
-      assert.equal(args[args.indexOf("--mode") + 1], "ask");
-      assert.ok(!args.includes("--force"));
     }
     assert.doesNotMatch(text, /SECRET_FROM_STDERR|PRIVATE_PROMPT/);
     const parsed = makeAiStreamParser().feed(text);
@@ -236,18 +225,20 @@ for (const { id, name } of agents) {
   });
 }
 
-test("Gemini: whitespace output does not hide a non-zero diagnostic", async (t) => {
-  fixture(t, "whitespace-failure");
-  const text = await (await invoke("gemini")).text();
-  assert.match(text, /(?:code|código) 7/);
-});
+for (const { id } of agents) {
+  test(`${id}: whitespace output does not hide a non-zero diagnostic`, async (t) => {
+    fixture(t, "whitespace-failure");
+    const text = await (await invoke(id)).text();
+    assert.match(text, /(?:code|código) 7/);
+  });
 
-test("Gemini: a usable result survives a non-zero exit without a duplicate diagnostic", async (t) => {
-  fixture(t, "success-nonzero");
-  const text = await (await invoke("gemini")).text();
-  assert.match(text, /<<offer:/);
-  assert.doesNotMatch(text, /(?:code|código) 7|SECRET_FROM_STDERR/);
-});
+  test(`${id}: a usable result survives a non-zero exit without a duplicate diagnostic`, async (t) => {
+    fixture(t, "success-nonzero");
+    const text = await (await invoke(id)).text();
+    assert.match(text, /<<offer:/);
+    assert.doesNotMatch(text, /(?:code|código) 7|SECRET_FROM_STDERR/);
+  });
+}
 
 test("Claude: invocation disables user hooks without replacing authenticated HOME", async (t) => {
   const f = fixture(t);
@@ -287,6 +278,30 @@ for (const { id, name } of unsupportedAgents) {
     const body = await response.json();
     assert.equal(body.code, "CLI_UNFENCED");
     assert.ok(body.error.includes(name));
+    assert.equal(mkdtemp.mock.callCount(), 0);
+    assert.deepEqual(f.records(), []);
+    assertPreserved(f);
+  });
+}
+
+for (const { id, name, reason } of blockedAgents) {
+  test(`${id}: unsafe runtime is refused before prompt reads, temporary workspace and spawn`, async (t) => {
+    const f = fixture(t);
+    const readFile = fs.readFileSync;
+    let promptReads = 0;
+    t.mock.method(fs, "readFileSync", (file, ...args) => {
+      if (String(file) === path.join(f.code, "modes", "web-search.md")) promptReads++;
+      return readFile(file, ...args);
+    });
+    const mkdtemp = t.mock.method(fs, "mkdtempSync", () => assert.fail("unsafe runtime must not create a workspace"));
+    const response = await invoke(id);
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.equal(body.code, "CLI_UNFENCED");
+    assert.ok(body.error.includes(name));
+    assert.match(body.error, reason);
+    assert.match(body.error, /Claude|Codex/);
+    assert.equal(promptReads, 0, "blocked agent must not load the search prompt");
     assert.equal(mkdtemp.mock.callCount(), 0);
     assert.deepEqual(f.records(), []);
     assertPreserved(f);

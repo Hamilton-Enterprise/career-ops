@@ -13,10 +13,10 @@
  * file already states about closing stdin: it is the only spawn path, "so the fix
  * can't drift". A per-route fix has drifted here once already.
  *
- * FENCERS is the ONE table. Membership in it is the whole answer to "can this
- * runtime be restricted" — there is no second list to keep in step, and an
- * unlisted CLI fails closed (unfenced, reported as such) without anyone having to
- * remember to declare it.
+ * FENCERS is the ONE argv-adapter table. Membership is not runtime certification:
+ * mode flags can be bypassed by hooks or policy overrides. fencingReport grades
+ * that evidence; sensitive callers must refuse a non-full report before spawn.
+ * Unlisted CLIs retain generic passthrough and are reported as unfenced.
  *
  * That is also why #2361's inline Codex sandbox — approval policy, `--sandbox
  * read-only` and `--search`, spelled in the AI-search route — lives here now
@@ -44,7 +44,7 @@ const CODEX_WORKSPACE_WRITE = "workspace-write";
  * outside FENCERS: every other runtime passes, including the ones absent from
  * FENCERS, which still run write-capable workers with their default access.
  * Hermes has no verified permission adapter; Cursor is deliberately invoked in
- * Ask mode, which does not edit files.
+ * Ask mode, but its global hooks are not isolated by that mode.
  *
  * @param {string} cliId
  * @param {import("./worker-capabilities.mjs").Capabilities} capabilities
@@ -322,7 +322,7 @@ function verifyCursorArgs(args, capabilities) {
     throw new Error("cli-fencing: Cursor Ask mode cannot run a write-capable worker.");
   }
   if (!args.includes("-p") || mode === -1 || args[mode + 1] !== "ask") {
-    throw new Error("cli-fencing: Cursor must run headlessly in read-only Ask mode.");
+    throw new Error("cli-fencing: Cursor must run headlessly in Ask mode.");
   }
   if (args.some((arg) => ["-f", "--force", "--yolo", "--mode=agent"].includes(arg))) {
     throw new Error("cli-fencing: Cursor Ask mode cannot carry write-enabling flags.");
@@ -332,10 +332,10 @@ function verifyCursorArgs(args, capabilities) {
 
 function verifyGeminiArgs(args, capabilities) {
   if (capabilities.writes !== false || capabilities.network !== "search") {
-    throw new Error("cli-fencing: Gemini is verified only for non-writing web search.");
+    throw new Error("cli-fencing: Gemini argv guard only supports non-writing web search.");
   }
   const seen = new Set();
-  // Consume the complete verified grammar. A bare flag check misses positional
+  // Consume the complete guarded grammar. A bare flag check misses positional
   // boolean values such as --skip-trust false and parser overrides/aliases.
   for (let i = 0; i < args.length; i++) {
     const option = args[i];
@@ -360,7 +360,7 @@ function verifyGeminiArgs(args, capabilities) {
 }
 
 /**
- * Per-CLI fencing. The single table: a CLI is fenceable iff it appears here.
+ * Per-CLI argv adapters. These guards alone do not certify runtime enforcement.
  *
  * The runtimes absent from this table are absent because nobody has verified a
  * mechanism on a machine that has them, not because none exists. Grok postdates
@@ -371,8 +371,9 @@ function verifyGeminiArgs(args, capabilities) {
  * `--allow-tool`/`--deny-tool`, opencode a config-file `permission` block, and
  * antigravity has no public documentation found. Each needs probing on a box that
  * has it — the issue is explicit that an unverifiable claim must warn rather than
- * assert enforcement. Gemini is verified only for the isolated plan-mode web
- * search invocation; other worker capabilities are refused.
+ * assert enforcement. Cursor/Gemini argv guards remain for existing callers,
+ * but are not certification: global hooks and plan-policy overrides can escape
+ * their mode flags, so fencingReport never grades either runtime as full.
  *
  * @type {Record<string, (args: string[], capabilities: import("./worker-capabilities.mjs").Capabilities) => string[]>}
  */
@@ -406,16 +407,16 @@ const FENCERS = Object.freeze({
  * @returns {FencingReport}
  */
 export function fencingReport({ cliId, cliName, capabilities }) {
-  if (cliId === "gemini" && (capabilities.writes !== false || capabilities.network !== "search")) {
+  if (cliId === "gemini") {
     return {
       level: "none",
-      notice: `${cliName} ${UNFENCED_MARKER} outside isolated web search`,
+      notice: `${cliName} ${UNFENCED_MARKER} — plan mode permits write transitions and policy overrides`,
     };
   }
-  if (cliId === "cursor" && capabilities.writes) {
+  if (cliId === "cursor") {
     return {
       level: "none",
-      notice: `${cliName} ${UNFENCED_MARKER} for write-capable work`,
+      notice: `${cliName} ${UNFENCED_MARKER} — Ask mode does not disable global hooks`,
     };
   }
   if (!Object.hasOwn(FENCERS, cliId)) {
@@ -476,9 +477,8 @@ export function fenceArgs({ cliId, args, capabilities }) {
   // resolves inherited Object.prototype members, so a cliId of "toString" or
   // "constructor" yields a truthy function that would then be CALLED as a fencer
   // — returning a string or the argv untouched, either way silently unfenced.
-  // Not reachable while routes resolve through resolveCli, but this module's
-  // claim is that membership in FENCERS is the whole answer, so both entry
-  // points have to agree on what membership means.
+  // Not reachable while routes resolve through resolveCli; nevertheless both
+  // entry points must agree that inherited members are not argv adapters.
   if (!Object.hasOwn(FENCERS, cliId)) return { args };
   return { args: FENCERS[cliId](args, capabilities) };
 }

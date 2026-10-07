@@ -51,8 +51,13 @@ export async function POST(req: Request) {
   const substitution = cliSubstitutionNotice(resolved);
   const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: CAPS.webSearchOnly });
   if (fencing.level !== "full") {
+    const reason = cliId === "cursor"
+      ? "o modo Ask não desativa hooks globais que podem escrever fora do espaço isolado."
+      : cliId === "gemini"
+        ? "o modo plan pode permitir escrita e alterações de política; não há isolamento só de leitura verificado."
+        : "não há isolamento só de leitura verificado para este agente.";
     return Response.json(
-      { code: "CLI_UNFENCED", error: `A pesquisa com IA não dispõe de isolamento só de leitura verificado para ${spec.name}. Escolhe um agente com suporte certificado.` },
+      { code: "CLI_UNFENCED", error: `A pesquisa com IA está bloqueada para ${spec.name}: ${reason} Escolhe Claude Code ou Codex.` },
       { status: 400 },
     );
   }
@@ -138,9 +143,7 @@ export async function POST(req: Request) {
           codexResultFile!,
           prompt,
         ]
-      : cliId === "gemini"
-        ? ["-p", prompt, "--approval-mode", "plan", "--skip-trust", "--output-format", "text"]
-        : spec.args(prompt);
+      : spec.args(prompt);
 
   // POSIX process groups let cancellation/timeout terminate descendants too.
   const useProcessGroup = process.platform !== "win32";
@@ -165,16 +168,10 @@ export async function POST(req: Request) {
   // and it still gets WebFetch (see ADVISOR_SCOPE).
   let child;
   try {
-    let childEnv = process.env;
-    if (cliId === "gemini") {
-      const settingsPath = path.join(childCwd, "settings.json");
-      fs.writeFileSync(settingsPath, JSON.stringify({ hooksConfig: { enabled: false }, mcp: { allowed: [] } }));
-      childEnv = { ...process.env, GEMINI_CLI_SYSTEM_SETTINGS_PATH: settingsPath };
-    }
     child = spawnHeadlessCli(
       binPath,
       args,
-      { cwd: childCwd, env: childEnv, detached: useProcessGroup },
+      { cwd: childCwd, env: process.env, detached: useProcessGroup },
       { cliId, capabilities: CAPS.webSearchOnly },
     );
   } catch (e) {
