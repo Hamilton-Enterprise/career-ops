@@ -360,7 +360,7 @@ Run the established `macos/build-app.sh` flow into a fresh directory under `work
 
 - [ ] **Step 6: Install atomically and test launch**
 
-Only after Steps 1–5 are green, close the current Career Ops app, preserve the previous verified bundle inside the build workspace, install the new bundle to `/Users/hamiltonsilva/Applications/Career Ops.app`, launch it and confirm the new local URL returns HTTP 200. Verify one Employment/Freelance switch and the assisted-preparation flow in the installed app.
+Only after Steps 1–5 are green, close the current Career Ops app, preserve the previous verified bundle inside the build workspace, install the new bundle to `~/Applications/Career Ops.app`, launch it and confirm the new local URL returns HTTP 200. Verify one Employment/Freelance switch and the assisted-preparation flow in the installed app.
 
 - [ ] **Step 7: Update project context and commit**
 
