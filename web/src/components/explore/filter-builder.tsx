@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import { ATS_LABEL, ATS_SOURCES, MARKET_IDS, cleanChips, type AtsSource, type MarketId, type ExploreFilters } from "@/lib/explore";
 import { MARKET_LABEL } from "@/lib/explore-state.mjs";
 import { inferMarketsFromLocations } from "@/lib/market-presets.mjs";
+import { applyFreelanceShortcut, FREELANCE_SHORTCUTS } from "@/lib/freelance-presets.mjs";
 
 const RECENCY = [
   { label: "24h", days: 1 },
@@ -130,8 +131,42 @@ export function FilterBuilder({
       <style>{STYLE}</style>
 
       <div>
+        <Label>Tipo de oportunidade</Label>
+        <div className="inline-flex rounded-lg border border-border bg-surface/40 p-0.5" role="group" aria-label="Tipo de oportunidade">
+          {([['employment', 'Emprego'], ['freelance', 'Freelance']] as const).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={filters.opportunityType === value}
+              onClick={() => set({ opportunityType: value })}
+              className={cn(
+                "min-h-[44px] rounded-md px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
+                filters.opportunityType === value ? "bg-brand-soft text-brand" : "text-muted hover:text-foreground",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
         <Label hint={filters.positive.length === 0 ? "vazio = todas as ofertas recentes" : undefined}>Funções a procurar</Label>
         <KeywordField values={filters.positive} tone="inc" placeholder="apoio ao cliente, pastelaria, marketing…" onChange={(v) => set({ positive: v })} />
+        {filters.opportunityType === "freelance" && (
+          <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Atalhos freelance">
+            {Object.keys(FREELANCE_SHORTCUTS).map((label) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => set({ positive: applyFreelanceShortcut(filters.positive, label) })}
+                className="min-h-[44px] rounded-full border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:border-brand/40 hover:text-brand"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
         {seededFrom.length > 0 && filters.positive.length > 0 && (
           <p className="mt-1 text-[11px] text-faint">Preenchido a partir de {seededFrom.join(" + ")}. Podes alterar.</p>
         )}
@@ -183,25 +218,31 @@ export function FilterBuilder({
 
         <div>
           <Label>Plataformas ATS</Label>
-          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Plataformas ATS">
-            {ATS_SOURCES.map((a) => {
-              const on = filters.ats.includes(a);
-              return (
-                <button
-                  key={a}
-                  type="button"
-                  aria-pressed={on}
-                  onClick={() => toggleAts(a)}
-                  className={cn(
-                    "min-h-[44px] min-w-[44px] rounded-full border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
-                    on ? "border-brand/40 bg-brand-soft text-brand" : "border-border text-muted hover:text-foreground",
-                  )}
-                >
-                  {ATS_LABEL[a]}
-                </button>
-              );
-            })}
-          </div>
+          {filters.opportunityType === "freelance" ? (
+            <p className="max-w-md text-[12px] leading-relaxed text-faint">
+              As plataformas ATS de emprego não são consultadas. A pesquisa freelance usa o Welcome to the Jungle e respeita os mercados escolhidos.
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Plataformas ATS">
+              {ATS_SOURCES.map((a) => {
+                const on = filters.ats.includes(a);
+                return (
+                  <button
+                    key={a}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => toggleAts(a)}
+                    className={cn(
+                      "min-h-[44px] min-w-[44px] rounded-full border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
+                      on ? "border-brand/40 bg-brand-soft text-brand" : "border-border text-muted hover:text-foreground",
+                    )}
+                  >
+                    {ATS_LABEL[a]}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 

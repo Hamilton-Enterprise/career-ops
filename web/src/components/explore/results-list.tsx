@@ -30,6 +30,7 @@ export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
   }, [offers, q, sort]);
 
   const addable = offers.filter((o) => !o.inPipeline && !o.evaluatedN && !added.has(o.url));
+  const freelance = offers.length > 0 && offers.every((offer) => offer.opportunityType === "freelance");
 
   return (
     <div className="space-y-4">
@@ -79,7 +80,7 @@ export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
               onClick={() => addToPipeline(addable)}
               className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-border bg-surface/40 px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-brand-soft hover:text-brand focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
             >
-              <Plus className="size-3.5" /> Adicionar todas ({addable.length})
+              <Plus className="size-3.5" /> {freelance ? "Guardar todas" : "Adicionar todas"} ({addable.length})
             </button>
           )}
         </div>

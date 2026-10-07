@@ -20,12 +20,14 @@ export async function POST(req: NextRequest) {
   }
 
   const filters = parseExplorePatch(body, DEFAULT_FILTERS);
+  const ats = filters.opportunityType === "freelance" ? [] : filters.ats;
+  const usesMarketScanner = filters.opportunityType === "freelance" || filters.markets.length > 0;
 
   // Guard: a data-only checkout (or pre-onboarding) has no scanner. Fail soft.
   // The body carries an explicit code because 400 is a shared channel: the
   // client cannot tell this apart from a malformed request by status alone.
-  if (!(filters.ats.length && fs.existsSync(rootScript("scan-ats-full"))) &&
-      !(filters.markets.length && fs.existsSync(rootScript("scan")))) {
+  if (!(ats.length && fs.existsSync(rootScript("scan-ats-full"))) &&
+      !(usesMarketScanner && fs.existsSync(rootScript("scan")))) {
     return Response.json(scannerMissingBody(), { status: SCANNER_MISSING_STATUS });
   }
 
@@ -39,7 +41,7 @@ export async function POST(req: NextRequest) {
           /* stream closed */
         }
       };
-      send({ kind: "start", ats: filters.ats, sinceDays: filters.sinceDays, limit: filters.limitPerAts, free: true } satisfies ScanEvent);
+      send({ kind: "start", ats, sinceDays: filters.sinceDays, limit: filters.limitPerAts, free: true } satisfies ScanEvent);
       let offers: DiscoveredOffer[] = [];
       try {
         offers = await runDiscovery(filters, (e: ScanEvent) => send(e));

@@ -113,7 +113,12 @@ function numericFilter(value, fallback, minimum, maximum = Number.POSITIVE_INFIN
 export function buildScanCommands(job) {
   const filters = job.filters || {};
   const sinceDays = numericFilter(filters.sinceDays, 7, 1);
-  const marketScoped = cleanMarkets(filters.markets).length > 0;
+  const freelance = filters.opportunityType === "freelance";
+  const marketScoped = freelance || cleanMarkets(filters.markets).length > 0;
+  if (freelance) return [{
+    script: "scan.mjs",
+    args: ["--dry-run", "--json", "--since", String(sinceDays)],
+  }];
   if (job.engine === "portals") {
     return [{
       script: "scan.mjs",
@@ -170,7 +175,7 @@ function writeJobPortals(root, job, marketOnly = false) {
   const fallbackPositive = Array.isArray(base.title_filter?.positive)
     ? base.title_filter.positive.filter((value) => typeof value === "string" && value.trim())
     : [];
-  if (!positive.length && !fallbackPositive.length) {
+  if (filters.opportunityType !== "freelance" && !positive.length && !fallbackPositive.length) {
     throw new Error("Scheduled scans require title keywords in the job or portals.yml title_filter.positive.");
   }
   base.title_filter = {
@@ -187,7 +192,7 @@ function writeJobPortals(root, job, marketOnly = false) {
     always_allow: Array.isArray(filters.alwaysAllow) ? filters.alwaysAllow : [],
   };
 
-  const plan = buildMarketPlan(filters.markets, positive.length ? positive : fallbackPositive);
+  const plan = buildMarketPlan(filters.markets, positive.length ? positive : fallbackPositive, filters.opportunityType);
 
   const tempDir = path.join(root, "data", "tmp");
   fs.mkdirSync(tempDir, { recursive: true });
@@ -200,11 +205,12 @@ function writeJobPortals(root, job, marketOnly = false) {
       block: list(filters.block),
       blockHard: list(filters.blockHard),
       alwaysAllow: list(filters.alwaysAllow),
-    }, plan.jobBoards, true), "utf8");
+    }, plan.jobBoards, plan.locationPolicy.strict), "utf8");
   } else {
     if (plan.jobBoards.length) {
       base.job_boards = plan.jobBoards;
-      base.location_filter.strict = true;
+      if (plan.locationPolicy.strict) base.location_filter.strict = true;
+      else delete base.location_filter.strict;
     }
     fs.writeFileSync(tempPath, yaml.dump(base, { lineWidth: 120, noRefs: true }), "utf8");
   }
@@ -288,15 +294,15 @@ export function executeJob(root, job, options = {}) {
     try {
       const commands = buildScanCommands(job);
       if (!commands.length) throw new Error("Scheduled scans require at least one ATS or market.");
-      const plan = buildMarketPlan(job.filters?.markets, job.filters?.positive);
-      const marketScoped = plan.markets.length > 0;
+      const plan = buildMarketPlan(job.filters?.markets, job.filters?.positive, job.filters?.opportunityType);
+      const marketScoped = plan.opportunityType === "freelance" || plan.markets.length > 0;
       let accepted = [];
       let rolesFound = 0;
       let completed = true;
       for (const command of commands) {
         let tempPortals = null;
         try {
-          tempPortals = writeJobPortals(root, job, job.engine !== "portals" && command.script === "scan.mjs");
+          tempPortals = writeJobPortals(root, job, plan.opportunityType === "freelance" || (job.engine !== "portals" && command.script === "scan.mjs"));
           const result = spawnFn(
             process.execPath,
             [command.script, ...command.args],

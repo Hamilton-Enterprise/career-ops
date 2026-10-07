@@ -9,7 +9,7 @@ import type { ExploreFilters, ScanEvent } from "@/lib/explore";
 export type { MarketRun } from "./market-merge.mjs";
 
 export async function runMarketDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) => void): Promise<MarketRun> {
-  const plan = buildMarketPlan(filters.markets, filters.positive.length ? filters.positive : loadProfileTargets());
+  const plan = buildMarketPlan(filters.markets, filters.positive.length ? filters.positive : loadProfileTargets(), filters.opportunityType);
   const complete = (run: MarketRun) => {
     for (const source of run.sources) {
       if (source.state === "ok") {

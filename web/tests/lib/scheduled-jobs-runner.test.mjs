@@ -122,6 +122,47 @@ test("market-only saved searches run the selected market instead of default ATS 
   });
 });
 
+test("saved freelance searches run only the shared market scanner with the WTTJ contract filter", () => {
+  assert.deepEqual(buildScanCommand({
+    engine: "full",
+    filters: { opportunityType: "freelance", ats: ["greenhouse", "lever"], markets: ["portugal", "remote"], positive: ["website"], sinceDays: 7, limitPerAts: 150 },
+  }), {
+    script: "scan.mjs",
+    args: ["--dry-run", "--json", "--since", "7"],
+  });
+});
+
+test("saved freelance searches can use the contract filter without inventing keywords or geography", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-freelance-"));
+  fs.writeFileSync(path.join(temp, "portals.yml"), "companies: []\n", "utf8");
+  try {
+    const result = executeJob(temp, {
+      id: "11111111-1111-4111-8111-111111111111",
+      engine: "full",
+      filters: { opportunityType: "freelance", ats: ["greenhouse"], markets: [], positive: [], sinceDays: 7, limitPerAts: 150 },
+    }, {
+      spawnFn: (_node, [script], options) => {
+        assert.equal(script, "scan.mjs");
+        const overlay = yaml.load(fs.readFileSync(options.env.CAREER_OPS_PORTALS, "utf8"));
+        assert.deepEqual(overlay.job_boards, [{
+          name: "Welcome to the Jungle", provider: "wttj", enabled: true,
+          wttj: { queries: [], filters: "contract_type:freelance" },
+        }]);
+        assert.equal(overlay.location_filter, undefined);
+        return { status: 0, stdout: JSON.stringify({
+          version: "careerops.scan.receipt@1", dry_run: true, scanned: 1, skipped: 0,
+          offers: [{ url: "https://example.test/freelance", company: "Acme", title: "Designer", location: "Paris", source: "wttj-api" }], errors: [],
+        }), stderr: "" };
+      },
+      writerSpawnFn: () => ({ status: 0, stdout: JSON.stringify({ added: 1 }), stderr: "" }),
+    });
+    assert.equal(result.state, "success");
+    assert.equal(result.rolesFound, 1);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test("combined saved searches execute both ATS and market sources with a market-only overlay", () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-market-"));
   fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [engineer]\ncompanies:\n  - name: Existing\n    careers_url: https://example.com/jobs\n", "utf8");

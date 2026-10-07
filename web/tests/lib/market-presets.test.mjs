@@ -24,6 +24,36 @@ test("empty markets select no boards or strict geography", () => {
   assert.deepEqual(classifyMarketLocation({ location: "" }, plan), { accepted: true });
 });
 
+test("freelance uses one WTTJ plan with contract filters and no invented geography", () => {
+  const plan = buildMarketPlan([], ["web designer"], "freelance");
+  assert.equal(plan.opportunityType, "freelance");
+  assert.equal(plan.locationPolicy.strict, false);
+  assert.deepEqual(plan.jobBoards, [{
+    name: "Welcome to the Jungle",
+    provider: "wttj",
+    enabled: true,
+    wttj: { queries: ["web designer"], filters: "contract_type:freelance" },
+  }]);
+});
+
+test("freelance combines countries and full remote in one deduplicated WTTJ filter", () => {
+  const plan = buildMarketPlan(["portugal", "spain", "europe", "remote"], ["automation"], "freelance");
+  assert.equal(plan.jobBoards.length, 1);
+  assert.equal(plan.jobBoards[0].provider, "wttj");
+  assert.equal(plan.jobBoards[0].wttj.queries[0], "automation");
+  assert.match(plan.jobBoards[0].wttj.filters, /^contract_type:freelance AND \(.+\)$/);
+  for (const facet of ["offices.country_code:PT", "offices.country_code:ES", "offices.country_code:FR", "offices.country_code:GB", "remote:fulltime"]) {
+    assert.equal(plan.jobBoards[0].wttj.filters.split(/\(|\)| OR /).includes(facet), true, facet);
+  }
+  assert.equal((plan.jobBoards[0].wttj.filters.match(/offices\.country_code:PT/g) ?? []).length, 1);
+});
+
+test("freelance remote-only plans do not add country geography", () => {
+  const plan = buildMarketPlan(["remote"], [], "freelance");
+  assert.equal(plan.jobBoards[0].wttj.filters, "contract_type:freelance AND remote:fulltime");
+  assert.deepEqual(plan.jobBoards[0].wttj.queries, []);
+});
+
 test("Portugal uses Landing.jobs and Spain scans both Manfred languages", () => {
   assert.deepEqual(buildMarketPlan(["portugal"], []).jobBoards, [
     { name: "Landing.jobs", provider: "landingjobs", enabled: true },

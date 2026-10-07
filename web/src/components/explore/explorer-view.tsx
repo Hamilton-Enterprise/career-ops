@@ -139,7 +139,9 @@ export function ExplorerView({
           <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-muted">
             {isAi
               ? "Descreve a função, a localização e as condições. O agente procura na web pública; a disponibilidade é confirmada durante a avaliação."
-              : "Pesquisa ofertas públicas nas plataformas ATS e nos mercados selecionados. Esta pesquisa não usa tokens."}
+              : filters.opportunityType === "freelance"
+                ? "Pesquisa oportunidades freelance públicas no Welcome to the Jungle, com os mercados selecionados. Esta pesquisa não usa tokens."
+                : "Pesquisa ofertas públicas nas plataformas ATS e nos mercados selecionados. Esta pesquisa não usa tokens."}
           </p>
         )}
       </header>
@@ -204,7 +206,7 @@ export function ExplorerView({
             <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
               <Check className="mt-0.5 size-4 shrink-0 text-emerald-500" />
               <p className="text-[13px] leading-relaxed text-foreground">
-                Estas ofertas correspondem aos critérios do teu perfil. <span className="text-emerald-600 dark:text-emerald-400">A pesquisa não usou tokens.</span> Avalia uma oferta para veres a compatibilidade de A a F.
+                Estas oportunidades correspondem aos critérios do teu perfil. <span className="text-emerald-600 dark:text-emerald-400">A pesquisa não usou tokens.</span>{filters.opportunityType === "employment" ? " Avalia uma oferta para veres a compatibilidade de A a F." : " Podes guardar as que quiseres acompanhar."}
               </p>
             </div>
           )}
@@ -283,7 +285,7 @@ function DiscoverBar({ canDiscover, onDiscover, label, filters }: { canDiscover:
       <ScheduleJobAction filters={filters} />
       <span className="inline-flex items-center gap-1.5 text-[12px] text-muted">
         <span className="size-1.5 rounded-full bg-emerald-500" />
-        A pesquisa não usa tokens. A avaliação de uma oferta usa o agente escolhido.
+        {filters.opportunityType === "freelance" ? "A pesquisa e a gravação não usam tokens." : "A pesquisa não usa tokens. A avaliação de uma oferta usa o agente escolhido."}
       </span>
     </div>
   );

@@ -81,9 +81,9 @@ export function updateDiscoverySources(sources, event) {
   return next;
 }
 
-/** @param {Pick<import('./explore').ExploreFilters, 'ats'|'markets'>} filters */
+/** @param {Pick<import('./explore').ExploreFilters, 'ats'|'markets'|'opportunityType'>} filters */
 export function canDiscover(filters) {
-  return filters.ats.length > 0 || filters.markets.length > 0;
+  return filters.opportunityType === 'freelance' || filters.ats.length > 0 || filters.markets.length > 0;
 }
 
 const remotePlan = buildMarketPlan(['remote'], []);

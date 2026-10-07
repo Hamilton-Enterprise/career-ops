@@ -164,7 +164,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setScannerMissing(false);
     setStatus("A iniciar a pesquisa nas fontes selecionadas…");
     const init: Record<string, SourceState> = {};
-    for (const a of f.ats) init[a] = { state: "queued" };
+    if (f.opportunityType === "employment") for (const a of f.ats) init[a] = { state: "queued" };
     setSources(init);
     if (typeof window !== "undefined") {
       const qs = filtersToParams(f);

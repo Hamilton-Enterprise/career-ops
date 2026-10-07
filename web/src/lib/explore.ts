@@ -9,6 +9,7 @@ export type MarketId = "portugal" | "spain" | "united-kingdom" | "switzerland" |
 export { MARKET_IDS } from "./market-presets.mjs";
 
 export type AtsSource = "greenhouse" | "lever" | "ashby" | "workday";
+export type OpportunityType = "employment" | "freelance";
 export const ATS_SOURCES: AtsSource[] = ["greenhouse", "lever", "ashby", "workday"];
 export const ATS_LABEL: Record<AtsSource, string> = {
   greenhouse: "Greenhouse",
@@ -21,6 +22,7 @@ export const ATS_LABEL: Record<AtsSource, string> = {
  *  buildTitleFilter / buildLocationFilter semantics; sinceDays/ats/limitPerAts map
  *  to scan-ats-full.mjs's --since / --ats / --limit. */
 export type ExploreFilters = {
+  opportunityType: OpportunityType;
   positive: string[];
   negative: string[];
   allow: string[];
@@ -34,6 +36,7 @@ export type ExploreFilters = {
 };
 
 export const DEFAULT_FILTERS: ExploreFilters = {
+  opportunityType: "employment",
   positive: [],
   negative: [],
   allow: [],
@@ -59,6 +62,7 @@ export type DiscoveredOffer = {
   postedAt: string;
   ats: string;
   source: string;
+  opportunityType?: OpportunityType;
   sources?: string[];
   salary?: { min?: number; max?: number; currency?: string; period?: string };
   /** which positive keyword matched the title (transparency, e.g. "ai" in "Nail") */
@@ -141,6 +145,10 @@ function cleanAts(v: unknown): AtsSource[] {
   return out.length ? Array.from(new Set(out)) : [...ATS_SOURCES];
 }
 
+function cleanOpportunityType(value: unknown): OpportunityType {
+  return value === "freelance" ? "freelance" : "employment";
+}
+
 /** Apply a (possibly partial) action/assistant patch onto a base. The assistant
  *  emits {positive,negative,allow,block,alwaysAllow,since,ats,limit}. With
  *  merge=true, list fields are ADDED to the base; otherwise the given fields
@@ -169,6 +177,7 @@ export function parseExplorePatch(
   if (raw.limit !== undefined) next.limitPerAts = clampNum(raw.limit, 50, 500, base.limitPerAts);
   if (raw.limitPerAts !== undefined) next.limitPerAts = clampNum(raw.limitPerAts, 50, 500, base.limitPerAts);
   if (raw.ats !== undefined) next.ats = cleanAts(raw.ats);
+  if (raw.opportunityType !== undefined) next.opportunityType = cleanOpportunityType(raw.opportunityType);
   if (raw.markets !== undefined) next.markets = cleanMarkets(merge ? [...next.markets, ...cleanMarkets(raw.markets)] : raw.markets);
   else if (raw.allow !== undefined) next.markets = inferMarketsFromLocations(next.markets, next.allow);
   return next;
@@ -177,6 +186,7 @@ export function parseExplorePatch(
 /** URL <-> filters codec (so a search is shareable/restorable). */
 export function filtersToParams(f: ExploreFilters): string {
   const sp = new URLSearchParams();
+  if (f.opportunityType === "freelance") sp.set("opportunity", "freelance");
   if (f.positive.length) sp.set("q", f.positive.join(","));
   if (f.negative.length) sp.set("not", f.negative.join(","));
   if (f.allow.length) sp.set("loc", f.allow.join(","));
@@ -205,6 +215,7 @@ export function paramsToFilters(sp: URLSearchParams, base: ExploreFilters = DEFA
       since: sp.get("since") ?? undefined,
       ats: sp.has("ats") ? (split(sp.get("ats")) ?? []) : undefined,
       markets: sp.has("markets") ? decodeMarkets(sp.get("markets")) : undefined,
+      opportunityType: sp.get("opportunity") ?? undefined,
       limit: sp.get("limit") ?? undefined,
     },
     base,

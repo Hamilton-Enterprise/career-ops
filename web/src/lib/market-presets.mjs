@@ -1,6 +1,7 @@
 import { cleanChips } from "./clean-chips.mjs";
 
 /** @typedef {"portugal" | "spain" | "united-kingdom" | "switzerland" | "luxembourg" | "netherlands" | "europe" | "remote"} MarketId */
+/** @typedef {"employment" | "freelance"} OpportunityType */
 /** @type {MarketId[]} */
 export const MARKET_IDS = ["portugal", "spain", "united-kingdom", "switzerland", "luxembourg", "netherlands", "europe", "remote"];
 
@@ -36,10 +37,31 @@ const REMOTE_BOARDS = [
 
 /** The caller supplies positive terms, or profile terms when positives are empty.
  *  This pure planner never invents a search query or reads the user's files.
- *  @param {unknown} selected @param {unknown} terms */
-export function buildMarketPlan(selected, terms) {
+ *  @param {unknown} selected @param {unknown} terms @param {unknown} opportunityType */
+export function buildMarketPlan(selected, terms, opportunityType = "employment") {
   const markets = cleanMarkets(selected);
   const queries = cleanChips(terms);
+  const type = opportunityType === "freelance" ? "freelance" : "employment";
+  if (type === "freelance") {
+    const countries = new Set();
+    let remote = false;
+    for (const market of markets) {
+      if (market === "europe") for (const code of EUROPE_CODES) countries.add(code);
+      else if (market === "remote") remote = true;
+      else for (const code of COUNTRY_CODES[market] ?? []) countries.add(code);
+    }
+    const geography = [...countries].map(code => `offices.country_code:${code}`);
+    if (remote) geography.push("remote:fulltime");
+    const geographicFilter = geography.length > 1 ? `(${geography.join(" OR ")})` : geography[0];
+    const filters = ["contract_type:freelance", geographicFilter].filter(Boolean).join(" AND ");
+    return {
+      opportunityType: type,
+      markets,
+      jobBoards: [{ name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: { queries, filters } }],
+      locationPolicy: { markets, strict: markets.length > 0 },
+      skippedSources: [],
+    };
+  }
   /** @type {Map<string, MarketBoard>} */
   const boards = new Map();
   const wttjCountries = new Set();
@@ -70,7 +92,7 @@ export function buildMarketPlan(selected, terms) {
     } });
     else skippedSources.push({ source: "wttj", reason: "missing-search-terms" });
   }
-  return { markets, jobBoards: [...boards.values()], locationPolicy: { markets, strict: markets.length > 0 }, skippedSources };
+  return { opportunityType: type, markets, jobBoards: [...boards.values()], locationPolicy: { markets, strict: markets.length > 0 }, skippedSources };
 }
 
 function normalized(value) {

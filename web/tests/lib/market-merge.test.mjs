@@ -24,6 +24,13 @@ test("receipt normalizes date and salary, counts and rejects missing location", 
   assert.deepEqual(run.offers[0].salary, { min: 42000, currency: "EUR" });
 });
 
+test("freelance market receipts mark every accepted opportunity", () => {
+  const plan = buildMarketPlan(["portugal"], ["designer"], "freelance");
+  const run = parseMarketReceipt(receipt([offer]), 0, plan);
+  assert.equal(run.offers.length, 1);
+  assert.equal(run.offers[0].opportunityType, "freelance");
+});
+
 test("exit 2 preserves valid offers and source errors", () => {
   const run = parseMarketReceipt(receipt([offer], [{ company: "getManfred (EN)", error: "timeout" }]), 2, buildMarketPlan(["portugal", "spain"], []));
   assert.equal(run.valid, true);

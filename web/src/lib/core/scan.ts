@@ -427,8 +427,8 @@ async function runAtsDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) 
 }
 
 export async function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) => void): Promise<DiscoveredOffer[]> {
-  const ats = filters.ats.filter(a => ATS_SOURCES.includes(a));
-  const plan = buildMarketPlan(filters.markets, []);
+  const ats = filters.opportunityType === "freelance" ? [] : filters.ats.filter(a => ATS_SOURCES.includes(a));
+  const plan = buildMarketPlan(filters.markets, [], filters.opportunityType);
   type Summary = Extract<ScanEvent, { kind: "summary" }>;
   let atsSummary: Summary | undefined;
   const atsErrors: string[] = [];
@@ -452,9 +452,9 @@ export async function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEve
   // Both selected paths start before either is awaited. A single selected path
   // runs alone, so an unavailable sibling scanner cannot affect that search.
   const atsPromise = ats.length ? discoverAts() : null;
-  const marketPromise = filters.markets.length ? runMarketDiscovery(filters, onEvent).catch(error => ({
+  const marketPromise = (filters.opportunityType === "freelance" || filters.markets.length) ? runMarketDiscovery(filters, onEvent).catch(error => ({
     offers: [] as DiscoveredOffer[], valid: false, status: "failed" as const, missingLocation: 0, scanned: 0,
-    sources: filters.markets.map(source => ({ source, state: "error" as const, message: error instanceof Error ? error.message : NO_OUTPUT })),
+    sources: plan.jobBoards.map(board => ({ source: board.name, state: "error" as const, message: error instanceof Error ? error.message : NO_OUTPUT })),
   })) : null;
   const atsOffers = atsPromise ? await atsPromise : [];
   const marketRun = marketPromise ? await marketPromise : null;

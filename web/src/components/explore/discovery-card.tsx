@@ -57,6 +57,7 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
   const isAdded = added.has(offer.url) || inPipeline || working || doneEval;
   const isAdding = adding.has(offer.url);
   const unverified = offer.verification === "unconfirmed";
+  const freelance = offer.opportunityType === "freelance";
   const fresh = freshness(offer.postedAt) || "Data não indicada";
   const provenance = offerProvenance(offer);
 
@@ -90,16 +91,19 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
 
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
         <span className="text-muted">{fresh}</span>
+        {freelance && (
+          <span className="rounded border border-brand/25 bg-brand-soft px-1.5 py-0.5 font-medium text-brand">Freelance</span>
+        )}
         {unverified && (
           <span
             className="inline-flex items-center gap-1 rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-600 dark:text-amber-300"
-            title="Encontrada na web pública. A avaliação abre a página para confirmar se a oferta continua disponível."
+            title={freelance ? "Encontrada na web pública. Abre a página para confirmar se a oportunidade continua disponível." : "Encontrada na web pública. A avaliação abre a página para confirmar se a oferta continua disponível."}
           >
             <ShieldQuestion className="size-3" /> por confirmar
           </span>
         )}
         {offer.matchedKeyword && (
-          <span className="text-faint" title="Correspondência por palavra-chave. Ainda não foi avaliada de A a F.">
+          <span className="text-faint" title={freelance ? "Correspondência por palavra-chave no título." : "Correspondência por palavra-chave. Ainda não foi avaliada de A a F."}>
             · corresponde a <span className="text-brand/80">{offer.matchedKeyword}</span>
           </span>
         )}
@@ -111,7 +115,7 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
                 ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
                 : "text-faint",
             )}
-            title="Estimativa por palavras-chave entre o título e as funções do perfil. A avaliação de A a F é feita separadamente."
+            title={freelance ? "Estimativa por palavras-chave entre o título e as funções do perfil." : "Estimativa por palavras-chave entre o título e as funções do perfil. A avaliação de A a F é feita separadamente."}
           >
             · correspondência {FIT_LABEL[offer.fit.band]}
           </span>
@@ -126,7 +130,20 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
       )}
 
       <div className="mt-0.5">
-        {evaluatedN || doneEval ? (
+        {freelance ? (
+          <button
+            type="button"
+            disabled={isAdded || isAdding}
+            onClick={() => addToPipeline([offer])}
+            className={cn(
+              "inline-flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-2 text-xs font-medium transition-colors max-sm:min-h-[44px]",
+              isAdded ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-surface-hover text-foreground hover:bg-brand-soft hover:text-brand",
+            )}
+          >
+            {isAdding ? <Loader2 className="size-3.5 animate-spin" /> : isAdded ? <Check className="size-3.5" /> : <Plus className="size-3.5" />}
+            {isAdded ? "Oportunidade guardada" : "Guardar oportunidade"}
+          </button>
+        ) : evaluatedN || doneEval ? (
           <a
             href={evaluatedN ? `/pipeline/${evaluatedN}` : job ? `/jobs/${job.id}` : "/pipeline"}
             className="inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-brand-soft px-2.5 py-2 text-xs font-medium text-brand max-sm:min-h-[44px]"

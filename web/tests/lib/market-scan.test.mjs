@@ -85,6 +85,22 @@ test("market-only route retains its selection and terminal NDJSON receipt", asyn
   assert.ok(events.some(e => e.kind === "sourceError" && e.source === "wttj"));
 });
 
+test("the API enforces freelance as WTTJ-only even when employment ATS are requested", async t => {
+  const root = await sandbox(t, `import fs from 'node:fs'; fs.writeFileSync('market-ran', fs.readFileSync(process.env.CAREER_OPS_PORTALS)); console.log(${JSON.stringify(JSON.stringify(receipt))});`);
+  fs.writeFileSync(path.join(root, "scan-ats-full.mjs"), "import fs from 'node:fs'; fs.writeFileSync('ats-ran', 'yes');");
+  const { POST } = await import("@/app/api/explore/route");
+  const response = await POST(new Request("http://localhost/api/explore", {
+    method: "POST",
+    body: JSON.stringify({ ...filters, opportunityType: "freelance", ats: ["greenhouse", "lever"], markets: [] }),
+  }));
+  assert.equal(response.status, 200);
+  const events = (await response.text()).trim().split("\n").map(JSON.parse);
+  assert.deepEqual(events[0].ats, []);
+  assert.equal(fs.existsSync(path.join(root, "ats-ran")), false);
+  assert.match(fs.readFileSync(path.join(root, "market-ran"), "utf8"), /contract_type:freelance/);
+  assert.equal(events.at(-1).offers[0].opportunityType, "freelance");
+});
+
 test("runner counts missing locations and rejects present locations outside its market", async t => {
   const payload = { ...receipt, offers: [{ ...receipt.offers[0], location: "" }, { ...receipt.offers[0], url: "https://acme.com/43", location: "Madrid, Spain" }] };
   await sandbox(t, `console.log(${JSON.stringify(JSON.stringify(payload))});`);

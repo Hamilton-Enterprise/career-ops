@@ -78,7 +78,8 @@ export function parseMarketReceipt(output, exitCode, plan, timedOut = false) {
     if (date && Number.isFinite(date.getTime())) postedAt = date.toISOString().slice(0, 10);
     const source = scalar(raw.source);
     const offer = { url, company: scalar(raw.company), title: scalar(raw.title), location: scalar(raw.location), postedAt,
-      ats: source, source, sources: source ? [source] : [], verification: /** @type {'unconfirmed'} */ ('unconfirmed') };
+      ats: source, source, sources: source ? [source] : [], verification: /** @type {'unconfirmed'} */ ('unconfirmed'),
+      ...(plan.opportunityType === "freelance" ? { opportunityType: /** @type {'freelance'} */ ("freelance") } : {}) };
     const salary = raw.salary;
     if (salary && typeof salary === "object") {
       const clean = {};
