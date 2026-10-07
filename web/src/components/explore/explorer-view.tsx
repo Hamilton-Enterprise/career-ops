@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 import { instrumentSerif } from "@/lib/fonts";
 import type { Application, InboxJob } from "@/lib/career-ops";
 import { normalizeTextKey } from "@/lib/core/normalize-text-key.mjs";
-import { paramsToFilters, paramsToAi, type ExploreFilters } from "@/lib/explore";
+import { paramsToFilters, paramsToAi, filtersToAssistedIntent, type ExploreFilters } from "@/lib/explore";
 import { FilterBuilder } from "./filter-builder";
 import { DiscoveringState } from "./discovering-state";
 import { AiHuntView } from "./ai-hunt-view";
@@ -118,6 +118,10 @@ export function ExplorerView({
   // Keep one ResultsList mounted across scanning → revealing → results so
   // filter/sort/scroll and co-rise survive the 850ms reveal handoff.
   const showScanList = !isAi && offers.length > 0 && (scanRunning || isResults);
+  const prepareAssisted = () => {
+    setAiIntent(filtersToAssistedIntent(filters));
+    setMode("ai");
+  };
 
   if (running && isAi) return <AiHuntView cliName={cli.name} />;
 
@@ -239,6 +243,7 @@ export function ExplorerView({
                 void discover();
               }}
               rerunLabel="Pesquisar nos últimos 30 dias"
+              onPrepareAssisted={prepareAssisted}
             />
           )}
           {phase === "empty-loose" && (
@@ -252,6 +257,7 @@ export function ExplorerView({
                 void discover();
               }}
               rerunLabel="Pesquisar 30 dias · limpar localização"
+              onPrepareAssisted={prepareAssisted}
             />
           )}
           {phase === "degraded" && (
@@ -292,7 +298,7 @@ function DiscoverBar({ canDiscover, onDiscover, label, filters }: { canDiscover:
   );
 }
 
-function EmptyState({ tone, title, body, note, onRerun, rerunLabel }: { tone: "good" | "loose"; title: string; body: string; note?: string; onRerun: () => void; rerunLabel: string }) {
+function EmptyState({ tone, title, body, note, onRerun, rerunLabel, onPrepareAssisted }: { tone: "good" | "loose"; title: string; body: string; note?: string; onRerun: () => void; rerunLabel: string; onPrepareAssisted?: () => void }) {
   return (
     <div className="rounded-xl border border-border bg-surface/30 px-6 py-12 text-center">
       <h2 className={`${instrumentSerif.className} text-2xl text-foreground`}>{title}</h2>
@@ -301,6 +307,13 @@ function EmptyState({ tone, title, body, note, onRerun, rerunLabel }: { tone: "g
       <button onClick={onRerun} className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface/50 px-3.5 py-2 text-sm font-medium text-foreground transition-colors hover:border-brand/40 hover:text-brand">
         <RotateCcw className="size-4" /> {rerunLabel}
       </button>
+      {onPrepareAssisted && (
+        <div className="mt-2">
+          <button type="button" onClick={onPrepareAssisted} className="min-h-11 px-3.5 text-sm font-medium text-brand hover:underline">
+            Preparar pesquisa assistida
+          </button>
+        </div>
+      )}
     </div>
   );
 }

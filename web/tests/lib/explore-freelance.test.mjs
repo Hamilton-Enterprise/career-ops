@@ -12,6 +12,39 @@ const employment = {
 };
 const listFields = ["positive", "negative", "allow", "block", "blockHard", "alwaysAllow", "ats", "markets"];
 
+test("assisted intent preserves the present employment criteria in PT-PT", () => {
+  assert.equal(typeof explore.filtersToAssistedIntent, "function");
+  const before = structuredClone(employment);
+  const intent = explore.filtersToAssistedIntent(employment);
+  for (const clause of [
+    "ofertas de emprego", "Funções: Farmácia, iOS", "Excluir funções: sales",
+    "Localizações: Lisboa", "Excluir localizações: India", "Excluir sempre localizações: Brazil",
+    "Permitir sempre localizações: Porto", "Mercados: Portugal", "últimos 30 dias",
+  ]) assert.ok(intent.includes(clause), clause);
+  assert.doesNotMatch(intent, /salário|senioridade|remoto|Lever|300/i);
+  assert.deepEqual(employment, before);
+});
+
+test("assisted intent uses only the active freelance criteria and market labels", () => {
+  assert.equal(typeof explore.filtersToAssistedIntent, "function");
+  const intent = explore.filtersToAssistedIntent({
+    ...DEFAULT_FILTERS, opportunityType: "freelance", positive: ["Flutter", "LLM"], negative: ["estágio"],
+    markets: ["united-kingdom", "remote"], sinceDays: 14,
+  });
+  for (const clause of ["oportunidades freelance", "Funções: Flutter, LLM", "Excluir funções: estágio", "Mercados: Reino Unido, Remoto", "últimos 14 dias"])
+    assert.ok(intent.includes(clause), clause);
+  assert.doesNotMatch(intent, /emprego|Farmácia|Lisboa|Portugal|Localizações|salário|senioridade|greenhouse/i);
+});
+
+test("assisted intent leaves empty filters free of invented criteria", () => {
+  assert.equal(typeof explore.filtersToAssistedIntent, "function");
+  const intent = explore.filtersToAssistedIntent({ ...DEFAULT_FILTERS, opportunityType: "freelance" });
+  assert.equal(intent, "Procura oportunidades freelance. Publicadas nos últimos 7 dias.");
+  assert.doesNotMatch(intent, /salário|senioridade|remoto|Portugal|país|Funções|Excluir|Localizações|Mercados/i);
+  assert.equal(explore.filtersToAssistedIntent({ ...DEFAULT_FILTERS, sinceDays: 1 }), "Procura ofertas de emprego. Publicadas no último dia.");
+  assert.equal(explore.filtersToAssistedIntent({ ...DEFAULT_FILTERS, sinceDays: 0 }), "Procura ofertas de emprego.");
+});
+
 test("first freelance snapshot is global and empty without mutating the employment seed", () => {
   const before = JSON.stringify(employment);
   const snapshots = explore.createOpportunitySnapshots(employment);

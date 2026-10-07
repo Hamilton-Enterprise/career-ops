@@ -5,6 +5,7 @@
 // writing temp files) lives in lib/core/{scan,portals,pipeline}.ts.
 
 import { cleanMarkets, encodeMarkets, decodeMarkets, inferMarketsFromLocations } from "./market-presets.mjs";
+import { MARKET_LABEL } from "./explore-state.mjs";
 export type MarketId = "portugal" | "spain" | "united-kingdom" | "switzerland" | "luxembourg" | "netherlands" | "europe" | "remote";
 export { MARKET_IDS } from "./market-presets.mjs";
 
@@ -209,6 +210,25 @@ export function parseExplorePatch(
   if (raw.markets !== undefined) next.markets = cleanMarkets(merge ? [...next.markets, ...cleanMarkets(raw.markets)] : raw.markets);
   else if (raw.allow !== undefined) next.markets = inferMarketsFromLocations(next.markets, next.allow);
   return next;
+}
+
+/** Prepare an editable intent from the active filters; no discovery is started. */
+export function filtersToAssistedIntent(f: ExploreFilters): string {
+  const clauses = [f.opportunityType === "freelance" ? "Procura oportunidades freelance." : "Procura ofertas de emprego."];
+  const lists: [string, string[]][] = [
+    ["Funções", f.positive],
+    ["Excluir funções", f.negative],
+    ["Localizações", f.allow],
+    ["Excluir localizações", f.block],
+    ["Excluir sempre localizações", f.blockHard],
+    ["Permitir sempre localizações", f.alwaysAllow],
+    ["Mercados", f.markets.map((market) => MARKET_LABEL[market])],
+  ];
+  for (const [label, values] of lists) {
+    if (values.length) clauses.push(`${label}: ${values.join(", ")}.`);
+  }
+  if (f.sinceDays > 0) clauses.push(f.sinceDays === 1 ? "Publicadas no último dia." : `Publicadas nos últimos ${f.sinceDays} dias.`);
+  return clauses.join(" ");
 }
 
 /** URL <-> filters codec (so a search is shareable/restorable). */
