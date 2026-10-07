@@ -1,6 +1,6 @@
 # Career Ops: separação das pesquisas e matriz de agentes
 
-**Estado:** desenho aprovado em conversa; aguarda revisão deste documento antes do plano de implementação
+**Estado:** desenho e documento aprovados; plano de implementação preparado para revisão
 **Data:** 2026-10-07
 
 ## Objetivo
