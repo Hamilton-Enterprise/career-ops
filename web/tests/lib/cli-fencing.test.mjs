@@ -79,6 +79,11 @@ test("Cursor Ask mode is verified as read-only", () => {
 
 const geminiArgv = (prompt = "PROMPT") => ["-p", prompt, "--approval-mode", "plan", "--skip-trust", "--output-format", "text"];
 
+test("Gemini rejects a separate boolean value that disables skip-trust", () => {
+  const args = ["-p", "PROMPT", "--approval-mode", "plan", "--skip-trust", "false", "--output-format", "text"];
+  assert.throws(() => fenceArgs({ cliId: "gemini", args, capabilities: CAPS.webSearchOnly }), /Gemini/);
+});
+
 test("Gemini web search verifies headless plan mode without altering the prompt", () => {
   const original = geminiArgv("query mentioning --yolo and --approval-mode auto_edit");
   assert.deepEqual(fenceArgs({ cliId: "gemini", args: original, capabilities: CAPS.webSearchOnly }).args, original);

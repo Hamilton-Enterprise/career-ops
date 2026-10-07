@@ -334,23 +334,27 @@ function verifyGeminiArgs(args, capabilities) {
   if (capabilities.writes !== false || capabilities.network !== "search") {
     throw new Error("cli-fencing: Gemini is verified only for non-writing web search.");
   }
-  const prompt = args.indexOf("-p");
-  // Prompt text is data, including when it happens to name a permission flag.
-  const options = args.filter((_, index) => index !== prompt + 1);
-  const approvals = options.filter((arg) => arg.split("=")[0] === "--approval-mode");
-  const mode = options.indexOf("--approval-mode");
-  if (
-    prompt === -1 || !args[prompt + 1] || args[prompt + 1].startsWith("-") ||
-    options.filter((arg) => arg === "-p").length !== 1 ||
-    approvals.length !== 1 || mode === -1 || options[mode + 1] !== "plan" ||
-    options.filter((arg) => arg === "--skip-trust").length !== 1
-  ) {
-    throw new Error("cli-fencing: Gemini web search requires headless plan mode and --skip-trust.");
+  const seen = new Set();
+  // Consume the complete verified grammar. A bare flag check misses positional
+  // boolean values such as --skip-trust false and parser overrides/aliases.
+  for (let i = 0; i < args.length; i++) {
+    const option = args[i];
+    if (seen.has(option) || !["-p", "--approval-mode", "--skip-trust", "--output-format"].includes(option)) {
+      throw new Error("cli-fencing: Gemini plan mode cannot carry unverified or write-enabling arguments.");
+    }
+    seen.add(option);
+    if (option === "--skip-trust") continue;
+    const value = args[++i];
+    if (
+      (option === "-p" && (!value || value.startsWith("-"))) ||
+      (option === "--approval-mode" && value !== "plan") ||
+      (option === "--output-format" && value !== "text")
+    ) {
+      throw new Error("cli-fencing: Gemini web search requires a prompt, plan mode and text output.");
+    }
   }
-  // Only this route's verified switches are accepted: aliases, duplicates and
-  // option terminators must not silently override plan mode or workspace trust.
-  if (options.some((arg) => arg.startsWith("-") && !["-p", "--approval-mode", "--skip-trust", "--output-format"].includes(arg))) {
-    throw new Error("cli-fencing: Gemini plan mode cannot carry unverified or write-enabling flags.");
+  if (!["-p", "--approval-mode", "--skip-trust"].every((option) => seen.has(option))) {
+    throw new Error("cli-fencing: Gemini web search requires headless plan mode and --skip-trust.");
   }
   return args;
 }

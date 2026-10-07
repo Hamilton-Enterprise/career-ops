@@ -9,6 +9,7 @@ import { CAPS } from "@/lib/worker-capabilities.mjs";
 import { scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
 import { codexFencingSupported } from "@/lib/cli-fencing-probe.mjs";
+import { canon, makeAiStreamParser } from "@/lib/explore-ai";
 import { buildAiSearchPrompt } from "./prompt";
 
 // Deny list DERIVED, never hand-written: every one of the six advisor argvs
@@ -48,6 +49,13 @@ export async function POST(req: Request) {
   // are all keyed on it.
   const cliId = spec.id;
   const substitution = cliSubstitutionNotice(resolved);
+  const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: CAPS.webSearchOnly });
+  if (fencing.level !== "full") {
+    return Response.json(
+      { code: "CLI_UNFENCED", error: `A pesquisa com IA não dispõe de isolamento só de leitura verificado para ${spec.name}. Escolhe um agente com suporte certificado.` },
+      { status: 400 },
+    );
+  }
 
   // Read the CANONICAL mode at request time — single source of truth, never a
   // homegrown prompt. Missing (older core) → graceful 400 so the Scan tab stays usable.
@@ -110,6 +118,9 @@ export async function POST(req: Request) {
         // non-writing worker: without it a user MCP server could supply a write tool
         // the capability record forbids, and cli-fencing refuses to certify that (#2507).
         "--strict-mcp-config",
+        // Per-session settings override user/project hooks without replacing HOME.
+        "--settings",
+        '{"disableAllHooks":true}',
         "--allowedTools",
         ADVISOR_SCOPE.allowed,
         "--disallowedTools",
@@ -242,6 +253,8 @@ export async function POST(req: Request) {
     start(controller) {
       let buf = "";
       let emitted = false;
+      let usable = false;
+      const resultParser = makeAiStreamParser();
       let codexStderr = "";
       killer = setTimeout(() => {
         terminateChild();
@@ -271,16 +284,11 @@ export async function POST(req: Request) {
         }
       };
       const emit = (s: string) => {
-        if (safeEnqueue(s) && s.trim()) emitted = true;
+        if (!safeEnqueue(s)) return;
+        if (s.trim()) emitted = true;
+        // Narration and partial/malformed envelopes are not completed results.
+        usable ||= resultParser.feed(s).some((chunk) => chunk.kind === "offer" && chunk.offer.title && chunk.offer.company && canon(chunk.offer.url));
       };
-      // Same honesty as /api/run: a runtime with no verified fencing mechanism
-      // runs with its default access, and that must be visible rather than
-      // inferred from which CLI happens to be selected (#2507). This stream is
-      // plain text, so the notice is a leading line rather than an event.
-      const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: CAPS.webSearchOnly });
-      if (fencing.notice) safeEnqueue(`⚠️ ${fencing.notice}
-
-`);
       if (substitution) safeEnqueue(`⚠️ ${substitution}\n\n`);
 
       child.stdout.on("data", (d: Buffer) => {
@@ -351,7 +359,8 @@ export async function POST(req: Request) {
 
           if (finalText) {
             emit(finalText);
-          } else if (code !== 0) {
+          }
+          if (code !== 0 && !usable) {
             const diagnosticText = codexStderr.trim();
             const diagnosticsCaptured = diagnosticText.length > 0;
 
@@ -393,7 +402,7 @@ export async function POST(req: Request) {
           return;
         }
 
-        if (code !== 0 && !emitted) safeEnqueue(`\n[${spec.name} terminou com o código ${code ?? "desconhecido"}]\n`);
+        if (code !== 0 && !usable) safeEnqueue(`\n[${spec.name} terminou com o código ${code ?? "desconhecido"}]\n`);
         else if (!emitted) safeEnqueue("_(o agente não devolveu conteúdo; confirma se tem sessão iniciada)_");
         cleanupChildCwd();
         safeClose();

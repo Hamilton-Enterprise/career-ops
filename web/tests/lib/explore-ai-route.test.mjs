@@ -28,6 +28,10 @@ const agents = [
   { id: "gemini", bin: "gemini", name: "Gemini CLI" },
   { id: "cursor", bin: "agent", name: "Cursor Agent" },
 ];
+const unsupportedAgents = [
+  { id: "opencode", bin: "opencode", name: "OpenCode" },
+  { id: "qwen", bin: "qwen", name: "Qwen CLI" },
+];
 const offer = { url: "https://example.test/jobs/42", title: "Designer", company: "Synthetic", location: "Lisboa", source: "ai-search", verification: "unconfirmed" };
 const envelope = `<<offer:${JSON.stringify(offer)}>>`;
 
@@ -42,7 +46,7 @@ function fixture(t, behavior = "success") {
   const recordFile = path.join(root, "invocations.jsonl");
   // Real OS processes exercise the real resolver, probe, fencer, stream and
   // cleanup. Only the external model binaries are replaced.
-  for (const { id, bin } of agents) {
+  for (const { id, bin } of [...agents, ...unsupportedAgents]) {
     const script = `#!${process.execPath}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
@@ -64,14 +68,14 @@ if (behavior === "hang" || behavior === "ignore-term") {
   if (behavior === "whitespace-failure") process.stdout.write("   ");
   process.exitCode = 7;
 } else {
-  const text = ${JSON.stringify(envelope)};
+  const text = behavior === "partial-failure" ? 'Searching... <<offer:{"url":"https://example.test/jobs/42"' : behavior === "invalid-failure" ? '<<offer:{"url":"not-a-url","title":"Designer","company":"Synthetic"}>>' : ${JSON.stringify(envelope)};
   if (${JSON.stringify(id)} === "codex") {
     fs.writeFileSync(args[args.indexOf("--output-last-message") + 1], text);
     process.stdout.write("PRIVATE_CODEX_TRANSCRIPT");
   } else if (${JSON.stringify(id)} === "claude") {
     process.stdout.write(JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { text } } }) + "\\n");
   } else process.stdout.write(text);
-  if (behavior === "success-nonzero") process.exitCode = 7;
+  if (["success-nonzero", "partial-failure", "invalid-failure"].includes(behavior)) process.exitCode = 7;
 }
 `;
     fs.writeFileSync(path.join(bins, bin), script, { mode: 0o755 });
@@ -244,3 +248,47 @@ test("Gemini: a usable result survives a non-zero exit without a duplicate diagn
   assert.match(text, /<<offer:/);
   assert.doesNotMatch(text, /(?:code|código) 7|SECRET_FROM_STDERR/);
 });
+
+test("Claude: invocation disables user hooks without replacing authenticated HOME", async (t) => {
+  const f = fixture(t);
+  const response = await invoke("claude");
+  assert.equal(response.status, 200);
+  await response.text();
+  const [record] = f.records();
+  const settingsIndex = record.args.indexOf("--settings");
+  assert.notEqual(settingsIndex, -1, "user hooks need an explicit per-invocation override");
+  assert.equal(JSON.parse(record.args[settingsIndex + 1]).disableAllHooks, true);
+  assert.equal(record.home, process.env.HOME);
+  assertPreserved(f);
+});
+
+for (const { id, name } of agents) {
+  for (const behavior of ["partial-failure", "invalid-failure"]) {
+    test(`${id}: ${behavior} cannot hide a non-zero diagnostic`, async (t) => {
+      const f = fixture(t, behavior);
+      const response = await invoke(id);
+      assert.equal(response.status, 200);
+      const text = await response.text();
+      assert.ok(text.includes(name));
+      assert.match(text, /(?:code|código) 7/);
+      assert.doesNotMatch(text, /SECRET_FROM_STDERR|PRIVATE_PROMPT|PRIVATE_CODEX_TRANSCRIPT/);
+      assert.equal(fs.existsSync(f.records()[0].cwd), false);
+      assertPreserved(f);
+    });
+  }
+}
+
+for (const { id, name } of unsupportedAgents) {
+  test(`${id}: assisted search rejects an uncertified runtime before creating a workspace or spawning`, async (t) => {
+    const f = fixture(t);
+    const mkdtemp = t.mock.method(fs, "mkdtempSync", () => assert.fail("uncertified runtime must not create a workspace"));
+    const response = await invoke(id);
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.equal(body.code, "CLI_UNFENCED");
+    assert.ok(body.error.includes(name));
+    assert.equal(mkdtemp.mock.callCount(), 0);
+    assert.deepEqual(f.records(), []);
+    assertPreserved(f);
+  });
+}
