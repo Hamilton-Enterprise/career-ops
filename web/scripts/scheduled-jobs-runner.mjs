@@ -175,12 +175,13 @@ function writeJobPortals(root, job, marketOnly = false) {
   const fallbackPositive = Array.isArray(base.title_filter?.positive)
     ? base.title_filter.positive.filter((value) => typeof value === "string" && value.trim())
     : [];
+  const searchTerms = positive.length ? positive : filters.opportunityType === "freelance" ? [] : fallbackPositive;
   if (filters.opportunityType !== "freelance" && !positive.length && !fallbackPositive.length) {
     throw new Error("Scheduled scans require title keywords in the job or portals.yml title_filter.positive.");
   }
   base.title_filter = {
     ...(base.title_filter || {}),
-    positive: positive.length ? positive : fallbackPositive,
+    positive: searchTerms,
     negative: Array.isArray(filters.negative) ? filters.negative : [],
   };
   if (base.title_filter_full) base.title_filter_full = { ...base.title_filter_full, ...base.title_filter };
@@ -192,14 +193,14 @@ function writeJobPortals(root, job, marketOnly = false) {
     always_allow: Array.isArray(filters.alwaysAllow) ? filters.alwaysAllow : [],
   };
 
-  const plan = buildMarketPlan(filters.markets, positive.length ? positive : fallbackPositive, filters.opportunityType);
+  const plan = buildMarketPlan(filters.markets, searchTerms, filters.opportunityType);
 
   const tempDir = path.join(root, "data", "tmp");
   fs.mkdirSync(tempDir, { recursive: true });
   const tempPath = path.join(tempDir, `scheduled-${job.id}-${randomUUID()}.yml`);
   if (marketOnly) {
     fs.writeFileSync(tempPath, serializePortals({
-      positive: positive.length ? positive : fallbackPositive,
+      positive: searchTerms,
       negative: list(filters.negative),
       allow: list(filters.allow),
       block: list(filters.block),

@@ -167,6 +167,38 @@ test("saved freelance searches can use the contract filter without inventing key
   }
 });
 
+test("empty saved freelance ignores employment roles from portals.yml", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-empty-freelance-"));
+  fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [engineer]\ncompanies:\n  - name: Existing\n    careers_url: https://boards.greenhouse.io/existing\n", "utf8");
+  try {
+    const scripts = [];
+    let overlay;
+    const result = executeJob(temp, {
+      id: "11111111-1111-4111-8111-111111111111",
+      engine: "full",
+      filters: { opportunityType: "freelance", ats: ["greenhouse"], markets: [], positive: [] },
+    }, {
+      spawnFn: (_node, [script], options) => {
+        scripts.push(script);
+        overlay = yaml.load(fs.readFileSync(options.env.CAREER_OPS_PORTALS, "utf8"));
+        return { status: 0, stdout: JSON.stringify({
+          version: "careerops.scan.receipt@1", dry_run: true, scanned: 1, skipped: 0, offers: [], errors: [],
+        }), stderr: "" };
+      },
+    });
+    assert.equal(result.state, "success");
+    assert.deepEqual(overlay.job_boards[0].wttj.queries, []);
+    assert.deepEqual(overlay.title_filter?.positive ?? [], []);
+    assert.deepEqual(scripts, ["scan.mjs"]);
+    assert.equal(overlay.companies, undefined);
+    assert.deepEqual(overlay.job_boards.map(board => board.provider), ["wttj"]);
+    assert.equal(overlay.job_boards[0].wttj.filters, "contract_type:freelance");
+    assert.equal(overlay.location_filter, undefined);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test("combined saved searches execute both ATS and market sources with a market-only overlay", () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-market-"));
   fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [engineer]\ncompanies:\n  - name: Existing\n    careers_url: https://example.com/jobs\n", "utf8");

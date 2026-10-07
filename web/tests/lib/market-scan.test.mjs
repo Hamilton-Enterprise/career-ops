@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import * as yaml from "js-yaml";
 import "../helpers/web-ts-alias-loader.mjs";
 
 const { runMarketDiscovery } = await import("@/lib/core/market-scan");
@@ -154,6 +155,14 @@ test("profile targeting seeds query providers without changing explicit title fi
   const config = fs.readFileSync(path.join(root, "portals-copy"), "utf8");
   assert.match(config, /Data Engineer/);
   assert.doesNotMatch(config, /title_filter:/);
+});
+
+test("empty freelance discovery ignores non-empty profile targets", async t => {
+  const root = await sandbox(t, `import fs from 'node:fs'; fs.writeFileSync('portals-copy', fs.readFileSync(process.env.CAREER_OPS_PORTALS)); console.log(${JSON.stringify(JSON.stringify(receipt))});`, "target_roles:\n  primary:\n    - Data Engineer\n");
+  await runMarketDiscovery({ ...filters, opportunityType: "freelance", markets: [] }, () => {});
+  const config = fs.readFileSync(path.join(root, "portals-copy"), "utf8");
+  assert.deepEqual(yaml.load(config).job_boards[0].wttj.queries, []);
+  assert.doesNotMatch(config, /Data Engineer/);
 });
 
 test("new country selection writes one WTTJ board with its specific country filter", async t => {
