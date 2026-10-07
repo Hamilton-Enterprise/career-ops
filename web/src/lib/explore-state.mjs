@@ -3,7 +3,7 @@ import { buildMarketPlan, classifyMarketLocation } from './market-presets.mjs';
 /** @typedef {{state: 'queued'|'active'|'ok'|'partial'|'error'|'skipped', companies?:number, done?:number, total?:number, matches?:number, unreachable?:number, message?:string}} DiscoverySourceState */
 /** @typedef {Record<string, DiscoverySourceState>} DiscoverySources */
 
-export const MARKET_LABEL = { portugal: 'Portugal', spain: 'Espanha', europe: 'Europa', remote: 'Remoto' };
+export const MARKET_LABEL = { portugal: 'Portugal', spain: 'Espanha', 'united-kingdom': 'Reino Unido', switzerland: 'Suíça', luxembourg: 'Luxemburgo', netherlands: 'Países Baixos', europe: 'Europa', remote: 'Remoto' };
 export const SOURCE_STATE_LABEL = { queued: 'Por iniciar', active: 'A pesquisar', ok: 'Concluída', partial: 'Parcial', error: 'Falhou', skipped: 'Não consultada' };
 const SOURCE_LABEL = {
   greenhouse: 'Greenhouse', lever: 'Lever', ashby: 'Ashby', workday: 'Workday',

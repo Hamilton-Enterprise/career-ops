@@ -59,7 +59,7 @@ test("timeout and unexplained nonzero exits retain valid offers and mark sources
     assert.equal(run.offers.length, 1);
     assert.equal(run.valid, true);
     assert.equal(run.status, "partial");
-    assert.deepEqual(run.sources.map(s => s.state), ["error"]);
+    assert.deepEqual(run.sources.map(s => s.state), ["error", "skipped"]);
     assert.ok(run.sources[0].message);
   }
 });
@@ -70,7 +70,17 @@ test("an empty receipt with only skipped providers is not a healthy empty search
   assert.equal(run.offers.length, 0);
   assert.equal(run.valid, false);
   assert.equal(run.status, "failed");
-  assert.deepEqual(run.sources.map(s => s.state), ["skipped"]);
+  assert.deepEqual(run.sources.map(s => s.state), ["skipped", "skipped"]);
+});
+
+test("new country markets retain only matching offers in the scanner receipt", () => {
+  const offers = [
+    { ...offer, location: "Geneva, Switzerland" },
+    { ...offer, url: `${offer.url}/wrong`, location: "Geneva, Belgium" },
+  ];
+  const run = parseMarketReceipt(receipt(offers), 0, buildMarketPlan(["switzerland"], []));
+  assert.equal(run.offers.length, 1);
+  assert.equal(run.offers[0].location, "Geneva, Switzerland");
 });
 
 test("mixed skipped providers never certify unidentified sources as complete", () => {

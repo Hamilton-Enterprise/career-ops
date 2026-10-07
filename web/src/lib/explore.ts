@@ -5,7 +5,7 @@
 // writing temp files) lives in lib/core/{scan,portals,pipeline}.ts.
 
 import { cleanMarkets, encodeMarkets, decodeMarkets } from "./market-presets.mjs";
-export type MarketId = "portugal" | "spain" | "europe" | "remote";
+export type MarketId = "portugal" | "spain" | "united-kingdom" | "switzerland" | "luxembourg" | "netherlands" | "europe" | "remote";
 export { MARKET_IDS } from "./market-presets.mjs";
 
 export type AtsSource = "greenhouse" | "lever" | "ashby" | "workday";

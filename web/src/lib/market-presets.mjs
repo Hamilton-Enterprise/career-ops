@@ -1,8 +1,8 @@
 import { cleanChips } from "./clean-chips.mjs";
 
-/** @typedef {"portugal" | "spain" | "europe" | "remote"} MarketId */
+/** @typedef {"portugal" | "spain" | "united-kingdom" | "switzerland" | "luxembourg" | "netherlands" | "europe" | "remote"} MarketId */
 /** @type {MarketId[]} */
-export const MARKET_IDS = ["portugal", "spain", "europe", "remote"];
+export const MARKET_IDS = ["portugal", "spain", "united-kingdom", "switzerland", "luxembourg", "netherlands", "europe", "remote"];
 
 /** @param {unknown} value @returns {MarketId[]} */
 export function cleanMarkets(value) {
@@ -22,6 +22,10 @@ export function decodeMarkets(value) {
 }
 
 const EUROPE_CODES = ["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE", "IS", "LI", "NO", "GB", "CH"];
+const COUNTRY_CODES = {
+  portugal: ["PT"], spain: ["ES"], "united-kingdom": ["GB"],
+  switzerland: ["CH"], luxembourg: ["LU"], netherlands: ["NL"],
+};
 const REMOTE_BOARDS = [
   ["RemoteOK", "remoteok"], ["Remotive", "remotive"], ["Himalayas", "himalayas"],
   ["Jobicy", "jobicy"], ["Jobspresso", "jobspresso"], ["Working Nomads", "workingnomads"],
@@ -38,6 +42,7 @@ export function buildMarketPlan(selected, terms) {
   const queries = cleanChips(terms);
   /** @type {Map<string, MarketBoard>} */
   const boards = new Map();
+  const wttjCountries = new Set();
   /** @type {{ source: string, reason: string }[]} */
   const skippedSources = [];
   /** @param {MarketBoard} board */
@@ -46,19 +51,24 @@ export function buildMarketPlan(selected, terms) {
     if (market === "portugal" || market === "europe") {
       add({ name: "Landing.jobs", provider: "landingjobs", enabled: true });
     }
+    if (market === "portugal" || market === "spain" || COUNTRY_CODES[market]) {
+      for (const code of COUNTRY_CODES[market] ?? []) wttjCountries.add(code);
+    }
     if (market === "spain" || market === "europe") {
       for (const lang of ["ES", "EN"]) add({ name: `getManfred (${lang})`, provider: "manfred", lang, enabled: true });
     }
     if (market === "europe") {
-      if (queries.length) {
-        add({ name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: {
-          queries, filters: EUROPE_CODES.map((code) => `offices.country_code:${code}`).join(" OR "),
-        } });
-      } else skippedSources.push({ source: "wttj", reason: "missing-search-terms" });
+      for (const code of EUROPE_CODES) wttjCountries.add(code);
     }
     if (market === "remote") {
       for (const [name, provider] of REMOTE_BOARDS) add({ name, provider, enabled: true });
     }
+  }
+  if (wttjCountries.size) {
+    if (queries.length) add({ name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: {
+      queries, filters: [...wttjCountries].map((code) => `offices.country_code:${code}`).join(" OR "),
+    } });
+    else skippedSources.push({ source: "wttj", reason: "missing-search-terms" });
   }
   return { markets, jobBoards: [...boards.values()], locationPolicy: { markets, strict: markets.length > 0 }, skippedSources };
 }
@@ -84,6 +94,36 @@ const EUROPE = [
 ];
 const PORTUGUESE_CITIES = ["lisbon", "lisboa", "porto", "oporto", "braga", "coimbra", "faro", "aveiro", "setubal", "funchal"];
 const SPANISH_CITIES = ["madrid", "barcelona", "valencia", "sevilla", "seville", "malaga", "bilbao", "zaragoza"];
+const MARKET_LOCATIONS = {
+  portugal: { names: PORTUGAL, cities: PORTUGUESE_CITIES },
+  spain: { names: SPAIN, cities: SPANISH_CITIES },
+  "united-kingdom": { names: ["united kingdom", "great britain", "uk", "gb", "england", "scotland", "wales", "northern ireland"], cities: ["london", "edinburgh", "glasgow", "manchester", "birmingham", "bristol", "leeds", "liverpool", "cardiff", "belfast"] },
+  switzerland: { names: ["switzerland", "ch"], cities: ["zurich", "geneva", "basel", "bern", "lausanne", "lucerne", "lugano"] },
+  luxembourg: { names: ["luxembourg", "lu"], cities: ["luxembourg city", "esch-sur-alzette", "differdange"] },
+  netherlands: { names: ["netherlands", "the netherlands", "holland", "nl"], cities: ["amsterdam", "rotterdam", "the hague", "utrecht", "eindhoven", "groningen", "maastricht"] },
+};
+const OTHER_COUNTRIES = [...new Set([
+  ...EUROPE.filter(name => !["europe", "europa", "eu", "eea", "eee"].includes(name)),
+  ...Object.values(MARKET_LOCATIONS).flatMap(({ names }) => names),
+  ...Object.values(COUNTRY_CODES).flat(),
+  "united states", "usa", "us", "canada", "brazil", "australia", "india", "singapore",
+  "wisconsin", "south carolina", "new york", "texas",
+])];
+
+function locationParts(location) {
+  return location.split(/[,;|/()[\]]/u).map(normalized).map(part => part.replace(/^(remote|hybrid|on-site|onsite)\s*[-:]?\s*/u, "").trim()).filter(Boolean);
+}
+
+function countryLocation(location, market) {
+  const target = MARKET_LOCATIONS[market];
+  if (!target) return false;
+  const parts = locationParts(location);
+  const targetCountry = target.names.some(name => containsWord(location, [name]));
+  const foreignCountry = OTHER_COUNTRIES.filter(name => !target.names.includes(name)).some(name => parts.includes(name) || containsWord(location, [name]));
+  if (foreignCountry && !targetCountry) return false;
+  if (targetCountry) return !foreignCountry;
+  return !foreignCountry && parts.some(part => target.cities.includes(part));
+}
 
 /** Geographic policies are alternatives. A remote source proves remote work,
  *  never worldwide eligibility. Missing location fails closed on every market.
@@ -98,13 +138,18 @@ export function classifyMarketLocation(offer, plan) {
     return { accepted: false, reason: "missing-location" };
   }
   // A bare normalized city is usable; a city in an unrelated country is not.
-  const city = location.replace(/,?\s+(remote|hybrid|on-site|onsite)$/, "").trim();
-  const portugal = containsWord(location, PORTUGAL) || PORTUGUESE_CITIES.includes(city);
-  const spain = containsWord(location, SPAIN) || SPANISH_CITIES.includes(city);
+  const portugal = countryLocation(location, "portugal");
+  const spain = countryLocation(location, "spain");
+  const unitedKingdom = countryLocation(location, "united-kingdom");
+  const switzerland = countryLocation(location, "switzerland");
+  const luxembourg = countryLocation(location, "luxembourg");
+  const netherlands = countryLocation(location, "netherlands");
   // ISO codes retain case: English "at" is not the country code AT.
   const europe = portugal || spain || containsWord(location, EUROPE) || containsWord(rawLocation, EUROPE_CODES);
   for (const market of plan.markets) {
     if ((market === "portugal" && portugal) || (market === "spain" && spain) ||
+        (market === "united-kingdom" && unitedKingdom) || (market === "switzerland" && switzerland) ||
+        (market === "luxembourg" && luxembourg) || (market === "netherlands" && netherlands) ||
         (market === "europe" && europe)) {
       return { accepted: true };
     }

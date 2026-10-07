@@ -12,6 +12,9 @@ test("market codec defaults empty and drops unknown and duplicate selections", (
   assert.deepEqual(cleanMarkets([" PORTUGAL ", "spain", "Portugal", "greenhouse", 3]), ["portugal", "spain"]);
   assert.deepEqual(decodeMarkets("europe,remote,europe,invalid"), ["europe", "remote"]);
   assert.equal(encodeMarkets(["spain", "spain", "remote"]), "spain,remote");
+  assert.deepEqual(cleanMarkets(["united-kingdom", "switzerland", "luxembourg", "netherlands"]), [
+    "united-kingdom", "switzerland", "luxembourg", "netherlands",
+  ]);
 });
 
 test("empty markets select no boards or strict geography", () => {
@@ -37,6 +40,16 @@ test("Europe selects its four entries and narrows WTTJ to the supported countrie
     ["landingjobs", ""], ["manfred", "ES"], ["manfred", "EN"], ["wttj", ""],
   ]);
   const filters = boards[3].wttj.filters;
+  assert.deepEqual(filters.split(" OR "), [
+    "offices.country_code:AT", "offices.country_code:BE", "offices.country_code:BG", "offices.country_code:HR",
+    "offices.country_code:CY", "offices.country_code:CZ", "offices.country_code:DK", "offices.country_code:EE",
+    "offices.country_code:FI", "offices.country_code:FR", "offices.country_code:DE", "offices.country_code:GR",
+    "offices.country_code:HU", "offices.country_code:IE", "offices.country_code:IT", "offices.country_code:LV",
+    "offices.country_code:LT", "offices.country_code:LU", "offices.country_code:MT", "offices.country_code:NL",
+    "offices.country_code:PL", "offices.country_code:PT", "offices.country_code:RO", "offices.country_code:SK",
+    "offices.country_code:SI", "offices.country_code:ES", "offices.country_code:SE", "offices.country_code:IS",
+    "offices.country_code:LI", "offices.country_code:NO", "offices.country_code:GB", "offices.country_code:CH",
+  ]);
   for (const country of ["FR", "NO", "IS", "LI", "GB", "CH"]) assert.ok(filters.split(" OR ").includes(`offices.country_code:${country}`));
   assert.equal(filters.includes("offices.country_code:US"), false);
   assert.ok(filters.length <= 1000, "provider rejects expressions longer than 1000 characters");
@@ -73,6 +86,32 @@ test("PT and ES location matching uses whole words and recognized local cities",
     const plan = buildMarketPlan([market], []);
     for (const location of accepted) assert.equal(classifyMarketLocation({ location }, plan).accepted, true, location);
     for (const location of rejected) assert.deepEqual(classifyMarketLocation({ location }, plan), { accepted: false, reason: "outside-market" }, location);
+  }
+});
+
+test("WTTJ is added once for every selected country and combines country filters", () => {
+  const countries = ["portugal", "spain", "united-kingdom", "switzerland", "luxembourg", "netherlands"];
+  const plan = buildMarketPlan(countries, ["designer"]);
+  const wttj = plan.jobBoards.filter((board) => board.provider === "wttj");
+  assert.equal(wttj.length, 1);
+  assert.deepEqual(wttj[0].wttj.queries, ["designer"]);
+  for (const code of ["PT", "ES", "GB", "CH", "LU", "NL"]) {
+    assert.ok(wttj[0].wttj.filters.split(" OR ").includes(`offices.country_code:${code}`));
+  }
+  assert.deepEqual(plan.jobBoards.map((board) => board.provider), ["landingjobs", "manfred", "manfred", "wttj"]);
+});
+
+test("each added market accepts country names, codes and local cities but rejects collisions", () => {
+  const cases = [
+    ["united-kingdom", ["United Kingdom", "UK", "GB", "London", "Edinburgh"], ["London, Canada", "Manchester, United States", "London, Italy", "United Kingdom, Wisconsin"]],
+    ["switzerland", ["Switzerland", "CH", "Zürich", "Geneva"], ["Geneva, Belgium", "Basel, Germany", "Zurich, Austria", "Switzerland, South Carolina"]],
+    ["luxembourg", ["Luxembourg", "LU", "Luxembourg City", "Esch-sur-Alzette"], ["Luxembourg, Wisconsin", "Esch-sur-Alzette, Belgium", "LUXembourgish"]],
+    ["netherlands", ["Netherlands", "NL", "Amsterdam", "Rotterdam", "The Hague"], ["Amsterdam, New York", "Rotterdam, Texas", "Netherlandish"]],
+  ];
+  for (const [market, accepted, rejected] of cases) {
+    const plan = buildMarketPlan([market], []);
+    for (const location of accepted) assert.equal(classifyMarketLocation({ location }, plan).accepted, true, `${market}: ${location}`);
+    for (const location of rejected) assert.deepEqual(classifyMarketLocation({ location }, plan), { accepted: false, reason: "outside-market" }, `${market}: ${location}`);
   }
 });
 

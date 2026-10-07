@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { summarizeDiscoveryState, applyDiscoveryOfferEvent, updateDiscoverySources, canDiscover, offerProvenance } from '../../src/lib/explore-state.mjs';
+import { summarizeDiscoveryState, applyDiscoveryOfferEvent, updateDiscoverySources, canDiscover, offerProvenance, MARKET_LABEL } from '../../src/lib/explore-state.mjs';
 import * as discoveryState from '../../src/lib/explore-state.mjs';
 
 test('completed sources distinguish results from a healthy empty search', () => {
@@ -49,6 +49,13 @@ test('market-only and ATS-only selection can start a search', () => {
   assert.equal(canDiscover({ ats: [], markets: ['portugal'] }), true);
   assert.equal(canDiscover({ ats: ['greenhouse'], markets: [] }), true);
   assert.equal(canDiscover({ ats: [], markets: [] }), false);
+});
+
+test('expanded market labels use Portuguese from Portugal', () => {
+  assert.deepEqual(
+    [MARKET_LABEL['united-kingdom'], MARKET_LABEL.switzerland, MARKET_LABEL.luxembourg, MARKET_LABEL.netherlands],
+    ['Reino Unido', 'Suíça', 'Luxemburgo', 'Países Baixos'],
+  );
 });
 
 test('the terminal event never certifies unfinished sources', () => {

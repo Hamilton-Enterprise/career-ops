@@ -80,7 +80,9 @@ test("market-only route retains its selection and terminal NDJSON receipt", asyn
   assert.equal(events.at(-1).kind, "done");
   assert.equal(events.at(-1).count, 1);
   assert.deepEqual(events.at(-1).cost, { tokens: 0, usd: 0 });
-  assert.equal(events.find(e => e.kind === "summary").status, "ok");
+  assert.equal(events.find(e => e.kind === "summary").status, "partial");
+  assert.ok(events.some(e => e.kind === "sourceStart" && e.source === "Landing.jobs"));
+  assert.ok(events.some(e => e.kind === "sourceError" && e.source === "wttj"));
 });
 
 test("runner counts missing locations and rejects present locations outside its market", async t => {
@@ -100,7 +102,7 @@ test("both scanners begin before either completes and duplicate sources survive"
   assert.equal(offers.length, 1);
   assert.equal(offers[0].location, "Portugal");
   assert.deepEqual(offers[0].sources, ["greenhouse-full", "landingjobs-api"]);
-  assert.equal(events.find(e => e.kind === "summary").status, "ok");
+  assert.equal(events.find(e => e.kind === "summary").status, "partial");
 });
 
 test("a fatal market child cannot suppress a valid empty ATS receipt", async t => {
@@ -138,6 +140,16 @@ test("profile targeting seeds query providers without changing explicit title fi
   assert.doesNotMatch(config, /title_filter:/);
 });
 
+test("new country selection writes one WTTJ board with its specific country filter", async t => {
+  const root = await sandbox(t, `import fs from 'node:fs'; fs.writeFileSync('portals-copy', fs.readFileSync(process.env.CAREER_OPS_PORTALS)); console.log(${JSON.stringify(JSON.stringify(receipt))});`);
+  const run = await runMarketDiscovery({ ...filters, positive: ["designer"], markets: ["netherlands"] }, () => {});
+  const config = fs.readFileSync(path.join(root, "portals-copy"), "utf8");
+  assert.equal(run.status, "ok");
+  assert.match(config, /"provider":"wttj"/);
+  assert.match(config, /"filters":"offices\.country_code:NL"/);
+  assert.doesNotMatch(config, /offices\.country_code:GB/);
+});
+
 test("all selected paths failing reports one fatal outcome", async t => {
   const payload = { ...receipt, offers: [], errors: [{ company: "Landing.jobs", error: "offline" }] };
   await sandbox(t, `console.log(${JSON.stringify(JSON.stringify(payload))}); process.exit(2);`);
@@ -164,7 +176,7 @@ test("nonzero market receipt reconciles source errors, incomplete summary and te
   const events = (await response.text()).trim().split("\n").map(JSON.parse);
   const summary = events.find(e => e.kind === "summary");
   assert.equal(summary.status, "partial");
-  assert.deepEqual(summary.incomplete, ["Landing.jobs"]);
+  assert.deepEqual(summary.incomplete, ["Landing.jobs", "wttj"]);
   assert.equal(summary.sources[0].state, "error");
   assert.ok(events.some(e => e.kind === "sourceError" && e.source === "Landing.jobs"));
   assert.equal(events.filter(e => e.kind === "sourceDone").length, 0);
@@ -179,14 +191,14 @@ test("skipped market receipt is failed alone and partial beside a valid ATS resu
   const events = [];
   assert.deepEqual(await runDiscovery(filters, e => events.push(e)), []);
   assert.equal(events.find(e => e.kind === "summary").status, "failed");
-  assert.deepEqual(events.find(e => e.kind === "summary").incomplete, ["Landing.jobs"]);
+  assert.deepEqual(events.find(e => e.kind === "summary").incomplete, ["Landing.jobs", "wttj"]);
   assert.equal(events.find(e => e.kind === "summary").sources[0].state, "skipped");
   assert.equal(events.filter(e => e.kind === "sourceDone").length, 0);
   fs.writeFileSync(path.join(root, "scan-ats-full.mjs"), "// --json capHit\nconsole.log(JSON.stringify({companiesScanned:1,offers:[]}));");
   const joined = [];
   assert.deepEqual(await runDiscovery({ ...filters, ats: ["greenhouse"] }, e => joined.push(e)), []);
   assert.equal(joined.find(e => e.kind === "summary").status, "partial");
-  assert.deepEqual(joined.find(e => e.kind === "summary").incomplete, ["Landing.jobs"]);
+  assert.deepEqual(joined.find(e => e.kind === "summary").incomplete, ["Landing.jobs", "wttj"]);
   assert.equal(joined.filter(e => e.kind === "error").length, 0);
 });
 
