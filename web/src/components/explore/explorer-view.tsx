@@ -83,7 +83,8 @@ export function ExplorerView({
       initFilters(seed.filters);
       void loadFresh();
     } else {
-      initFilters(sp.toString() ? paramsToFilters(sp) : seed.filters);
+      const active = sp.toString() ? paramsToFilters(sp) : seed.filters;
+      initFilters(active, active.opportunityType === "freelance" ? seed.filters : undefined);
       // Onboarding hand-off: ?run=1 auto-fires the free scan + flags the first-run
       // banner (the "matches found from your CV, free" reveal).
       if (sp.get("run") === "1") {

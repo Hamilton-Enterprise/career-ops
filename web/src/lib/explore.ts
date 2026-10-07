@@ -49,6 +49,34 @@ export const DEFAULT_FILTERS: ExploreFilters = {
   limitPerAts: 150,
 };
 
+export type OpportunitySnapshots = Record<OpportunityType, ExploreFilters>;
+
+export function createOpportunitySnapshots(active: ExploreFilters, employmentSeed: ExploreFilters = DEFAULT_FILTERS): OpportunitySnapshots {
+  return updateOpportunitySnapshot({
+    employment: structuredClone({ ...employmentSeed, opportunityType: "employment" }),
+    freelance: {
+      opportunityType: "freelance", positive: [], negative: [], allow: [], block: [], blockHard: [], alwaysAllow: [],
+      sinceDays: DEFAULT_FILTERS.sinceDays, ats: [...DEFAULT_FILTERS.ats], markets: [], limitPerAts: DEFAULT_FILTERS.limitPerAts,
+    },
+  }, active);
+}
+
+export function updateOpportunitySnapshot(snapshots: OpportunitySnapshots, next: ExploreFilters): OpportunitySnapshots {
+  return { ...snapshots, [next.opportunityType]: structuredClone(next) };
+}
+
+export function switchOpportunitySnapshot(snapshots: OpportunitySnapshots, current: ExploreFilters, target: OpportunityType): { snapshots: OpportunitySnapshots; filters: ExploreFilters } {
+  const updated = updateOpportunitySnapshot(snapshots, current);
+  return { snapshots: updated, filters: structuredClone(updated[target]) };
+}
+
+export function applyOpportunityPatch(snapshots: OpportunitySnapshots, current: ExploreFilters, raw: Record<string, unknown>, merge = false): { snapshots: OpportunitySnapshots; filters: ExploreFilters } {
+  const target = raw.opportunityType === undefined ? current.opportunityType : cleanOpportunityType(raw.opportunityType);
+  const state = switchOpportunitySnapshot(snapshots, current, target);
+  const filters = parseExplorePatch(raw, state.filters, merge);
+  return { snapshots: updateOpportunitySnapshot(state.snapshots, filters), filters };
+}
+
 /** Banded title-vs-profile overlap (web/src/lib/title-fit.mjs). Words, not
  *  numbers, so it can't be mistaken for the evaluation's real 1–5 / A–F. */
 export type FitBand = "strong" | "related" | "weak";

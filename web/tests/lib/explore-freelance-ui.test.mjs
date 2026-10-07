@@ -2,9 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { createRequire } from "node:module";
+import * as React from "react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadBindings, transform } from "next/dist/build/swc/index.js";
+import * as explore from "../../src/lib/explore.ts";
+import * as discoveryState from "../../src/lib/explore-state.mjs";
+import * as marketPresets from "../../src/lib/market-presets.mjs";
+import * as freelancePresets from "../../src/lib/freelance-presets.mjs";
 
 await loadBindings();
 const require = createRequire(import.meta.url);
@@ -27,6 +32,117 @@ async function loadComponent(relative, filename, dependencies) {
   );
   return module.exports;
 }
+
+const filterDependencies = {
+  "@/lib/cn": { cn }, "@/lib/explore": explore, "@/lib/explore-state.mjs": discoveryState,
+  "@/lib/market-presets.mjs": marketPresets, "@/lib/freelance-presets.mjs": freelancePresets,
+};
+const employment = { ...explore.DEFAULT_FILTERS, positive: ["Farmácia", "iOS"], allow: ["Lisboa"], markets: ["portugal"] };
+
+function elements(tree) {
+  if (!tree || typeof tree !== "object") return [];
+  if (Array.isArray(tree)) return tree.flatMap(elements);
+  return [tree, ...elements(tree.props?.children)];
+}
+
+test("opportunity buttons emit the selected type through the existing onChange contract", async () => {
+  const { FilterBuilder } = await loadComponent("../../src/components/explore/filter-builder.tsx", "filter-builder.tsx", {
+    ...filterDependencies, react: { ...React, useState: () => [false, () => {}] },
+  });
+  const changes = [];
+  const tree = FilterBuilder({ filters: employment, onChange: (next) => changes.push(next) });
+  const buttons = elements(tree).filter((el) => el.type === "button" && ["Emprego", "Freelance"].includes(el.props.children));
+  assert.equal(buttons.length, 2);
+  buttons.forEach((button) => button.props.onClick());
+  assert.deepEqual(changes, [employment, { ...employment, opportunityType: "freelance" }]);
+});
+
+test("freelance terms are not attributed to the employment profile seed", async () => {
+  const { FilterBuilder } = await loadComponent("../../src/components/explore/filter-builder.tsx", "filter-builder.tsx", filterDependencies);
+  const props = { filters: { ...employment, opportunityType: "freelance", positive: ["Flutter"] }, seededFrom: ["perfil"], onChange() {} };
+  assert.doesNotMatch(renderToStaticMarkup(createElement(FilterBuilder, props)), /Preenchido a partir/);
+  assert.match(renderToStaticMarkup(createElement(FilterBuilder, { ...props, filters: employment })), /Preenchido a partir/);
+});
+
+test("the existing provider preserves snapshots and applies assistant patches without persistent writes", async (t) => {
+  const slots = [];
+  const effects = [];
+  const writes = [];
+  for (const name of ["localStorage", "sessionStorage"]) {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+    Object.defineProperty(globalThis, name, { configurable: true, value: { getItem: () => null, setItem: (...args) => writes.push(args) } });
+    t.after(() => { if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name]; });
+  }
+  let cursor = 0;
+  const hooks = {
+    ...React,
+    useState(initial) {
+      const index = cursor++;
+      if (!(index in slots)) slots[index] = typeof initial === "function" ? initial() : initial;
+      return [slots[index], (next) => { slots[index] = typeof next === "function" ? next(slots[index]) : next; }];
+    },
+    useRef(initial) {
+      const index = cursor++;
+      if (!(index in slots)) slots[index] = { current: initial };
+      return slots[index];
+    },
+    useCallback: (fn) => fn, useMemo: (fn) => fn(), useEffect: (fn) => effects.push(fn),
+  };
+  const { ExploreProvider } = await loadComponent("../../src/components/explore/explore-provider.tsx", "explore-provider.tsx", {
+    react: hooks, "next/navigation": { useRouter: () => ({ refresh() {} }) },
+    "@/lib/explore": explore, "@/lib/explore-ai": {}, "@/lib/whats-new.mjs": {},
+    "@/lib/explore-error.mjs": {}, "@/lib/explore-state.mjs": discoveryState,
+  });
+  const render = () => { cursor = 0; effects.length = 0; return ExploreProvider({ children: null }).props.value; };
+  let ctx = render();
+  ctx.initFilters(employment);
+  ctx = render();
+  ctx.setFilters({ ...ctx.filters, opportunityType: "freelance" });
+  ctx = render();
+  assert.deepEqual(ctx.filters.positive, []);
+  assert.deepEqual(ctx.filters.allow, []);
+  ctx.setFilters({ ...ctx.filters, positive: ["Flutter"] });
+  ctx = render();
+  ctx.setFilters({ ...ctx.filters, opportunityType: "employment" });
+  ctx = render();
+  assert.deepEqual(ctx.filters, employment);
+  ctx.applyPatch({ opportunityType: "freelance", positive: ["LLM"] }, { merge: true });
+  ctx = render();
+  assert.deepEqual(ctx.filters.positive, ["Flutter", "LLM"]);
+  ctx.initFilters(employment);
+  assert.equal(render().filters.opportunityType, "freelance");
+
+  // A fresh provider initialized by a shared freelance URL keeps the profile seed.
+  slots.length = 0;
+  ctx = render();
+  ctx.initFilters(explore.paramsToFilters(new URLSearchParams("opportunity=freelance&q=Flutter")), employment);
+  ctx = render();
+  ctx.setFilters({ ...ctx.filters, opportunityType: "employment" });
+  assert.deepEqual(render().filters, employment);
+  effects.forEach((effect) => effect());
+  assert.deepEqual(writes, []);
+});
+
+test("the existing explorer page passes the employment seed when opening a freelance URL", async (t) => {
+  const calls = [];
+  const context = { filters: employment, offers: [], sources: {}, mode: "scan", phase: "idle", initFilters: (...args) => calls.push(args) };
+  const dependencies = new Proxy({
+    react: { ...React, useEffect: (fn) => fn(), useMemo: (fn) => fn(), useRef: (initial) => ({ current: initial }), useState: (initial) => [initial, () => {}] },
+    "@/lib/explore": explore, "@/lib/cn": { cn }, "@/lib/fonts": { instrumentSerif: { className: "serif" } },
+    "@/lib/explore-state.mjs": discoveryState, "./explore-provider": { useExplore: () => context },
+  }, { get: (target, key) => target[key] ?? (key.startsWith("@/") || key.startsWith("./") ? {} : undefined) });
+  globalThis.window = { location: { search: "?opportunity=freelance&q=Flutter" } };
+  t.after(() => { delete globalThis.window; });
+  const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: () => null } });
+  t.after(() => { if (storageDescriptor) Object.defineProperty(globalThis, "localStorage", storageDescriptor); else delete globalThis.localStorage; });
+  const { ExplorerView } = await loadComponent("../../src/components/explore/explorer-view.tsx", "explorer-view.tsx", dependencies);
+  ExplorerView({ seed: { filters: employment, seededFrom: ["perfil"] }, inboxSnapshot: [], appsSnapshot: [], rootExists: true });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0].opportunityType, "freelance");
+  assert.deepEqual(calls[0][0].positive, ["Flutter"]);
+  assert.deepEqual(calls[0][1], employment);
+});
 
 test("freelance filters expose the explicit mode selector and editable shortcuts", async () => {
   const { FilterBuilder } = await loadComponent("../../src/components/explore/filter-builder.tsx", "filter-builder.tsx", {

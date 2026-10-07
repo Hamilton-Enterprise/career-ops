@@ -8,11 +8,15 @@ import {
   filtersToParams,
   aiToParams,
   isBroadSearch,
-  parseExplorePatch,
+  createOpportunitySnapshots,
+  updateOpportunitySnapshot,
+  switchOpportunitySnapshot,
+  applyOpportunityPatch,
   type AtsSource,
   type DiscoveredOffer,
   type ExploreFilters,
   type ExploreMode,
+  type OpportunitySnapshots,
   type ScanEvent,
 } from "@/lib/explore";
 import { makeAiStreamParser, type AiTraceChunk } from "@/lib/explore-ai";
@@ -40,7 +44,7 @@ type ExploreCtx = {
   setFilters: (f: ExploreFilters) => void;
   /** Set filters from a seed/URL only if the user/assistant hasn't touched them
    *  yet — so a fresh page mount can't clobber assistant-set filters. */
-  initFilters: (f: ExploreFilters) => void;
+  initFilters: (f: ExploreFilters, employmentSeed?: ExploreFilters) => void;
   phase: Phase;
   running: boolean;
   offers: DiscoveredOffer[];
@@ -109,7 +113,8 @@ type ResultSnapshot = {
 
 export function ExploreProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const [filters, setFiltersState] = useState<ExploreFilters>({ ...DEFAULT_FILTERS, ats: [...DEFAULT_FILTERS.ats] });
+  const [filters, setFiltersState] = useState<ExploreFilters>(() => structuredClone(DEFAULT_FILTERS));
+  const snapshotsRef = useRef<OpportunitySnapshots>(createOpportunitySnapshots(DEFAULT_FILTERS));
   const touched = useRef(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [offers, setOffers] = useState<DiscoveredOffer[]>([]);
@@ -139,13 +144,19 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
 
   const setFilters = useCallback((f: ExploreFilters) => {
     touched.current = true;
-    filtersRef.current = f;
-    setFiltersState(f);
+    const state = f.opportunityType !== filtersRef.current.opportunityType
+      ? switchOpportunitySnapshot(snapshotsRef.current, filtersRef.current, f.opportunityType)
+      : { snapshots: updateOpportunitySnapshot(snapshotsRef.current, f), filters: structuredClone(f) };
+    snapshotsRef.current = state.snapshots;
+    filtersRef.current = state.filters;
+    setFiltersState(state.filters);
   }, []);
-  const initFilters = useCallback((f: ExploreFilters) => {
+  const initFilters = useCallback((f: ExploreFilters, employmentSeed?: ExploreFilters) => {
     if (touched.current) return;
-    filtersRef.current = f;
-    setFiltersState(f);
+    snapshotsRef.current = createOpportunitySnapshots(f, employmentSeed);
+    const active = structuredClone(snapshotsRef.current[f.opportunityType]);
+    filtersRef.current = active;
+    setFiltersState(active);
   }, []);
 
   const discover = useCallback(async () => {
@@ -401,9 +412,11 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   }, [added, router]);
 
   const applyPatch = useCallback((raw: Record<string, unknown>, opts?: { merge?: boolean; run?: boolean }) => {
-    const next = parseExplorePatch(raw, filtersRef.current, opts?.merge ?? false);
-    setFilters(next);
-    filtersRef.current = next;
+    const state = applyOpportunityPatch(snapshotsRef.current, filtersRef.current, raw, opts?.merge ?? false);
+    touched.current = true;
+    snapshotsRef.current = state.snapshots;
+    filtersRef.current = state.filters;
+    setFiltersState(state.filters);
     if (opts?.run) void discover();
   }, [discover]);
 

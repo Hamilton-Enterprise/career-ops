@@ -167,7 +167,7 @@ export function FilterBuilder({
             ))}
           </div>
         )}
-        {seededFrom.length > 0 && filters.positive.length > 0 && (
+        {filters.opportunityType === "employment" && seededFrom.length > 0 && filters.positive.length > 0 && (
           <p className="mt-1 text-[11px] text-faint">Preenchido a partir de {seededFrom.join(" + ")}. Podes alterar.</p>
         )}
       </div>
