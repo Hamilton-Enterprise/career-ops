@@ -154,7 +154,11 @@ test("saved freelance searches can use the contract filter without inventing key
           offers: [{ url: "https://example.test/freelance", company: "Acme", title: "Designer", location: "Paris", source: "wttj-api" }], errors: [],
         }), stderr: "" };
       },
-      writerSpawnFn: () => ({ status: 0, stdout: JSON.stringify({ added: 1 }), stderr: "" }),
+      writerSpawnFn: (_node, _args, options) => {
+        const persisted = JSON.parse(options.input);
+        assert.equal(persisted[0].opportunityType, "freelance");
+        return { status: 0, stdout: JSON.stringify({ added: 1 }), stderr: "" };
+      },
     });
     assert.equal(result.state, "success");
     assert.equal(result.rolesFound, 1);

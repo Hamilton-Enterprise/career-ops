@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveCodeRoot } from "../../../../lib/core/code-root.mjs";
 
 export const AI_SEARCH_MODE_FILE = "web-search.md";
 
@@ -17,13 +18,15 @@ Follow the dedicated web-search mode above exactly. You are running headless for
 - DEDUP: skip anything already known below; don't re-propose the user's existing companies.
 `;
 
-export function buildAiSearchPrompt({ root, query, memory = "", knownLines = [] }: {
-  root: string;
+export function buildAiSearchPrompt({ root, cwd = process.cwd(), env = process.env, query, memory = "", knownLines = [] }: {
+  root?: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
   query: string;
   memory?: string;
   knownLines?: string[];
 }): string {
-  const mode = fs.readFileSync(path.join(root, "modes", AI_SEARCH_MODE_FILE), "utf8");
+  const mode = fs.readFileSync(path.join(root ?? resolveCodeRoot(cwd, env), "modes", AI_SEARCH_MODE_FILE), "utf8");
   const memoryLine = memory.trim() ? `\n\nWHAT YOU KNOW ABOUT THE USER (persistent memory):\n${memory.trim()}` : "";
   const knownBlock = knownLines.length ? `\n\n--- ALREADY KNOWN (dedup — do NOT propose these) ---\n${knownLines.join("\n")}` : "";
   return `${mode}${OUTPUT_CONTRACT}${memoryLine}${knownBlock}\n\n--- USER INTENT ---\n${query}\n`;

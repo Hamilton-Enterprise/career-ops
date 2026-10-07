@@ -28,6 +28,7 @@ export function addOffersToPipeline(offers: DiscoveredOffer[]): Promise<AddResul
       title: o.title || "",
       location: o.location || "",
       source: o.source || o.ats || "explorer",
+      opportunityType: o.opportunityType,
       // Preserve the optional per-offer signal so it survives to pipeline.md.
       // The core writer treats an empty note as absent (byte-identical output).
       note: o.note || "",

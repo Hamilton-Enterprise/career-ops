@@ -1658,7 +1658,7 @@ const PIPELINE_CHECKBOX_STRICT_RE = /^- \[[ x]\]\s+/;
 
 /**
  * A labeled trailing segment of a pipeline entry, as written by the two writers
- * that emit one: `formatPipelineOffer` here (`posted:`, `trust:`, `note:`) and
+ * that emit one: `formatPipelineOffer` here (`type:`, `posted:`, `trust:`, `note:`) and
  * `appendRankAnnotation` in `rank-pipeline.mjs` (`rank:`).
  *
  * Labeled segments are appended after the positional columns, so one slides into
@@ -1685,7 +1685,7 @@ const PIPELINE_CHECKBOX_STRICT_RE = /^- \[[ x]\]\s+/;
  * segment invents a city for a role and lets it resurface, while a genuine
  * location beginning `Posted: ` / `Rank: ` does not occur.
  */
-const PIPELINE_LABELED_SEGMENT_RE = /^(?:posted|trust|note|rank):\s/iu;
+const PIPELINE_LABELED_SEGMENT_RE = /^(?:posted|trust|note|rank|type):\s/iu;
 
 /**
  * The `~~…~~` wrapper an expired entry is written with.
@@ -2861,6 +2861,7 @@ export function formatPipelineOffer(offer) {
   let line = base;
   if (compensation) line = `${base} | ${location} | ${compensation}`;
   else if (location) line = `${base} | ${location}`;
+  if (offer.opportunityType === 'freelance') line = `${line} | type: freelance`;
   // Optional labeled posting-date segment (like note:) — keeps the positional
   // 1/3/4/5-column contract in modes/pipeline.md intact.
   const posted = postedAtIsoDate(offer.postedAt);

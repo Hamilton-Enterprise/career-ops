@@ -199,6 +199,16 @@ test("market inference chooses Portugal only when every requested location is un
   assert.deepEqual(marketPresets.inferMarketsFromLocations(["spain"], ["Lisboa"]), ["spain"]);
 });
 
+test("market inference rejects Portuguese cities followed by foreign or unknown country qualifiers", () => {
+  for (const location of ["Lisboa, ZA", "Lisboa, Angola", "Lisboa, XX"]) {
+    assert.deepEqual(marketPresets.inferMarketsFromLocations([], [location]), [], location);
+  }
+  for (const location of ["Lisboa", "Lisbon Remote", "Lisboa Portugal", "Lisbon PT"]) {
+    assert.deepEqual(marketPresets.inferMarketsFromLocations([], [location]), ["portugal"], location);
+  }
+  assert.deepEqual(marketPresets.inferMarketsFromLocations([], ["Lisboa", "Porto"]), ["portugal"]);
+});
+
 test("remote provider suffixes remain evidence of remote work in every origin field", () => {
   const plan = buildMarketPlan(["remote"], []);
   for (const field of ["source", "ats", "provider"]) {

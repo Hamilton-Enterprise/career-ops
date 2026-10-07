@@ -54,7 +54,7 @@ export async function POST(req: Request) {
   let prompt: string;
   try {
     const { lines } = assembleDedupContext();
-    prompt = buildAiSearchPrompt({ root: careerOpsRoot(), query, memory: readMemory(), knownLines: lines });
+    prompt = buildAiSearchPrompt({ query, memory: readMemory(), knownLines: lines });
   } catch {
     return Response.json({ code: "MODE_MISSING", error: "A pesquisa com IA exige uma versão mais recente do career-ops." }, { status: 400 });
   }

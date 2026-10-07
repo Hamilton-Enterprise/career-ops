@@ -48,7 +48,10 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
   useEffect(() => {
     try {
       const s = localStorage.getItem(SHORTLIST_KEY);
-      if (s) setShortlist(JSON.parse(s));
+      if (s) {
+        const evaluable = new Set(inbox.filter((job) => job.opportunityType !== "freelance").map((job) => job.url));
+        setShortlist((JSON.parse(s) as ShortItem[]).filter((item) => evaluable.has(item.url)));
+      }
       const h = localStorage.getItem(HIDDEN_KEY);
       if (h) {
         const parsed = JSON.parse(h) as unknown;
@@ -152,6 +155,7 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
   const capped = !showAll && !anyFacet;
   const visible = capped ? ordered.slice(0, BATCH) : ordered;
   const hiddenCount = hidden.length;
+  const hasEmployment = enriched.some((e) => e.job.opportunityType !== "freelance");
 
   const isShortlisted = (url: string) => shortlist.some((s) => s.url === url);
 
@@ -175,7 +179,7 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
   };
 
   const save = (job: InboxJob) => {
-    if (isShortlisted(job.url)) return;
+    if (job.opportunityType === "freelance" || isShortlisted(job.url)) return;
     setShortlist((s) => [...s, { url: job.url, company: job.company, role: job.role }]);
   };
   const skip = (job: InboxJob) => {
@@ -194,16 +198,18 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
     setHidden([]);
     for (const url of urls) void persistSkip(url, false);
   };
-  const toggleSelect = (url: string) =>
+  const toggleSelect = (job: InboxJob) => {
+    if (job.opportunityType === "freelance") return;
     setSelected((s) => {
       const n = new Set(s);
-      if (n.has(url)) n.delete(url);
-      else n.add(url);
+      if (n.has(job.url)) n.delete(job.url);
+      else n.add(job.url);
       return n;
     });
+  };
   const saveSelected = () => {
     const add = enriched
-      .filter((e) => selected.has(e.job.url) && !isShortlisted(e.job.url))
+      .filter((e) => e.job.opportunityType !== "freelance" && selected.has(e.job.url) && !isShortlisted(e.job.url))
       .map((e) => ({ url: e.job.url, company: e.job.company, role: e.job.role }));
     if (add.length) setShortlist((s) => [...s, ...add]);
     setSelected(new Set());
@@ -280,10 +286,10 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
               job={e.job}
               source={e.source}
               age={e.age}
-              scored={scoreByUrl.get(e.job.url)}
+              scored={e.job.opportunityType === "freelance" ? undefined : scoreByUrl.get(e.job.url)}
               selected={selected.has(e.job.url)}
               shortlisted={isShortlisted(e.job.url)}
-              onToggleSelect={() => toggleSelect(e.job.url)}
+              onToggleSelect={() => toggleSelect(e.job)}
               onSave={() => save(e.job)}
               onSkip={() => skip(e.job)}
             />
@@ -308,7 +314,7 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
       )}
 
       {/* empty-shortlist guidance (only once there's nothing saved) */}
-      {shortlist.length === 0 && (
+      {hasEmployment && shortlist.length === 0 && (
         <p className="mt-4 text-center text-xs text-faint">Guarda as ofertas que queres comparar e avalia-as em conjunto.</p>
       )}
 

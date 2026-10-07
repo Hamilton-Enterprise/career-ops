@@ -174,7 +174,12 @@ export function inferMarketsFromLocations(selected, locations) {
   const requested = cleanChips(locations);
   if (!requested.length) return [];
   const groups = requested.flatMap(locationGroups);
-  return groups.length && groups.every(group => countryLocation(group, "portugal")) ? ["portugal"] : [];
+  const unambiguousPortugal = (group) => {
+    if (!countryLocation(group, "portugal")) return false;
+    const parts = locationParts(group);
+    return parts.length <= 1 || parts.every(part => PORTUGAL.includes(part) || PORTUGUESE_CITIES.includes(part));
+  };
+  return groups.length && groups.every(unambiguousPortugal) ? ["portugal"] : [];
 }
 
 /** Geographic policies are alternatives. A remote source proves remote work,

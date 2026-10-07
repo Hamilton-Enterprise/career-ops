@@ -26,3 +26,22 @@ test("AI offer search loads its dedicated web-search mode and keeps the offer en
   assert.match(prompt, /https:\/\/example\.test\/already-known/);
   assert.doesNotMatch(prompt, /Follow modes\/discover\.md/);
 });
+
+test("AI offer search reads its mode from the code root when user data lives elsewhere", (t) => {
+  const codeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-ai-code-"));
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-ai-data-"));
+  t.after(() => {
+    fs.rmSync(codeRoot, { recursive: true, force: true });
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  });
+  fs.mkdirSync(path.join(codeRoot, "modes"));
+  fs.writeFileSync(path.join(codeRoot, "modes", "web-search.md"), "MODE FROM CODE ROOT");
+
+  const prompt = exploreAiPrompt.buildAiSearchPrompt({
+    cwd: path.join(codeRoot, "web"),
+    env: { CAREER_OPS_ROOT: dataRoot, CAREER_OPS_CODE_ROOT: codeRoot },
+    query: "freelance em Lisboa",
+  });
+
+  assert.match(prompt, /MODE FROM CODE ROOT/);
+});
