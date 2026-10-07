@@ -488,8 +488,16 @@ export function AssistantConsole() {
           .then(() => router.refresh())
           .catch(() => {});
       },
-      writePortals: (roles, location) => {
-        fetch("/api/portals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ roles, location }) }).catch(() => {});
+      writePortals: async (roles, location) => {
+        try {
+          const response = await fetch("/api/portals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ roles, location }) });
+          if (response.ok) return;
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.error || `erro ${response.status}`);
+        } catch (error) {
+          appendParts([{ type: "note", text: `Não foi possível guardar a pesquisa: ${error instanceof Error ? error.message : "erro de ligação"}.` }]);
+          throw error;
+        }
       },
     };
   }
@@ -918,7 +926,7 @@ function PartView({
             </button>
           </div>
         ) : (
-          <div className="mt-1 text-xs text-faint">{part.state === "done" ? "✓ iniciada" : "cancelada"}</div>
+          <div className="mt-1 text-xs text-faint">{part.state === "done" ? "✓ confirmado" : "cancelada"}</div>
         )}
       </div>
     );

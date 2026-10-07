@@ -47,7 +47,7 @@ export type ActionCtx = {
   startApply: (url: string) => void; // open the apply form-proxy for a posting URL
   applyExplore?: (patch: Record<string, unknown>, opts?: { merge?: boolean; run?: boolean }) => void; // build a FREE discovery search
   writeProfile?: (patch: Record<string, unknown>) => void; // merge-safe config/profile.yml write
-  writePortals?: (roles: string[], location?: string[]) => void; // merge-safe portals.yml title_filter write
+  writePortals?: (roles: string[], location?: string[]) => Promise<void>; // merge-safe portals.yml title_filter write
 };
 
 export type ProfilePatch = {
@@ -323,7 +323,7 @@ const ACTIONS: Record<string, ActionDef> = {
         summary: `Guardar o perfil?${bits ? ` (${bits})` : ""}`,
         run: () => {
           ctx.writeProfile!(p as Record<string, unknown>);
-          if (p.roles?.length) ctx.writePortals?.(p.roles, p.location ? [p.location] : undefined);
+          if (p.roles?.length) void ctx.writePortals?.(p.roles, p.location ? [p.location] : undefined).catch(() => {});
           return { note: "Perfil guardado. As próximas pesquisas usarão estes dados." };
         },
       };
@@ -337,12 +337,20 @@ const ACTIONS: Record<string, ActionDef> = {
       const roles = Array.isArray(raw.roles) ? raw.roles.filter((r): r is string => typeof r === "string" && r.trim().length > 0).map((r) => r.trim()) : [];
       if (roles.length === 0) return { status: "ignored", note: "Faltam as funções a procurar." };
       const location = Array.isArray(raw.location) ? raw.location.filter((l): l is string => typeof l === "string") : undefined;
+      const run = raw.run === true;
       return {
         status: "confirm",
         summary: `Definir estas funções para a pesquisa: ${roles.join(", ")}?`,
         run: () => {
-          ctx.writePortals!(roles, location);
-          return { note: "Funções da pesquisa atualizadas." };
+          void ctx.writePortals!(roles, location)
+            .then(() => {
+              if (run && ctx.applyExplore) {
+                ctx.push("/explore");
+                ctx.applyExplore({ positive: roles, ...(location?.length ? { allow: location } : {}) }, { run: true });
+              }
+            })
+            .catch(() => {});
+          return { note: run ? "A guardar as funções antes de pesquisar…" : "A guardar as funções da pesquisa…" };
         },
       };
     },
