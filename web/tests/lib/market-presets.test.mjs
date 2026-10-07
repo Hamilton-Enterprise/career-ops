@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  cleanMarkets, encodeMarkets, decodeMarkets, buildMarketPlan, classifyMarketLocation,
-} from "../../src/lib/market-presets.mjs";
+import * as marketPresets from "../../src/lib/market-presets.mjs";
 import { mergeDiscoveredOffers } from "../../src/lib/core/market-merge.mjs";
+
+const { cleanMarkets, encodeMarkets, decodeMarkets, buildMarketPlan, classifyMarketLocation } = marketPresets;
 
 test("market codec defaults empty and drops unknown and duplicate selections", () => {
   assert.deepEqual(cleanMarkets(undefined), []);
@@ -103,7 +103,7 @@ test("WTTJ is added once for every selected country and combines country filters
 
 test("each added market accepts country names, codes and local cities but rejects collisions", () => {
   const cases = [
-    ["united-kingdom", ["United Kingdom", "UK", "GB", "London", "Edinburgh"], ["London, Canada", "Manchester, United States", "London, Italy", "United Kingdom, Wisconsin"]],
+    ["united-kingdom", ["United Kingdom", "UK", "GB", "London", "Edinburgh", "Belfast, Northern Ireland"], ["London, Canada", "Manchester, United States", "London, Italy", "London, FR", "London, DE", "United Kingdom, Wisconsin"]],
     ["switzerland", ["Switzerland", "CH", "Zürich", "Geneva"], ["Geneva, Belgium", "Basel, Germany", "Zurich, Austria", "Switzerland, South Carolina"]],
     ["luxembourg", ["Luxembourg", "LU", "Luxembourg City", "Esch-sur-Alzette"], ["Luxembourg, Wisconsin", "Esch-sur-Alzette, Belgium", "LUXembourgish"]],
     ["netherlands", ["Netherlands", "NL", "Amsterdam", "Rotterdam", "The Hague"], ["Amsterdam, New York", "Rotterdam, Texas", "Netherlandish"]],
@@ -148,7 +148,25 @@ test("combined markets accept a match to any selected geographic policy", () => 
   const plan = buildMarketPlan(["portugal", "spain"], []);
   assert.equal(classifyMarketLocation({ location: "Madrid, Spain" }, plan).accepted, true);
   assert.equal(classifyMarketLocation({ location: "Lisbon, Portugal" }, plan).accepted, true);
+  assert.equal(classifyMarketLocation({ location: "Lisbon, Portugal; Madrid, Spain" }, plan).accepted, true);
   assert.equal(classifyMarketLocation({ location: "Paris, France" }, plan).accepted, false);
+});
+
+test("Portuguese cities keep trailing work-mode qualifiers", () => {
+  const plan = buildMarketPlan(["portugal"], []);
+  for (const location of ["Lisbon Remote", "Lisbon Hybrid"]) {
+    assert.equal(classifyMarketLocation({ location }, plan).accepted, true, location);
+  }
+});
+
+test("market inference chooses Portugal only when every requested location is unambiguously Portuguese", () => {
+  assert.equal(typeof marketPresets.inferMarketsFromLocations, "function");
+  for (const locations of [["Portugal"], ["Lisboa"], ["Porto"], ["Lisbon Remote"], ["Lisboa", "Porto"]]) {
+    assert.deepEqual(marketPresets.inferMarketsFromLocations([], locations), ["portugal"], locations.join(" | "));
+  }
+  assert.deepEqual(marketPresets.inferMarketsFromLocations([], ["Lisboa", "Madrid"]), []);
+  assert.deepEqual(marketPresets.inferMarketsFromLocations([], ["Lisbon, Portugal; Madrid, Spain"]), []);
+  assert.deepEqual(marketPresets.inferMarketsFromLocations(["spain"], ["Lisboa"]), ["spain"]);
 });
 
 test("remote provider suffixes remain evidence of remote work in every origin field", () => {

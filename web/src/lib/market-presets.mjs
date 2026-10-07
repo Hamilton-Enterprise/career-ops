@@ -109,20 +109,50 @@ const OTHER_COUNTRIES = [...new Set([
   "united states", "usa", "us", "canada", "brazil", "australia", "india", "singapore",
   "wisconsin", "south carolina", "new york", "texas",
 ])];
+const ISO_COUNTRY_CODES = new Set(EUROPE_CODES.map(code => code.toLowerCase()));
+
+function locationGroups(location) {
+  return location.split(/[;|/]+/u).map(part => part.trim()).filter(Boolean);
+}
 
 function locationParts(location) {
-  return location.split(/[,;|/()[\]]/u).map(normalized).map(part => part.replace(/^(remote|hybrid|on-site|onsite)\s*[-:]?\s*/u, "").trim()).filter(Boolean);
+  return location.split(/[,()[\]]/u).map(normalized).map(part => part
+    .replace(/^(remote|hybrid|on-site|onsite)\s*[-:]?\s*/u, "")
+    .replace(/\s*[-:]?\s*(remote|hybrid|on-site|onsite)$/u, "")
+    .trim()).filter(Boolean);
 }
 
 function countryLocation(location, market) {
   const target = MARKET_LOCATIONS[market];
   if (!target) return false;
-  const parts = locationParts(location);
-  const targetCountry = target.names.some(name => containsWord(location, [name]));
-  const foreignCountry = OTHER_COUNTRIES.filter(name => !target.names.includes(name)).some(name => parts.includes(name) || containsWord(location, [name]));
-  if (foreignCountry && !targetCountry) return false;
-  if (targetCountry) return !foreignCountry;
-  return !foreignCountry && parts.some(part => target.cities.includes(part));
+  const targetCodes = new Set((COUNTRY_CODES[market] ?? []).map(code => code.toLowerCase()));
+  return locationGroups(location).some(group => {
+    const normalizedGroup = normalized(group);
+    const parts = locationParts(group);
+    const matchedTargets = target.names.filter(name => containsWord(normalizedGroup, [name]));
+    const targetCountry = matchedTargets.length > 0;
+    const foreignCountry = OTHER_COUNTRIES
+      .map(normalized)
+      .filter(name => !target.names.includes(name) && !ISO_COUNTRY_CODES.has(name))
+      .some(name => {
+        if (matchedTargets.some(targetName => targetName.includes(name))) return false;
+        return parts.includes(name) || containsWord(normalizedGroup, [name]);
+      }) || parts.some(part => ISO_COUNTRY_CODES.has(part) && !targetCodes.has(part));
+    if (foreignCountry) return false;
+    return targetCountry || parts.some(part => target.cities.includes(part));
+  });
+}
+
+/** Infer only the one local market whose city/country signals are unambiguous.
+ *  Explicit selections always win; mixed or remote locations stay uninferred.
+ *  @param {unknown} selected @param {unknown} locations @returns {MarketId[]} */
+export function inferMarketsFromLocations(selected, locations) {
+  const markets = cleanMarkets(selected);
+  if (markets.length) return markets;
+  const requested = cleanChips(locations);
+  if (!requested.length) return [];
+  const groups = requested.flatMap(locationGroups);
+  return groups.length && groups.every(group => countryLocation(group, "portugal")) ? ["portugal"] : [];
 }
 
 /** Geographic policies are alternatives. A remote source proves remote work,

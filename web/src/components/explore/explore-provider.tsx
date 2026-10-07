@@ -65,7 +65,7 @@ type ExploreCtx = {
   addToPipeline: (offers: DiscoveredOffer[]) => Promise<number>;
   applyPatch: (raw: Record<string, unknown>, opts?: { merge?: boolean; run?: boolean }) => void;
   reset: () => void;
-  // ── AI search (modes/discover.md) ──
+  // ── AI search (modes/web-search.md) ──
   mode: ExploreMode;
   setMode: (m: ExploreMode) => void;
   aiIntent: string;
@@ -427,7 +427,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // AI search — orchestrate modes/discover.md via the user's CLI, streamed.
+  // AI search — orchestrate modes/web-search.md via the user's CLI, streamed.
   const discoverAI = useCallback(async () => {
     if (runningRef.current) return;
     const intent = aiIntentRef.current.trim();

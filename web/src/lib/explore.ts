@@ -4,7 +4,7 @@
 // can never drift between the two halves. Server-only logic (spawning the scanner,
 // writing temp files) lives in lib/core/{scan,portals,pipeline}.ts.
 
-import { cleanMarkets, encodeMarkets, decodeMarkets } from "./market-presets.mjs";
+import { cleanMarkets, encodeMarkets, decodeMarkets, inferMarketsFromLocations } from "./market-presets.mjs";
 export type MarketId = "portugal" | "spain" | "united-kingdom" | "switzerland" | "luxembourg" | "netherlands" | "europe" | "remote";
 export { MARKET_IDS } from "./market-presets.mjs";
 
@@ -72,7 +72,7 @@ export type DiscoveredOffer = {
    *  writer (scan.mjs formatPipelineOffer). Generic and source-agnostic — an
    *  importer can attach a note; the deterministic scan omits it. */
   note?: string;
-  // ── AI-search (modes/discover.md) additions — all optional, so the
+  // ── AI-search (modes/web-search.md) additions — all optional, so the
   //    deterministic scan offer is unaffected (fields simply absent). ──
   /** present ONLY on AI offers → drives the "unverified" badge. AI finds can't be
    *  liveness-confirmed (AGENTS.md); the scan hits a live ATS API so it omits this. */
@@ -170,6 +170,7 @@ export function parseExplorePatch(
   if (raw.limitPerAts !== undefined) next.limitPerAts = clampNum(raw.limitPerAts, 50, 500, base.limitPerAts);
   if (raw.ats !== undefined) next.ats = cleanAts(raw.ats);
   if (raw.markets !== undefined) next.markets = cleanMarkets(merge ? [...next.markets, ...cleanMarkets(raw.markets)] : raw.markets);
+  else if (raw.allow !== undefined) next.markets = inferMarketsFromLocations(next.markets, next.allow);
   return next;
 }
 
@@ -186,6 +187,7 @@ export function filtersToParams(f: ExploreFilters): string {
   if (f.ats.length !== ATS_SOURCES.length) sp.set("ats", f.ats.join(","));
   const markets = encodeMarkets(f.markets);
   if (markets) sp.set("markets", markets);
+  else if (inferMarketsFromLocations([], f.allow).length) sp.set("markets", "");
   if (f.limitPerAts !== DEFAULT_FILTERS.limitPerAts) sp.set("limit", String(f.limitPerAts));
   return sp.toString();
 }

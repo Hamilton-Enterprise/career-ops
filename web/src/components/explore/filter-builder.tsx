@@ -5,6 +5,7 @@ import { X, Ban, Clock, MapPin, ChevronDown, SlidersHorizontal } from "lucide-re
 import { cn } from "@/lib/cn";
 import { ATS_LABEL, ATS_SOURCES, MARKET_IDS, cleanChips, type AtsSource, type MarketId, type ExploreFilters } from "@/lib/explore";
 import { MARKET_LABEL } from "@/lib/explore-state.mjs";
+import { inferMarketsFromLocations } from "@/lib/market-presets.mjs";
 
 const RECENCY = [
   { label: "24h", days: 1 },
@@ -113,6 +114,7 @@ export function FilterBuilder({
   seededFrom?: string[];
 }) {
   const [advanced, setAdvanced] = useState(false);
+  const inferredPortugal = filters.markets.includes("portugal") && inferMarketsFromLocations([], filters.allow).includes("portugal");
   const set = (patch: Partial<ExploreFilters>) => onChange({ ...filters, ...patch });
   const toggleAts = (a: AtsSource) => {
     const has = filters.ats.includes(a);
@@ -216,6 +218,11 @@ export function FilterBuilder({
             );
           })}
         </div>
+        {inferredPortugal && (
+          <p className="mt-1.5 text-[11px] text-faint">
+            Incluímos Portugal a partir da localização para consultar também fontes deste mercado. Clica em Portugal para o retirar.
+          </p>
+        )}
       </div>
 
       <button

@@ -6,6 +6,7 @@ import * as yaml from "js-yaml";
 import { careerOpsRoot } from "@/lib/career-ops";
 import { DEFAULT_FILTERS, cleanChips, type ExploreFilters } from "@/lib/explore";
 import { profileTargetKeywords } from "@/lib/profile-keywords.mjs";
+import { inferMarketsFromLocations } from "@/lib/market-presets.mjs";
 import { resolveScanTimeoutMs } from "./scan-timeout.mjs";
 
 /**
@@ -102,6 +103,8 @@ export function seedExploreFilters(): { filters: ExploreFilters; seededFrom: str
       seededFrom.push("profile.yml");
     }
   }
+
+  filters.markets = inferMarketsFromLocations(filters.markets, filters.allow);
 
   return { filters, seededFrom };
 }
