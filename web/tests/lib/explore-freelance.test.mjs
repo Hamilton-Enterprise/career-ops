@@ -22,12 +22,19 @@ test("freelance shortcuts add useful editable title terms without replacing exis
   assert.deepEqual(Object.keys(freelancePresets.FREELANCE_SHORTCUTS ?? {}), [
     "Websites", "Aplicações", "Chatbots", "Automação", "IA",
   ]);
+  assert.deepEqual(freelancePresets.FREELANCE_SHORTCUTS, {
+    Websites: ["web developer", "frontend", "full stack"],
+    Aplicações: ["mobile developer", "flutter", "iOS developer", "Android developer"],
+    Chatbots: ["chatbot", "conversational AI", "AI agent", "LLM"],
+    Automação: ["automation engineer", "QA automation", "workflow automation", "n8n"],
+    IA: ["AI engineer", "machine learning", "generative AI", "LLM"],
+  });
   assert.deepEqual(
     freelancePresets.applyFreelanceShortcut(["Product Designer"], "Websites"),
-    ["Product Designer", "website", "web design", "landing page"],
+    ["Product Designer", "web developer", "frontend", "full stack"],
   );
   assert.deepEqual(
-    freelancePresets.applyFreelanceShortcut(["AI", "chatbot"], "Chatbots"),
-    ["AI", "chatbot", "conversational AI"],
+    freelancePresets.applyFreelanceShortcut(["LLM", "chatbot"], "Chatbots"),
+    ["LLM", "chatbot", "conversational AI", "AI agent"],
   );
 });

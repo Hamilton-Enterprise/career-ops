@@ -1,11 +1,11 @@
 import { cleanChips } from "./clean-chips.mjs";
 
 export const FREELANCE_SHORTCUTS = {
-  Websites: ["website", "web design", "landing page"],
-  Aplicações: ["application", "app development", "mobile app"],
-  Chatbots: ["chatbot", "conversational AI"],
-  Automação: ["automation", "workflow automation"],
-  IA: ["AI", "artificial intelligence", "generative AI"],
+  Websites: ["web developer", "frontend", "full stack"],
+  Aplicações: ["mobile developer", "flutter", "iOS developer", "Android developer"],
+  Chatbots: ["chatbot", "conversational AI", "AI agent", "LLM"],
+  Automação: ["automation engineer", "QA automation", "workflow automation", "n8n"],
+  IA: ["AI engineer", "machine learning", "generative AI", "LLM"],
 };
 
 /** Add a shortcut's terms to the existing editable title chips. */
