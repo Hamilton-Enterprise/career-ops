@@ -77,6 +77,44 @@ test("Cursor Ask mode is verified as read-only", () => {
   );
 });
 
+const geminiArgv = (prompt = "PROMPT") => ["-p", prompt, "--approval-mode", "plan", "--skip-trust", "--output-format", "text"];
+
+test("Gemini web search verifies headless plan mode without altering the prompt", () => {
+  const original = geminiArgv("query mentioning --yolo and --approval-mode auto_edit");
+  assert.deepEqual(fenceArgs({ cliId: "gemini", args: original, capabilities: CAPS.webSearchOnly }).args, original);
+  assert.equal(fencingReport({ cliId: "gemini", cliName: "Gemini CLI", capabilities: CAPS.webSearchOnly }).level, "full");
+});
+
+test("Gemini refuses missing plan mode, workspace trust fallback and write-enabling flags", () => {
+  for (const args of [
+    ["-p", "PROMPT"],
+    ["-p", "PROMPT", "--approval-mode", "plan"],
+    ["-p", "PROMPT", "--approval-mode", "yolo", "--skip-trust"],
+    ["-p", "PROMPT", "--approval-mode", "auto_edit", "--skip-trust"],
+    [...geminiArgv(), "--yolo"],
+    [...geminiArgv(), "-y"],
+    [...geminiArgv(), "--yolo=true"],
+    [...geminiArgv(), "--approval-mode=auto_edit"],
+    [...geminiArgv(), "--approval-mode", "yolo"],
+    [...geminiArgv(), "--skip-trust=false"],
+    [...geminiArgv(), "--skip-trust"],
+    ["-p", "PROMPT", "--", "--approval-mode", "plan", "--skip-trust"],
+    geminiArgv("--yolo"),
+    [...geminiArgv(), "--allowed-tools", "run_shell_command"],
+    [...geminiArgv(), "-ytrue"],
+    ["--approval-mode", "plan", "--skip-trust"],
+  ]) {
+    assert.throws(() => fenceArgs({ cliId: "gemini", args, capabilities: CAPS.webSearchOnly }), /Gemini/);
+  }
+});
+
+test("Gemini refuses every capability except webSearchOnly and reports those as unfenced", () => {
+  for (const capabilities of [CAPS.localReadOnly, CAPS.networkReadOnly, CAPS.workspaceWrite, { writes: true, network: "search" }, { network: "search" }]) {
+    assert.throws(() => fenceArgs({ cliId: "gemini", args: geminiArgv(), capabilities }), /Gemini/);
+    assert.equal(fencingReport({ cliId: "gemini", cliName: "Gemini CLI", capabilities }).level, "none");
+  }
+});
+
 test("a local read-only worker gets a true read-only sandbox", () => {
   // Given a worker that reads local files and never fetches (pdf, cv/ingest,
   // apply/prefill, the drive planner)
@@ -364,7 +402,7 @@ test("claude is fenced by its own tool flags, so its argv passes through", () =>
 
 test("a CLI with no verified mechanism is passed through and reported honestly", () => {
   // Given the runtimes nobody has been able to verify a fencing mechanism for
-  for (const cliId of ["gemini", "opencode", "copilot", "qwen", "antigravity", "grok"]) {
+  for (const cliId of ["opencode", "copilot", "qwen", "antigravity", "grok"]) {
     const original = ["-p", "PROMPT"];
     const { args } = fenceArgs({ cliId, args: original, capabilities: CAPS.workspaceWrite });
 

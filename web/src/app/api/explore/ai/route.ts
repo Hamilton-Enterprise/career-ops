@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from "@/lib/clis";
-import { careerOpsRoot, readMemory } from "@/lib/career-ops";
+import { readMemory } from "@/lib/career-ops";
 import { assembleDedupContext } from "@/lib/core/discover";
 import { CAPS } from "@/lib/worker-capabilities.mjs";
 import { scopeFrom } from "@/lib/claude-invocation.mjs";
@@ -74,27 +74,21 @@ export async function POST(req: Request) {
   }
 
   // The complete mode, memory and dedup context are embedded in `prompt`.
-  // Codex runs in an empty temporary cwd and writes only its final assistant
+  // Every agent runs in a temporary cwd. Codex writes its final assistant
   // response to a dedicated file. Its normal console transcript includes the
   // full prompt and must never be forwarded to the Web UI.
   let childCwd: string;
 
-  if (isCodex) {
-    try {
-      childCwd = fs.mkdtempSync(
-        path.join(os.tmpdir(), "career-ops-codex-"),
-      );
-    } catch {
-      return Response.json(
-        {
-          code: "CODEX_TEMP_DIR_FAILED",
-          error: "A pesquisa com IA não conseguiu criar um espaço isolado para o Codex.",
-        },
-        { status: 400 },
-      );
-    }
-  } else {
-    childCwd = careerOpsRoot();
+  try {
+    childCwd = fs.mkdtempSync(path.join(os.tmpdir(), `career-ops-${cliId}-`));
+  } catch {
+    return Response.json(
+      {
+        code: "CLI_TEMP_DIR_FAILED",
+        error: `A pesquisa com IA não conseguiu criar um espaço isolado para ${spec.name}.`,
+      },
+      { status: 400 },
+    );
   }
 
   const codexResultFile = isCodex
@@ -133,18 +127,17 @@ export async function POST(req: Request) {
           codexResultFile!,
           prompt,
         ]
-      : spec.args(prompt);
+      : cliId === "gemini"
+        ? ["-p", prompt, "--approval-mode", "plan", "--skip-trust", "--output-format", "text"]
+        : spec.args(prompt);
 
-  // POSIX detached children become process-group leaders. Keeping stdio
-  // piped means Node still tracks the Codex process normally.
-  const useCodexProcessGroup =
-    isCodex && process.platform !== "win32";
+  // POSIX process groups let cancellation/timeout terminate descendants too.
+  const useProcessGroup = process.platform !== "win32";
 
   // Declared BEFORE the spawn: fencing can refuse the argv, and the temporary
   // workspace already exists by then. Without this the refusal path would leak
   // one directory per rejected request.
   const cleanupChildCwd = () => {
-    if (!isCodex) return;
     try {
       fs.rmSync(childCwd, { recursive: true, force: true });
     } catch {
@@ -161,10 +154,16 @@ export async function POST(req: Request) {
   // and it still gets WebFetch (see ADVISOR_SCOPE).
   let child;
   try {
+    let childEnv = process.env;
+    if (cliId === "gemini") {
+      const settingsPath = path.join(childCwd, "settings.json");
+      fs.writeFileSync(settingsPath, JSON.stringify({ hooksConfig: { enabled: false }, mcp: { allowed: [] } }));
+      childEnv = { ...process.env, GEMINI_CLI_SYSTEM_SETTINGS_PATH: settingsPath };
+    }
     child = spawnHeadlessCli(
       binPath,
       args,
-      { cwd: childCwd, env: process.env, detached: useCodexProcessGroup },
+      { cwd: childCwd, env: childEnv, detached: useProcessGroup },
       { cliId, capabilities: CAPS.webSearchOnly },
     );
   } catch (e) {
@@ -183,8 +182,9 @@ export async function POST(req: Request) {
   let killer: ReturnType<typeof setTimeout> | undefined;
   let forceKill: ReturnType<typeof setTimeout> | undefined;
 
-  const isCodexProcessGroupAlive = () => {
-    if (!useCodexProcessGroup || !child.pid) return false;
+  const isChildAlive = () => {
+    if (!useProcessGroup) return child.exitCode === null && child.signalCode === null;
+    if (!child.pid) return false;
 
     try {
       process.kill(-child.pid, 0);
@@ -202,14 +202,14 @@ export async function POST(req: Request) {
 
     // If the group leader exited but a descendant ignored SIGTERM, retain the
     // SIGKILL fallback until the remaining process group is gone.
-    if (forceKill && !isCodexProcessGroupAlive()) {
+    if (forceKill && !isChildAlive()) {
       clearTimeout(forceKill);
       forceKill = undefined;
     }
   };
 
   const signalChild = (signal: NodeJS.Signals): boolean => {
-    if (useCodexProcessGroup && child.pid) {
+    if (useProcessGroup && child.pid) {
       try {
         process.kill(-child.pid, signal);
         return true;
@@ -228,7 +228,7 @@ export async function POST(req: Request) {
   const terminateChild = () => {
     const termSent = signalChild("SIGTERM");
 
-    if (!isCodex || !termSent || forceKill) return;
+    if (!termSent || forceKill) return;
 
     forceKill = setTimeout(() => {
       signalChild("SIGKILL");
@@ -245,6 +245,9 @@ export async function POST(req: Request) {
       let codexStderr = "";
       killer = setTimeout(() => {
         terminateChild();
+        cleanupChildCwd();
+        safeEnqueue(`\n[${spec.name}: a pesquisa excedeu o tempo limite]\n`);
+        safeClose();
       }, 480_000);
       const safeClose = () => {
         if (!closed) {
@@ -268,7 +271,7 @@ export async function POST(req: Request) {
         }
       };
       const emit = (s: string) => {
-        if (safeEnqueue(s)) emitted = true;
+        if (safeEnqueue(s) && s.trim()) emitted = true;
       };
       // Same honesty as /api/run: a runtime with no verified fencing mechanism
       // runs with its default access, and that must be visible rather than
@@ -319,13 +322,10 @@ export async function POST(req: Request) {
           return;
         }
 
-        if (/error|not found|denied|fatal/i.test(s)) {
-          safeEnqueue(`\n[${spec.name}] ${s.trim()}\n`);
-        }
+        // Drain every CLI's stderr without forwarding prompt/secret-bearing text.
       });
-      child.on("error", (e) => {
-        safeEnqueue(`
-[error launching ${spec.name}: ${e.message}]`);
+      child.on("error", () => {
+        safeEnqueue(`\n[Não foi possível iniciar ${spec.name}.]\n`);
         cleanupChildCwd();
         safeClose();
       });
@@ -393,7 +393,9 @@ export async function POST(req: Request) {
           return;
         }
 
-        if (!emitted) safeEnqueue("_(o agente não devolveu conteúdo; confirma se tem sessão iniciada)_");
+        if (code !== 0 && !emitted) safeEnqueue(`\n[${spec.name} terminou com o código ${code ?? "desconhecido"}]\n`);
+        else if (!emitted) safeEnqueue("_(o agente não devolveu conteúdo; confirma se tem sessão iniciada)_");
+        cleanupChildCwd();
         safeClose();
       });
     },
@@ -406,6 +408,7 @@ export async function POST(req: Request) {
       }
 
       terminateChild();
+      cleanupChildCwd();
     },
   });
 

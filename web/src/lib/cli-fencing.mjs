@@ -330,6 +330,31 @@ function verifyCursorArgs(args, capabilities) {
   return args;
 }
 
+function verifyGeminiArgs(args, capabilities) {
+  if (capabilities.writes !== false || capabilities.network !== "search") {
+    throw new Error("cli-fencing: Gemini is verified only for non-writing web search.");
+  }
+  const prompt = args.indexOf("-p");
+  // Prompt text is data, including when it happens to name a permission flag.
+  const options = args.filter((_, index) => index !== prompt + 1);
+  const approvals = options.filter((arg) => arg.split("=")[0] === "--approval-mode");
+  const mode = options.indexOf("--approval-mode");
+  if (
+    prompt === -1 || !args[prompt + 1] || args[prompt + 1].startsWith("-") ||
+    options.filter((arg) => arg === "-p").length !== 1 ||
+    approvals.length !== 1 || mode === -1 || options[mode + 1] !== "plan" ||
+    options.filter((arg) => arg === "--skip-trust").length !== 1
+  ) {
+    throw new Error("cli-fencing: Gemini web search requires headless plan mode and --skip-trust.");
+  }
+  // Only this route's verified switches are accepted: aliases, duplicates and
+  // option terminators must not silently override plan mode or workspace trust.
+  if (options.some((arg) => arg.startsWith("-") && !["-p", "--approval-mode", "--skip-trust", "--output-format"].includes(arg))) {
+    throw new Error("cli-fencing: Gemini plan mode cannot carry unverified or write-enabling flags.");
+  }
+  return args;
+}
+
 /**
  * Per-CLI fencing. The single table: a CLI is fenceable iff it appears here.
  *
@@ -337,13 +362,13 @@ function verifyCursorArgs(args, capabilities) {
  * mechanism on a machine that has them, not because none exists. Grok postdates
  * #2507 and has not been looked at at all — which is why no count is written here,
  * the previous version of this comment having said "five" while six runtimes were
- * unfenced. #2507 records the leads for whoever picks this up: gemini and qwen
- * appear to expose
+ * unfenced. #2507 records the leads for whoever picks this up: qwen exposes
  * `--approval-mode` plus a container `--sandbox` (needs Docker/Podman), copilot
  * `--allow-tool`/`--deny-tool`, opencode a config-file `permission` block, and
  * antigravity has no public documentation found. Each needs probing on a box that
  * has it — the issue is explicit that an unverifiable claim must warn rather than
- * assert enforcement.
+ * assert enforcement. Gemini is verified only for the isolated plan-mode web
+ * search invocation; other worker capabilities are refused.
  *
  * @type {Record<string, (args: string[], capabilities: import("./worker-capabilities.mjs").Capabilities) => string[]>}
  */
@@ -351,6 +376,7 @@ const FENCERS = Object.freeze({
   claude: verifyClaudeArgs,
   codex: fenceCodexArgs,
   cursor: verifyCursorArgs,
+  gemini: verifyGeminiArgs,
 });
 
 /**
@@ -376,6 +402,12 @@ const FENCERS = Object.freeze({
  * @returns {FencingReport}
  */
 export function fencingReport({ cliId, cliName, capabilities }) {
+  if (cliId === "gemini" && (capabilities.writes !== false || capabilities.network !== "search")) {
+    return {
+      level: "none",
+      notice: `${cliName} ${UNFENCED_MARKER} outside isolated web search`,
+    };
+  }
   if (cliId === "cursor" && capabilities.writes) {
     return {
       level: "none",
