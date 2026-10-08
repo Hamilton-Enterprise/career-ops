@@ -30,6 +30,55 @@ func dataRootConflictsWithRuntime(_ dataRoot: URL, _ runtime: URL) -> Bool {
     return data == code || data.hasPrefix(code + "/") || code.hasPrefix(data + "/")
 }
 
+let installPathPreferenceKeys = [
+    "CareerOpsCheckoutPath", "CareerOpsNodePath", "CareerOpsDataRootPath", "CareerOpsRuntimePath",
+]
+
+/// One UserDefaults suite per .app path so a temp candidate cannot inherit the
+/// live install's CAREER_OPS_ROOT (same bundle id, shared `UserDefaults.standard`).
+func installPreferencesSuiteName(bundlePath: String) -> String {
+    let path = URL(fileURLWithPath: bundlePath).resolvingSymlinksInPath().path
+    let digest = SHA256.hash(data: Data(path.utf8)).map { String(format: "%02x", $0) }.joined()
+    return "io.career-ops.local.install." + digest
+}
+
+func primaryInstallBundleURL(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
+    home.appendingPathComponent("Applications/Career Ops.app")
+}
+
+/// Seed path keys from this bundle's Defaults.plist. Migrate legacy
+/// `UserDefaults.standard` only for the primary ~/Applications install — never
+/// for a side-by-side candidate, which must keep its baked --data-root.
+func loadInstallPreferences(
+    bundleURL: URL,
+    bundledDefaults: [String: Any]?,
+    standard: UserDefaults = .standard,
+    home: URL = FileManager.default.homeDirectoryForCurrentUser
+) -> UserDefaults {
+    let bundlePath = bundleURL.resolvingSymlinksInPath().path
+    let suite = UserDefaults(suiteName: installPreferencesSuiteName(bundlePath: bundlePath)) ?? standard
+    let virgin = installPathPreferenceKeys.allSatisfy { suite.object(forKey: $0) == nil }
+    guard virgin else { return suite }
+    if let bundledDefaults {
+        for (key, value) in bundledDefaults { suite.set(value, forKey: key) }
+    }
+    let primary = primaryInstallBundleURL(home: home).resolvingSymlinksInPath().path
+    if bundlePath == primary, suite.bool(forKey: "CareerOpsLegacyPathsMigrated") == false {
+        for key in installPathPreferenceKeys {
+            if let value = standard.string(forKey: key), !value.isEmpty {
+                suite.set(value, forKey: key)
+            }
+        }
+        suite.set(true, forKey: "CareerOpsLegacyPathsMigrated")
+    }
+    return suite
+}
+
+func isSameAppInstall(_ a: URL?, _ b: URL?) -> Bool {
+    guard let a, let b else { return false }
+    return a.resolvingSymlinksInPath().path == b.resolvingSymlinksInPath().path
+}
+
 func runtimeArtifactProblem(_ runtime: URL, buildSHA: String?) -> String? {
     let files = FileManager.default
     guard let buildSHA, !buildSHA.isEmpty else { return "esta aplicação não tem o commit da compilação." }
