@@ -1,7 +1,7 @@
 import { cleanChips } from "./clean-chips.mjs";
 import { normalizeTextKey } from "./core/normalize-text-key.mjs";
 import { OCCUPATION_CONCEPTS } from "./occupation-concepts.mjs";
-import { AND_SEPARATOR, STEM_PREFIX, WORD_PREFIX, buildTitleFilter } from "../../../title-keywords.mjs";
+import { AND_SEPARATOR, STEM_PREFIX, WORD_PREFIX, buildTitleFilter } from "./title-keywords.mjs";
 
 // Same accent folding and Unicode word semantics as market-presets.mjs.
 function normalized(value) {

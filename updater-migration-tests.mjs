@@ -278,6 +278,8 @@ for (const [listName, entries] of [['SYSTEM_PATHS', systemPaths], ['BOOTSTRAP_PA
 }
 
 const requiredSystemPaths = [
+  'title-keywords.mjs',
+  'web/src/lib/title-keywords.mjs',
   'modes/email.md',
   'modes/followup.md',
   'modes/interview.md',
