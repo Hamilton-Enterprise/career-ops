@@ -5,7 +5,7 @@ import path from "node:path";
 import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback, type CliResolution } from "@/lib/clis";
 import { careerOpsRoot } from "@/lib/career-ops";
 import { CAPS } from "@/lib/worker-capabilities.mjs";
-import { scopeFrom } from "@/lib/claude-invocation.mjs";
+import { CLAUDE_READ_ONLY_ISOLATION, scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
 
 // Deny list DERIVED, never hand-written: every one of the six advisor argvs
@@ -129,7 +129,7 @@ export async function POST(req: Request) {
         "--permission-mode",
         "acceptEdits",
         // Required for a non-writing worker — see cli-fencing.mjs (#2507).
-        "--strict-mcp-config",
+        ...CLAUDE_READ_ONLY_ISOLATION,
         "--allowedTools",
         ADVISOR_SCOPE.allowed,
         "--disallowedTools",

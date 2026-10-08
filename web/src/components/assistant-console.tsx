@@ -20,7 +20,7 @@ import { pendingActOpenerStart } from "@/lib/act-envelope.mjs";
 import { cleanMessages } from "@/lib/assistant-history.mjs";
 import { cn } from "@/lib/cn";
 import { persistCliId, pickDefaultInstalled, readSavedCliId } from "@/lib/saved-cli";
-import { keepIfInstalled } from "@/lib/cli-pick.mjs";
+import { actionBlockReason, keepIfInstalled } from "@/lib/cli-pick.mjs";
 
 // ── message model: messages are PART arrays so a live worker card can render
 // inline next to text, both fed by the single JobsProvider store ──────────────
@@ -31,7 +31,7 @@ type Part =
   | { type: "batch"; batchId: string; jobIds: string[] }
   | { type: "confirm"; cid: string; summary: string; state: "pending" | "done" | "cancelled" };
 type Msg = { role: "user" | "assistant"; parts: Part[] };
-type AssistantCli = { id: string; name: string; installed: boolean };
+type AssistantCli = { id: string; name: string; installed: boolean; actions?: { id: string; available: boolean; reason: string | null }[] };
 
 const CHAT_KEY = "career-ops:chat";
 const SIZE_KEY = "career-ops:assistant-size";
@@ -232,6 +232,8 @@ export function AssistantConsole() {
     window.addEventListener("storage", read);
     return () => window.removeEventListener("storage", read);
   }, []);
+
+  const assistantBlocked = cliId ? actionBlockReason(availableClis, cliId, "assistant") : null;
 
   function chooseCli(next: string) {
     if (!availableClis.some((cli) => cli.id === next)) return;
@@ -559,7 +561,7 @@ export function AssistantConsole() {
 
   async function send(forced?: string) {
     const text = (forced ?? input).trim();
-    if (!text || busy || !cliId || !chatReady || chatPending) return;
+    if (!text || busy || !cliId || assistantBlocked || !chatReady || chatPending) return;
     if (forced === undefined) setInput("");
     const history = messages.filter((m) => msgText(m) && msgText(m) !== GREETING).map((m) => ({ role: m.role, content: msgText(m) }));
     const next: Msg[] = [...messages, { role: "user", parts: [{ type: "text", text }] }, { role: "assistant", parts: [{ type: "text", text: "" }] }];
@@ -714,7 +716,10 @@ export function AssistantConsole() {
                   disabled={busy}
                   className="max-w-44 bg-transparent text-xs text-faint outline-none"
                 >
-                  {availableClis.map((cli) => <option key={cli.id} value={cli.id}>{cli.name}</option>)}
+                  {availableClis.map((cli) => {
+                    const blocked = !!actionBlockReason(availableClis, cli.id, "assistant");
+                    return <option key={cli.id} value={cli.id} disabled={blocked}>{blocked ? `${cli.name} (indisponível)` : cli.name}</option>;
+                  })}
                 </select>
               ) : (
                 <div className="text-xs text-faint">Sem agente configurado</div>
@@ -801,6 +806,15 @@ export function AssistantConsole() {
               <Settings className="size-3.5" /> Escolhe um agente em Configuração para usar o assistente
             </Link>
           )}
+          {assistantBlocked && (
+            <Link
+              href="/config"
+              onClick={() => setOpen(false)}
+              className="mx-4 mb-2 flex items-center gap-2 rounded-lg border border-border bg-surface/50 px-3 py-2 text-xs text-muted transition-colors hover:bg-surface-hover hover:text-foreground"
+            >
+              <Settings className="size-3.5 shrink-0" /> {assistantBlocked} Escolhe outro agente em Configuração.
+            </Link>
+          )}
 
           <div className="border-t border-border p-3">
             <div className="flex items-end gap-2">
@@ -816,13 +830,13 @@ export function AssistantConsole() {
                 }}
                 placeholder={cliId ? "Escreve uma mensagem…" : "Escolhe primeiro um agente"}
                 rows={1}
-                disabled={!cliId}
+                disabled={!cliId || !!assistantBlocked}
                 style={{ maxHeight: INPUT_MAX_PX[size] }}
                 className="flex-1 resize-none rounded-xl border border-border bg-surface/60 px-3 py-2 text-sm outline-none transition-colors placeholder:text-faint focus:border-brand/50 disabled:opacity-50"
               />
               <button
                 onClick={() => send()}
-                disabled={busy || chatPending || !chatReady || !input.trim() || !cliId}
+                disabled={busy || chatPending || !chatReady || !input.trim() || !cliId || !!assistantBlocked}
                 className="rounded-xl bg-brand p-2 text-brand-foreground transition-colors hover:bg-brand-200 disabled:opacity-40"
                 aria-label="Enviar"
               >

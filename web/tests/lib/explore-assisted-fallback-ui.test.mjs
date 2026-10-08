@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { loadBindings, transform } from "next/dist/build/swc/index.js";
 import * as explore from "../../src/lib/explore.ts";
 import * as discoveryState from "../../src/lib/explore-state.mjs";
+import * as cliPick from "../../src/lib/cli-pick.mjs";
 import { normalizeTextKey } from "../../src/lib/core/normalize-text-key.mjs";
 
 await loadBindings();
@@ -37,7 +38,7 @@ let context;
 const { ExplorerView } = await loadComponent("explorer-view.tsx", {
   "next/link": { default: placeholder }, "@/lib/cn": { cn: (...values) => values.filter(Boolean).join(" ") },
   "@/lib/fonts": { instrumentSerif: { className: "serif" } }, "@/lib/core/normalize-text-key.mjs": { normalizeTextKey },
-  "@/lib/explore": explore, "@/lib/explore-state.mjs": discoveryState, "@/lib/pt-pt": { PT_PT_LOCALE: "pt-PT" },
+  "@/lib/explore": explore, "@/lib/explore-state.mjs": discoveryState, "@/lib/cli-pick.mjs": cliPick, "@/lib/pt-pt": { PT_PT_LOCALE: "pt-PT" },
   "./explore-provider": { useExplore: () => context }, "./ai-search-box": { AiSearchBox },
   "./filter-builder": { FilterBuilder: placeholder }, "./discovering-state": { DiscoveringState: placeholder },
   "./ai-hunt-view": { AiHuntView: placeholder }, "./explore-mode-toggle": { ExploreModeToggle: placeholder },
@@ -94,3 +95,23 @@ for (const phase of ["empty-current", "empty-loose", "degraded", "failed"]) {
     assert.deepEqual(calls.at(-1), ["discoverAI"]);
   });
 }
+
+const textOf = (node) =>
+  typeof node === "string" ? node : Array.isArray(node) ? node.map(textOf).join("") : node?.props ? textOf(node.props.children) : "";
+
+test("an agent that cannot run AI search is named with its reason and cannot submit", () => {
+  const reason = "Esta ação exige um agente com isolamento só de leitura verificado (Claude Code ou Codex); o Gemini CLI não o tem.";
+  let submitted = 0;
+  const props = { intent: "apoio ao cliente", onIntent() {}, onSubmit: () => submitted++, cliConfigured: true, cliName: "Gemini CLI", onRunScan() {} };
+  const tree = elements(AiSearchBox({ ...props, blockedReason: reason }));
+  const submit = tree.find((el) => el.type === "button" && textOf(el).includes("Pesquisar na web"));
+  assert.equal(submit.props.disabled, true);
+  assert.ok(textOf(tree).includes(reason), "the reason is shown before the run");
+  tree.find((el) => el.type === "textarea").props.onKeyDown({ key: "Enter", shiftKey: false, preventDefault() {} });
+  assert.equal(submitted, 0, "Enter does not bypass the disabled button");
+
+  // And an agent that can run it keeps the button enabled.
+  const open = elements(AiSearchBox({ ...props, cliName: "Codex" }))
+    .find((el) => el.type === "button" && textOf(el).includes("Pesquisar na web"));
+  assert.equal(open.props.disabled, false);
+});
