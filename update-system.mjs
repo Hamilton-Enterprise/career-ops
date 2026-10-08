@@ -420,7 +420,7 @@ const SYSTEM_PATHS = [
   'followup-seed.mjs',
   'profile-language.mjs',
   'title-keywords.mjs',
-  'web/src/lib/title-keywords.mjs',
+  'web/title-keywords.mjs',
   'gemini-eval.mjs',
   'ollama-eval.mjs',
   'openai-eval.mjs',
