@@ -6,12 +6,13 @@ checkout="$(cd "$script_dir/.." && pwd -P)"
 node_path="$(command -v node || true)"
 data_root=""
 destination="$HOME/Applications/Career Ops.app"
+previous_dir="$HOME/Developer/artifacts/career-ops/app-previous"
 test_only=false
-usage() { printf '%s\n' 'Uso: build-app.sh [--test-only] [--checkout PATH] [--node PATH] [--data-root PATH] [--destination PATH]'; }
+usage() { printf '%s\n' 'Uso: build-app.sh [--test-only] [--checkout PATH] [--node PATH] [--data-root PATH] [--destination PATH] [--previous-dir PATH]'; }
 while (($#)); do
     case "$1" in
         --test-only) test_only=true; shift ;;
-        --checkout|--node|--data-root|--destination)
+        --checkout|--node|--data-root|--destination|--previous-dir)
             option="$1"
             if (($# < 2)) || [[ -z "$2" || "$2" == --* ]]; then usage >&2; exit 2; fi
             case "$option" in
@@ -19,6 +20,7 @@ while (($#)); do
                 --node) node_path="$2" ;;
                 --data-root) data_root="$2" ;;
                 --destination) destination="$2" ;;
+                --previous-dir) previous_dir="$2" ;;
             esac
             shift 2 ;;
         --help) usage; exit 0 ;;
@@ -27,8 +29,11 @@ while (($#)); do
 done
 mkdir -p "$script_dir/../work/macos-build"
 build_dir="$(mktemp -d "$script_dir/../work/macos-build/run.XXXXXX")"
+trap 'rm -rf -- "$build_dir"; rmdir -- "$script_dir/../work/macos-build" "$script_dir/../work" 2>/dev/null || true' EXIT
 swiftc -parse-as-library "$script_dir/CareerOpsCore.swift" "$script_dir/CareerOpsCoreTests.swift" -o "$build_dir/core-tests"
 "$build_dir/core-tests"
+"$script_dir/test-install.sh"
+"$script_dir/test-build-identity.sh"
 if "$test_only"; then exit 0; fi
 
 [[ -d "$checkout" ]] || { printf '%s\n' 'A pasta do projeto não existe.' >&2; exit 2; }
@@ -41,6 +46,7 @@ node_path="$(cd "$(dirname "$node_path")" && pwd -P)/$(basename "$node_path")"
 [[ -f "$checkout/web/server.mjs" && -f "$checkout/web/.next/BUILD_ID" ]] || {
     printf '%s\n' 'Falta o launcher ou a compilação web. Execute npm run build em web/.' >&2; exit 2;
 }
+"$script_dir/build-identity.sh" "$checkout" >/dev/null
 if [[ -n "$data_root" ]]; then
     [[ -d "$data_root" ]] || { printf '%s\n' 'A pasta de dados não existe.' >&2; exit 2; }
     data_root="$(cd "$data_root" && pwd -P)"
@@ -48,6 +54,7 @@ fi
 [[ "$destination" == /* && "$destination" == *.app && ! -L "$destination" ]] || {
     printf '%s\n' 'O destino deve ser um caminho absoluto terminado em .app, sem ligação simbólica.' >&2; exit 2;
 }
+[[ "$previous_dir" == /* ]] || { printf '%s\n' 'A pasta da versão anterior deve ser um caminho absoluto.' >&2; exit 2; }
 if [[ -e "$destination" ]]; then
     [[ -d "$destination" ]] && [[ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$destination/Contents/Info.plist" 2>/dev/null)" == io.career-ops.local ]] || {
         printf '%s\n' 'O destino já existe e não é a aplicação Career Ops.' >&2; exit 2;
@@ -57,6 +64,7 @@ bundle="$build_dir/Career Ops.app"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
 swiftc -parse-as-library -target "$(uname -m)-apple-macosx13.0" -O "$script_dir/CareerOpsCore.swift" "$script_dir/CareerOpsApp.swift" -framework AppKit -framework WebKit -o "$bundle/Contents/MacOS/CareerOps"
 cp "$script_dir/Info.plist" "$bundle/Contents/Info.plist"
+"$script_dir/build-identity.sh" "$checkout" "$bundle/Contents/Info.plist" >/dev/null
 defaults="$bundle/Contents/Resources/Defaults.plist"
 plutil -create xml1 "$defaults"
 plutil -insert CareerOpsCheckoutPath -string "$checkout" "$defaults"
@@ -75,7 +83,4 @@ iconutil -c icns "$iconset" -o "$bundle/Contents/Resources/CareerOps.icns"
 codesign --force --sign - "$bundle"
 codesign --verify --deep --strict "$bundle"
 plutil -lint "$bundle/Contents/Info.plist"
-mkdir -p "$(dirname "$destination")"
-if [[ -e "$destination" ]]; then mv "$destination" "$build_dir/Previous Career Ops.app"; fi
-cp -R "$bundle" "$destination"
-printf 'Aplicação instalada: %s\n' "$destination"
+"$script_dir/install-bundle.sh" "$bundle" "$destination" "$previous_dir"
