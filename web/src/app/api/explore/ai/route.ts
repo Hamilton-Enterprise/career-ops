@@ -7,7 +7,7 @@ import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from
 import { readMemory } from "@/lib/career-ops";
 import { assembleDedupContext } from "@/lib/core/discover";
 import { CAPS } from "@/lib/worker-capabilities.mjs";
-import { scopeFrom } from "@/lib/claude-invocation.mjs";
+import { CLAUDE_READ_ONLY_ISOLATION, scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
 import { codexFencingSupported } from "@/lib/cli-fencing-probe.mjs";
 import { canon, makeAiStreamParser } from "@/lib/explore-ai";
@@ -119,14 +119,7 @@ export async function POST(req: Request) {
         "--include-partial-messages",
         "--permission-mode",
         "acceptEdits",
-        // --strict-mcp-config with no --mcp-config loads ZERO MCP servers, so the
-        // tool lists here describe everything this agent can reach. Required for a
-        // non-writing worker: without it a user MCP server could supply a write tool
-        // the capability record forbids, and cli-fencing refuses to certify that (#2507).
-        "--strict-mcp-config",
-        // Per-session settings override user/project hooks without replacing HOME.
-        "--settings",
-        '{"disableAllHooks":true}',
+        ...CLAUDE_READ_ONLY_ISOLATION,
         "--allowedTools",
         ADVISOR_SCOPE.allowed,
         "--disallowedTools",
