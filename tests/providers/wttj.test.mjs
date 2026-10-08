@@ -255,6 +255,12 @@ try {
     fail(`wttj.fetch() Algolia headers = ${JSON.stringify(q1.opts.headers)}`);
   }
 
+  if (happy.jsonCalls.every((c) => c.opts.timeoutMs === 5000)) {
+    pass('wttj.fetch() bounds each Algolia request at 5 s so 12 queries x 3 pages fit the scan deadline');
+  } else {
+    fail(`wttj.fetch() Algolia timeoutMs = ${JSON.stringify(happy.jsonCalls.map((c) => c.opts.timeoutMs))}`);
+  }
+
   if (q1.hitsPerPage === '100' && happy.jsonCalls.map((c) => c.query).join(',') === 'finops,snowflake') {
     pass('wttj.fetch() defaults to 100 hits per query and passes each search term through');
   } else {
@@ -295,10 +301,42 @@ try {
 
   const budget = mkCtx(ENV_OK, boardOf(500));
   const budgetJobs = await wttj.fetch({ name: 'WTTJ', provider: 'wttj', wttj: { queries: ['x'], max_hits: 150 } }, budget.ctx);
-  if (budgetJobs.length === 150 && budget.jsonCalls.length === 2 && budgetJobs.wttjTruncated === 'structural') {
-    pass('wttj.fetch() stops at the max_hits budget and flags structural truncation when nbHits is larger');
+  if (
+    budgetJobs.length === 150 && budget.jsonCalls.length === 2 && budgetJobs.wttjTruncated === undefined &&
+    JSON.stringify(budgetJobs.wttjHitBudget) === JSON.stringify([{ query: 'x', read: 150, total: 500 }])
+  ) {
+    pass('wttj.fetch() stops at the max_hits budget and reports it as a known hit-budget limit, not truncation');
   } else {
-    fail(`wttj.fetch() budget 150 of 500 → ${budgetJobs.length} jobs, ${budget.jsonCalls.length} pages, truncated=${budgetJobs.wttjTruncated}`);
+    fail(`wttj.fetch() budget 150 of 500 → ${budgetJobs.length} jobs, ${budget.jsonCalls.length} pages, truncated=${budgetJobs.wttjTruncated}, hitBudget=${JSON.stringify(budgetJobs.wttjHitBudget)}`);
+  }
+
+  const incoherent = mkCtx(ENV_OK, (call) => ({ ...boardOf(300)(call), nbPages: 1 }));
+  const incoherentJobs = await wttj.fetch({ name: 'WTTJ', provider: 'wttj', wttj: { queries: ['x'], max_hits: 200 } }, incoherent.ctx);
+  if (incoherentJobs.length === 100 && incoherentJobs.wttjTruncated === 'structural' && incoherentJobs.wttjHitBudget === undefined) {
+    pass('wttj.fetch() flags structural truncation when nbPages ends before nbHits is read');
+  } else {
+    fail(`wttj.fetch() incoherent nbPages → ${incoherentJobs.length} jobs, truncated=${incoherentJobs.wttjTruncated}, hitBudget=${JSON.stringify(incoherentJobs.wttjHitBudget)}`);
+  }
+
+  const mixed = mkCtx(ENV_OK, (call) => {
+    if (call.query === 'b' && call.page === 1) throw new Error('fixture query b page 2 down');
+    return boardOf(450)(call);
+  });
+  const mixedWarn = console.error;
+  console.error = () => {};
+  let mixedJobs;
+  try {
+    mixedJobs = await wttj.fetch({ name: 'WTTJ', provider: 'wttj', wttj: { queries: ['a', 'b'], max_hits: 200 } }, mixed.ctx);
+  } finally {
+    console.error = mixedWarn;
+  }
+  if (
+    mixedJobs.wttjTruncated === 'transient' &&
+    JSON.stringify(mixedJobs.wttjHitBudget) === JSON.stringify([{ query: 'a', read: 200, total: 450 }])
+  ) {
+    pass('wttj.fetch() keeps a hit-budget term and a transient term apart');
+  } else {
+    fail(`wttj.fetch() mixed → truncated=${mixedJobs.wttjTruncated}, hitBudget=${JSON.stringify(mixedJobs.wttjHitBudget)}`);
   }
 
   const exact = mkCtx(ENV_OK, boardOf(150));

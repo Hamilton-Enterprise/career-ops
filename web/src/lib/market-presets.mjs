@@ -35,11 +35,15 @@ const REMOTE_BOARDS = [
   ["We Work Remotely", "weworkremotely"],
 ];
 
-/** @typedef {{ name: string, provider: string, enabled: boolean, careers_url?: string, api?: string, lang?: string, wttj?: { queries: string[], filters: string } }} MarketBoard */
+/** @typedef {{ name: string, provider: string, enabled: boolean, careers_url?: string, api?: string, lang?: string, wttj?: { queries: string[], filters: string, max_hits?: number } }} MarketBoard */
 
 // WTTJ runs one sequential Algolia request per query inside the scan timeout;
 // title matching still uses every term.
 export const WTTJ_QUERY_LIMIT = 12;
+// Hits read per query on the country-filtered board: 3 pages of 100. Worst
+// case is 1 env fetch (10 s) + 12 queries x 3 pages x 5 s Algolia timeout =
+// 190 s, inside the 230 s default scan deadline.
+export const WTTJ_MAX_HITS = 300;
 
 /** @typedef {{ source: string, reason: "missing-search-terms" } | { source: "wttj", reason: "query-limit", omitted: string[] }} SkippedSource */
 
@@ -115,7 +119,7 @@ export function buildMarketPlan(selected, terms, opportunityType = "employment",
   if (wttjCountries.size) {
     if (queries.length) {
       add({ name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: {
-        queries, filters: [...wttjCountries].map((code) => `offices.country_code:${code}`).join(" OR "),
+        queries, filters: [...wttjCountries].map((code) => `offices.country_code:${code}`).join(" OR "), max_hits: WTTJ_MAX_HITS,
       } });
       skippedSources.push(...queryLimit);
     } else skippedSources.push({ source: "wttj", reason: "missing-search-terms" });

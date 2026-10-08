@@ -56,6 +56,9 @@ const FILTERED_MAX_HITS_CAP = 1000;
 // The budget bounds the page count (at most 10 pages at the 1000 cap), so no
 // separate page cap is needed.
 const PAGE_SIZE = 100;
+// Algolia answers in well under a second; 5 s keeps the web plan's worst case
+// (12 queries x 3 pages) inside its 230 s scan deadline.
+const ALGOLIA_TIMEOUT_MS = 5_000;
 const FILTERS_MAX_LEN = 1000;
 
 /** Pin a URL to an expected https host. */
@@ -220,6 +223,8 @@ export default {
     let structural = false;
     let transient = false;
     let answered = false;
+    /** @type {{ query: string, read: number, total: number }[]} */
+    const hitBudget = [];
     for (const query of queries) {
       const params = new URLSearchParams({
         query,
@@ -245,6 +250,7 @@ export default {
             await ctx.fetchJson(url, {
               method: 'POST',
               redirect: 'error',
+              timeoutMs: ALGOLIA_TIMEOUT_MS,
               headers: {
                 'x-algolia-application-id': appId,
                 'x-algolia-api-key': apiKey,
@@ -291,6 +297,9 @@ export default {
         if (lastPage) break;
       }
       if (stop === 'error') transient = true;
+      // Every page up to the configured budget answered coherently: a known
+      // limit, not a fault.
+      else if (stop === 'budget' && nbHits !== null && nbHits > collected) hitBudget.push({ query, read: collected, total: nbHits });
       else if (stop !== 'probe' && nbHits !== null && nbHits > collected) structural = true;
       else if (stop === 'budget' && nbHits === null) structural = true;
     }
@@ -301,6 +310,8 @@ export default {
     // run reaches the same wall.
     if (structural) /** @type {any} */ (jobs).wttjTruncated = 'structural';
     else if (transient) /** @type {any} */ (jobs).wttjTruncated = 'transient';
+    // scan.mjs reports this in the receipt's `limits`, never in `errors`.
+    if (hitBudget.length) /** @type {any} */ (jobs).wttjHitBudget = hitBudget;
     return jobs;
   },
 };

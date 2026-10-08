@@ -138,15 +138,15 @@ test("a WTTJ query limit is partial coverage on the WTTJ source, not a separate 
   assert.equal(run.valid, true);
   const sources = Object.fromEntries(run.sources.map(({ source, ...state }) => [source, state]));
   assert.deepEqual(discoverySourceReasons(sources), ["Welcome to the Jungle: feitas 12 de 15 pesquisas; os restantes termos continuam a filtrar os títulos recebidos."]);
-  assert.equal(run.queryLimitedOnly, true);
-  assert.equal(run.sources[1].limit, "query-limit");
+  assert.equal(run.knownLimitsOnly, true);
+  assert.deepEqual(run.sources[1].limits, ["query-limit"]);
   const unverified = JSON.stringify({ ...JSON.parse(receipt([offer])), unverified_zero: ["Welcome to the Jungle"] });
   assert.deepEqual(parseMarketReceipt(unverified, 0, plan).sources[1], { source: "Welcome to the Jungle", state: "ok" });
   const failed = parseMarketReceipt(receipt([], [{ company: "Welcome to the Jungle", error: "timeout" }]), 2, plan);
   assert.deepEqual(failed.sources.find(s => s.source === "Welcome to the Jungle"), { source: "Welcome to the Jungle", state: "error", message: "timeout. Feitas 12 de 15 pesquisas; os restantes termos continuam a filtrar os títulos recebidos." });
-  assert.equal(failed.queryLimitedOnly, false);
+  assert.equal(failed.knownLimitsOnly, false);
   const unmatched = parseMarketReceipt(receipt([offer], [{ company: "Unknown board", error: "offline" }]), 0, plan);
-  assert.equal(unmatched.queryLimitedOnly, false);
+  assert.equal(unmatched.knownLimitsOnly, false);
 });
 
 test("an empty receipt with only skipped providers is not a healthy empty search", () => {
@@ -209,4 +209,22 @@ test("an incomplete-pagination source does not hide a real failure elsewhere", (
   const run = parseMarketReceipt(receipt([], [{ company: "Welcome to the Jungle", error: "wttj: incomplete pagination (structural)" }, { company: "Landing.jobs", error: "offline" }]), 2, plan);
   assert.deepEqual(run.sources.map(s => s.state), ["partial", "error"]);
   assert.equal(run.status, "partial");
+});
+
+test("a WTTJ hit budget is a known limit; pagination faults say what failed", () => {
+  const plan = { opportunityType: "employment", markets: ["portugal"], jobBoards: [{ name: "Welcome to the Jungle", provider: "wttj", enabled: true }], skippedSources: [], locationPolicy: { markets: ["portugal"], strict: true } };
+  const limit = { company: "Welcome to the Jungle", kind: "hit-budget", read: 300, total: 450, queries: 1 };
+  const withLimits = (errors, limits) => JSON.stringify({ ...JSON.parse(receipt([], errors)), limits });
+  const budget = parseMarketReceipt(withLimits([], [limit]), 0, plan);
+  assert.deepEqual(budget.sources[0], { source: "Welcome to the Jungle", state: "partial", limits: ["hit-budget"], message: "lidos os primeiros 300 de 450 resultados em 1 pesquisa." });
+  assert.equal(budget.knownLimitsOnly, true);
+  assert.equal(budget.valid, true);
+  for (const bad of [{ ...limit, kind: "other" }, { ...limit, read: 0 }, { ...limit, total: "450" }, { ...limit, company: "Unknown" }]) {
+    assert.equal(parseMarketReceipt(withLimits([], [bad]), 0, plan).sources[0].state, "ok", JSON.stringify(bad));
+  }
+  const transient = parseMarketReceipt(withLimits([{ company: "Welcome to the Jungle", error: "wttj: incomplete pagination (transient)" }], []), 2, plan);
+  assert.equal(transient.sources[0].message, "Uma ou mais pesquisas desta fonte falharam antes do fim; a cobertura ficou incompleta.");
+  const structural = parseMarketReceipt(withLimits([{ company: "Welcome to the Jungle", error: "wttj: incomplete pagination (structural)" }], [limit]), 2, plan);
+  assert.deepEqual([structural.sources[0].state, structural.sources[0].limits, structural.knownLimitsOnly], ["partial", undefined, false]);
+  assert.equal(structural.sources[0].message, "A fonte não deixou ler todos os resultados que anunciou; a cobertura ficou incompleta. Lidos os primeiros 300 de 450 resultados em 1 pesquisa.");
 });

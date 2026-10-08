@@ -3948,6 +3948,9 @@ async function main() {
   const errors = [...resolveErrors];
   const emptyTargets = [];
   const unverifiedZeroTargets = [];
+  // Configured ceilings a source reached while answering coherently. Not
+  // errors: they never change the exit code.
+  const knownLimits = [];
 
   // Arm the failure-path row (#2643) now that the sweep is about to start and
   // every counter it reads is in scope. new_added is hardcoded 0 on a failed
@@ -4032,6 +4035,15 @@ async function main() {
           || truncated === WORKDAY_TRUNCATED_REASON.STRUCTURAL
           ? truncated : 'unknown';
         errors.push({ company: company.name, error: `${provider.id}: incomplete pagination (${reason})` });
+      }
+      if (provider.id === 'wttj' && Array.isArray(jobs.wttjHitBudget) && jobs.wttjHitBudget.length) {
+        const terms = jobs.wttjHitBudget.map(({ query, read, total }) => ({ query, read, total }));
+        knownLimits.push({
+          company: company.name, kind: 'hit-budget',
+          read: terms.reduce((sum, term) => sum + term.read, 0),
+          total: terms.reduce((sum, term) => sum + term.total, 0),
+          queries: terms.length, terms,
+        });
       }
       totalFound += jobs.length;
       if (!company._isBoard && jobs.length === 0) {
@@ -4520,6 +4532,12 @@ async function main() {
       console.log(`  ✗ ${e.company}: ${e.error}`);
     }
   }
+  if (knownLimits.length > 0) {
+    console.log(`\nKnown limits (${knownLimits.length}):`);
+    for (const l of knownLimits) {
+      console.log(`  ℹ ${l.company}: read ${l.read} of ${l.total} hits in ${l.queries} ${l.queries === 1 ? 'query' : 'queries'} (max_hits)`);
+    }
+  }
   if (otherErrors.length > 0) {
     console.log(`\nErrors (${otherErrors.length}):`);
     for (const e of otherErrors) {
@@ -4592,6 +4610,7 @@ async function main() {
       offers: verifiedOffers.map(offer => normalizeReceiptOffer({ ...offer, observedAt })),
       errors: errors.map(({ company, error }) => ({ company, error })),
       unverified_zero: unverifiedZeroTargets,
+      limits: knownLimits,
       dry_run: dryRun,
     }, errors.length > 0 ? 2 : 0);
   }

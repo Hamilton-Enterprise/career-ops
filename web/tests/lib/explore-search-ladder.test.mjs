@@ -90,7 +90,7 @@ test("a WTTJ query budget alone is still a healthy zero for the summary gate", a
     phases.push(plan.phase);
     const run = parseMarketReceipt(emptyReceipt, 0, buildMarketPlan(plan.effectiveFilters.markets, plan.effectiveFilters.positive, plan.effectiveFilters.opportunityType, plan));
     const incomplete = run.sources.filter(source => source.state !== "ok").map(source => source.source);
-    emit({ kind: "summary", companiesScanned: run.scanned, unreachable: 0, matches: 0, status: run.status, sources: run.sources, missingLocation: 0, ...(run.queryLimitedOnly ? { queryLimited: true } : {}), ...(incomplete.length ? { incomplete } : {}) });
+    emit({ kind: "summary", companiesScanned: run.scanned, unreachable: 0, matches: 0, status: run.status, sources: run.sources, missingLocation: 0, ...(run.knownLimitsOnly ? { knownLimitsOnly: true } : {}), ...(incomplete.length ? { incomplete } : {}) });
     return [];
   });
   assert.deepEqual(phases, ["precise", "broad"]);
@@ -100,17 +100,17 @@ test("a WTTJ query budget alone is still a healthy zero for the summary gate", a
 });
 
 test("a query budget beside any other shortfall still stops", async () => {
-  const limited = { source: "Welcome to the Jungle", state: "partial", limit: "query-limit", message: "feitas 12 de 15 pesquisas" };
+  const limited = { source: "Welcome to the Jungle", state: "partial", limits: ["query-limit"], message: "feitas 12 de 15 pesquisas" };
   for (const patch of [
-    { status: "partial", queryLimited: true, sources: [...healthy.sources, limited, { source: "Landing.jobs", state: "partial" }], incomplete: ["Welcome to the Jungle", "Landing.jobs"] },
-    { status: "partial", queryLimited: true, sources: [...healthy.sources, { ...limited, limit: undefined }], incomplete: ["Welcome to the Jungle"] },
-    { status: "partial", queryLimited: true, sources: [...healthy.sources, limited], incomplete: ["Welcome to the Jungle", "workday"] },
-    { status: "failed", sources: [...healthy.sources, limited], queryLimited: true },
+    { status: "partial", knownLimitsOnly: true, sources: [...healthy.sources, limited, { source: "Landing.jobs", state: "partial" }], incomplete: ["Welcome to the Jungle", "Landing.jobs"] },
+    { status: "partial", knownLimitsOnly: true, sources: [...healthy.sources, { ...limited, limits: undefined }], incomplete: ["Welcome to the Jungle"] },
+    { status: "partial", knownLimitsOnly: true, sources: [...healthy.sources, limited], incomplete: ["Welcome to the Jungle", "workday"] },
+    { status: "failed", sources: [...healthy.sources, limited], knownLimitsOnly: true },
     { status: "partial", sources: [...healthy.sources, limited], incomplete: ["Welcome to the Jungle"] },
   ]) {
     assert.equal((await run({ ...healthy, ...patch })).plans.length, 1, JSON.stringify(patch));
   }
-  assert.equal((await run({ ...healthy, status: "partial", queryLimited: true, sources: [...healthy.sources, limited], incomplete: ["Welcome to the Jungle"] })).plans.length, 2);
+  assert.equal((await run({ ...healthy, status: "partial", knownLimitsOnly: true, sources: [...healthy.sources, limited], incomplete: ["Welcome to the Jungle"] })).plans.length, 2);
 });
 
 test("a streamed error blocks broadening even beside an otherwise healthy summary", async () => {
@@ -123,4 +123,14 @@ test("a streamed error blocks broadening even beside an otherwise healthy summar
   });
   assert.deepEqual(phases, ["precise"]);
   assert.ok(events.some(event => event.kind === "error"));
+});
+
+test("a hit budget, alone or with a query budget, is a known limit for the summary gate", async () => {
+  const budget = { source: "Welcome to the Jungle", state: "partial", limits: ["hit-budget"], message: "lidos os primeiros 300 de 450 resultados em 1 pesquisa." };
+  const both = { ...budget, limits: ["query-limit", "hit-budget"] };
+  for (const wttj of [budget, both]) {
+    assert.equal((await run({ ...healthy, status: "partial", knownLimitsOnly: true, sources: [...healthy.sources, wttj], incomplete: ["Welcome to the Jungle"] })).plans.length, 2);
+    assert.equal((await run({ ...healthy, status: "partial", sources: [...healthy.sources, wttj], incomplete: ["Welcome to the Jungle"] })).plans.length, 1);
+    assert.equal((await run({ ...healthy, status: "partial", knownLimitsOnly: true, sources: [...healthy.sources, wttj, { source: "Landing.jobs", state: "partial" }], incomplete: ["Welcome to the Jungle", "Landing.jobs"] })).plans.length, 1);
+  }
 });
