@@ -1,5 +1,5 @@
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
-import { terminateCliRun } from "@/lib/cli-launch.mjs";
+import { removeCliWorkDir, terminateCliRun } from "@/lib/cli-launch.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -153,15 +153,15 @@ export async function POST(req: Request) {
   // Declared BEFORE the spawn: fencing can refuse the argv, and the temporary
   // workspace already exists by then. Without this the refusal path would leak
   // one directory per rejected request.
-  let childCwdRemoved = false;
+  // Idempotent while a removal is done or retrying; a failed one may be retried
+  // by a later caller (the timeout's bounded fallback, then `close`).
+  let childCwdRemoval = false;
   const cleanupChildCwd = () => {
-    if (childCwdRemoved) return;
-    try {
-      fs.rmSync(childCwd, { recursive: true, force: true });
-      childCwdRemoved = true;
-    } catch {
-      /* best-effort temporary-directory cleanup */
-    }
+    if (childCwdRemoval) return;
+    childCwdRemoval = true;
+    void removeCliWorkDir(childCwd).then((removed) => {
+      if (!removed) childCwdRemoval = false;
+    });
   };
 
   // Proposer-not-writer, as the Claude branch above spells it: Read + WebFetch +

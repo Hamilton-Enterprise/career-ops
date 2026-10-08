@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -194,4 +194,87 @@ export function terminateCliRun(child, { forceAfterMs = 5_000, closeWithinMs = 2
   else child.once("exit", onExit);
 
   terminateCliTree(child, "SIGTERM", treeDeps);
+}
+
+/** @type {Map<import("node:child_process").ChildProcess, { processGroup: boolean }>} */
+const activeChildren = new Map();
+let exitReaperInstalled = false;
+
+/**
+ * Remember a running CLI child until it closes, so a server exit cannot leave
+ * it running. A detached worker survives its parent and would go on writing
+ * user data with nobody left to stop it or release what it holds.
+ *
+ * Only `exit` is hooked. The server's own SIGINT/SIGTERM handling decides how
+ * it exits (Next.js and web/server.mjs both end through process.exit), and a
+ * signal listener here would change that behaviour or swallow the signal.
+ *
+ * @param {import("node:child_process").ChildProcess} child
+ * @param {{ processGroup: boolean }} options `processGroup`: spawned `detached` on POSIX.
+ */
+export function trackCliChild(child, { processGroup }) {
+  if (!child.pid) return;
+  activeChildren.set(child, { processGroup });
+  child.once("close", () => activeChildren.delete(child));
+  if (!exitReaperInstalled) {
+    exitReaperInstalled = true;
+    process.once("exit", () => killActiveCliChildren());
+  }
+}
+
+/**
+ * SIGKILL every tracked CLI tree. Synchronous, because it runs inside `exit`;
+ * best effort, because the process is going away either way.
+ *
+ * @param {TreeDeps & { spawnSyncProcess?: typeof spawnSync }} [deps]
+ */
+export function killActiveCliChildren({
+  platform = process.platform,
+  kill = (pid, sig) => process.kill(pid, sig),
+  spawnSyncProcess = spawnSync,
+  systemRoot = process.env.SystemRoot || "C:\\Windows",
+} = {}) {
+  for (const [child, { processGroup }] of activeChildren) {
+    const pid = /** @type {number} */ (child.pid);
+    try {
+      if (platform === "win32") {
+        // An exited child's PID may already belong to an unrelated process.
+        if (child.exitCode !== null || child.signalCode !== null) continue;
+        spawnSyncProcess(path.win32.join(systemRoot, "System32", "taskkill.exe"), ["/PID", String(pid), "/T", "/F"], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+      } else {
+        kill(processGroup ? -pid : pid, "SIGKILL");
+      }
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+/**
+ * Remove a run's temporary work directory.
+ *
+ * Synchronous on the common path. On Windows a handle that a just-killed
+ * process (or an antivirus scan) has not released yet fails the removal with
+ * EBUSY/EPERM for a moment; those alone are retried, asynchronously with
+ * Node's linear backoff, so the request thread never sleeps.
+ *
+ * @param {string} dir
+ * @param {{ rmSync?: typeof fs.rmSync, rm?: typeof fs.promises.rm }} [deps]
+ * @returns {Promise<boolean>} Whether the directory is gone.
+ */
+export function removeCliWorkDir(dir, { rmSync = fs.rmSync, rm = fs.promises.rm } = {}) {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+    return Promise.resolve(true);
+  } catch (e) {
+    const code = /** @type {NodeJS.ErrnoException} */ (e)?.code;
+    if (code !== "EBUSY" && code !== "EPERM") return Promise.resolve(false);
+    return rm(dir, { recursive: true, force: true, maxRetries: 4, retryDelay: 100 }).then(
+      () => true,
+      () => false,
+    );
+  }
 }

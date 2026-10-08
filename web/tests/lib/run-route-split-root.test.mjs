@@ -3,17 +3,19 @@ import { test } from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import "../helpers/web-ts-alias-loader.mjs";
 
 const { POST } = await import("../../src/app/api/run/route.ts");
 const { readLanguageConfig } = await import("../../src/lib/career-ops.ts");
 const { isTrackerWriting } = await import("../../src/lib/core/run-registry.ts");
+const { killMsForKind, timeoutMessage } = await import("../../src/lib/run-cli-support.mjs");
 
 async function waitFor(predicate, message) {
   for (let i = 0; i < 500; i++) {
     if (predicate()) return;
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await delay(10);
   }
   assert.fail(message);
 }
@@ -143,6 +145,21 @@ test("cancelling an evaluation releases the tracker guard even while an escaped 
   assert.equal((await reader.read()).done, true, "the response stream is closed");
   await waitFor(() => isDead(pid), "cancelled worker remains alive");
   await waitFor(() => !isTrackerWriting(), "the tracker guard must not wait forever on a descendant's stdout");
+});
+
+test("an evaluation that hangs past its time limit is terminated, reported and releases the tracker guard", { timeout: 15_000 }, async t => {
+  const f = fixture(t, { hang: true });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const response = await invoke("evaluate");
+  assert.equal(response.status, 200);
+  await waitFor(() => fs.existsSync(f.recordFile) && f.record().descendantPid, "fixture never started its descendant");
+  const { pid } = f.record();
+  t.mock.timers.tick(killMsForKind("evaluate"));
+  const events = (await response.text()).trim().split("\n").map(JSON.parse);
+  assert.equal(events.at(-1).type, "error");
+  assert.equal(events.at(-1).msg, timeoutMessage(killMsForKind("evaluate"), "evaluate"));
+  await waitFor(() => isDead(pid), "timed-out worker remains alive");
+  await waitFor(() => !isTrackerWriting(), "a timed-out run must release the tracker guard");
 });
 
 test("PDF rendering and marking execute code scripts but persist artifacts in external data", async t => {

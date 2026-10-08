@@ -6,10 +6,10 @@
  * run can release the tracker-delete guard. The returned function can be called
  * earlier on cancellation, or later after PDF rendering and marking complete.
  *
- * @param {{ once: (event: string, listener: () => void) => unknown }} child
- * `workerGone()` stands in for a `close` that terminateCliRun gave up waiting
- * for, so a stuck descendant cannot hold the guard forever.
+ * Its `workerGone()` stands in for a `close` that terminateCliRun gave up
+ * waiting for, so a stuck descendant cannot hold the guard forever.
  *
+ * @param {{ once: (event: string, listener: () => void) => unknown }} child
  * @param {() => void} release
  * @returns {(() => void) & { workerGone: () => void }}
  */
