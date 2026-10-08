@@ -8,6 +8,7 @@ import { loadBindings, transform } from 'next/dist/build/swc/index.js';
 import * as state from '../../src/lib/explore-state.mjs';
 import * as explore from '../../src/lib/explore.ts';
 import * as exploreAi from '../../src/lib/explore-ai.ts';
+import { MAX_OFFER_LIMIT } from '../../src/lib/whats-new.mjs';
 
 await loadBindings();
 const require = createRequire(import.meta.url);
@@ -181,11 +182,15 @@ test('provider persists final ranked cards and broad receipt separately for each
 });
 
 test('child URL initialization survives the parent mount hydration with and without a saved snapshot', async t => {
-  const stored = new Map();
+  const stored = new Map(), requested = [];
   for (const [name, value] of Object.entries({
     window: { location: { search: '?mode=ai&opportunity=freelance&q=Flutter&intent=Find%20Flutter' } },
     localStorage: { getItem: () => null },
     sessionStorage: { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value) },
+    fetch: async url => {
+      requested.push(url);
+      return new Response(JSON.stringify({ offers: [], count: 0 }));
+    },
   })) {
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
     Object.defineProperty(globalThis, name, { configurable: true, value });
@@ -204,15 +209,16 @@ test('child URL initialization survives the parent mount hydration with and with
   }, useContext: () => ctx, useCallback: fn => fn, useMemo: fn => fn(), useEffect: fn => effects[owner].push(fn) };
   const provider = await load('explore-provider.tsx', {
     react: hooks, 'next/navigation': { useRouter: () => ({ refresh() {} }) }, '@/lib/explore': explore,
-    '@/lib/explore-ai': exploreAi, '@/lib/whats-new.mjs': {}, '@/lib/explore-error.mjs': {},
+    '@/lib/explore-ai': exploreAi, '@/lib/whats-new.mjs': { MAX_OFFER_LIMIT }, '@/lib/explore-error.mjs': {},
   });
   const placeholder = () => null;
+  const { AiSearchBox } = await load('ai-search-box.tsx', { react: hooks });
   const { ExplorerView } = await load('explorer-view.tsx', {
     react: hooks, 'next/link': { default: placeholder }, '@/lib/explore': explore, './explore-provider': provider,
     '@/lib/pt-pt': { PT_PT_LOCALE: 'pt-PT' }, '@/lib/core/normalize-text-key.mjs': { normalizeTextKey: value => value },
     './discovering-state': { DiscoveringState: placeholder, SearchReceipt: placeholder }, './filter-builder': { FilterBuilder: placeholder },
     './ai-hunt-view': { AiHuntView: placeholder }, './explore-mode-toggle': { ExploreModeToggle: placeholder },
-    './ai-search-box': { AiSearchBox: placeholder }, './results-list': { ResultsList: placeholder }, './schedule-job-action': { ScheduleJobAction: placeholder },
+    './ai-search-box': { AiSearchBox }, './results-list': { ResultsList: placeholder }, './schedule-job-action': { ScheduleJobAction: placeholder },
   });
   const renderParent = () => { owner = 'parent'; cursor = 0; effects.parent.length = 0; ctx = provider.ExploreProvider({ children: null }).props.value; };
   for (const saved of [false, true]) {
@@ -236,4 +242,33 @@ test('child URL initialization survives the parent mount hydration with and with
     assert.equal(ctx.offers.length, saved ? 1 : 0);
     assert.equal(ctx.sort, saved ? 'company' : 'match');
   }
+  await t.test('view=fresh overrides a saved assisted employment snapshot after child-before-parent hydration', async () => {
+    slots.parent.length = slots.child.length = effects.child.length = 0;
+    stored.clear();
+    window.location.search = '?view=fresh';
+    const filters = { ...explore.DEFAULT_FILTERS, positive: ['Operador de Loja'], allow: ['Lisboa'] };
+    stored.set('career-ops:explore-results:employment', JSON.stringify({
+      v: 1, mode: 'ai', phase: 'results', filters, offers: [offer], sort: 'company',
+      aiIntent: 'Snapshot assistido sintético view=fresh',
+    }));
+    const props = { seed: { filters, seededFrom: [] }, inboxSnapshot: [], appsSnapshot: [], rootExists: true };
+    renderParent();
+    owner = 'child'; cursor = 0;
+    ExplorerView(props);
+    effects.child.forEach(effect => effect());
+    effects.parent.forEach(effect => effect());
+    await new Promise(resolve => setImmediate(resolve));
+    renderParent();
+    assert.equal(ctx.mode, 'scan', 'explicit fresh view wins over the restored assisted mode');
+    assert.equal(ctx.aiIntent, '');
+    assert.deepEqual(ctx.filters, filters);
+    assert.equal(ctx.sort, 'fresh');
+    assert.equal(ctx.phase, 'empty-current');
+    assert.deepEqual(ctx.offers, []);
+    assert.deepEqual(requested, [`/api/whats-new?limit=${MAX_OFFER_LIMIT}`], 'fresh load never starts assisted search');
+    owner = 'child'; cursor = 0;
+    const html = render(ExplorerView, props);
+    assert.doesNotMatch(html, /Pesquisar na web|Snapshot assistido sintético|<textarea/);
+    assert.match(html, /Não foram encontradas ofertas/);
+  });
 });
