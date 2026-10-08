@@ -56,24 +56,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private var outputPipe: Pipe?
     private var log: FileHandle?
     private let outputQueue = DispatchQueue(label: "io.career-ops.local.output")
-    private let preferences = UserDefaults.standard
+    private var preferences = UserDefaults.standard
     private let logURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Career Ops/server.log")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let selfBundle = Bundle.main.bundleURL
+        // Same bundle id is shared by side-by-side candidates; only hand off to
+        // another process of THIS install path.
         if let existing = NSRunningApplication.runningApplications(withBundleIdentifier: "io.career-ops.local")
-            .first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
+            .first(where: {
+                $0.processIdentifier != ProcessInfo.processInfo.processIdentifier
+                    && isSameAppInstall($0.bundleURL, selfBundle)
+            }) {
             existing.activate(options: [.activateAllWindows])
             NSApp.terminate(nil)
             return
         }
-        if let defaultsURL = Bundle.main.url(forResource: "Defaults", withExtension: "plist"),
-           let defaults = NSDictionary(contentsOf: defaultsURL) as? [String: Any] {
-            for (key, value) in defaults where preferences.object(forKey: key) == nil {
-                preferences.set(value, forKey: key)
-            }
-        }
-        if let runtimePath = Bundle.main.object(forInfoDictionaryKey: "CareerOpsRuntimePath") as? String {
-            preferences.register(defaults: ["CareerOpsRuntimePath": runtimePath])
+        let bundled = Bundle.main.url(forResource: "Defaults", withExtension: "plist")
+            .flatMap { NSDictionary(contentsOf: $0) as? [String: Any] }
+        preferences = loadInstallPreferences(bundleURL: selfBundle, bundledDefaults: bundled)
+        if let runtimePath = Bundle.main.object(forInfoDictionaryKey: "CareerOpsRuntimePath") as? String,
+           preferences.object(forKey: "CareerOpsRuntimePath") == nil {
+            preferences.set(runtimePath, forKey: "CareerOpsRuntimePath")
         }
         let menu = NSMenu()
         let appItem = NSMenuItem()

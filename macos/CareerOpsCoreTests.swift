@@ -95,11 +95,50 @@ struct CareerOpsCoreTests {
         assert(availableDownloadDestination(danglingLink) == nil)
         try testWebPreferences(root: root, node: node)
         try testRuntimeArtifact(root: root, node: node)
+        try testInstallPreferences(root: root)
 #if CAREER_OPS_UI_TESTS
         testJavaScriptDialogs()
         testPreferenceBridgeInWebKit()
 #endif
         print("CareerOpsCore: all assertions passed")
+    }
+
+    private static func testInstallPreferences(root: URL) throws {
+        let primary = root.appendingPathComponent("Applications/Career Ops.app")
+        let candidate = root.appendingPathComponent("tmp/Apps/Career Ops.app")
+        try FileManager.default.createDirectory(at: primary, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: candidate, withIntermediateDirectories: true)
+        assert(installPreferencesSuiteName(bundlePath: primary.path)
+            != installPreferencesSuiteName(bundlePath: candidate.path),
+               "Side-by-side installs must not share a preferences suite")
+        assert(isSameAppInstall(primary, primary))
+        assert(isSameAppInstall(primary, candidate) == false)
+
+        let standard = UserDefaults(suiteName: "career-ops-standard-\(UUID().uuidString)")!
+        standard.set("/personal/data", forKey: "CareerOpsDataRootPath")
+        standard.set("/personal/checkout", forKey: "CareerOpsCheckoutPath")
+        standard.set("/opt/homebrew/bin/node", forKey: "CareerOpsNodePath")
+
+        let synth: [String: Any] = [
+            "CareerOpsDataRootPath": root.appendingPathComponent("synth-data").path,
+            "CareerOpsCheckoutPath": root.appendingPathComponent("checkout").path,
+            "CareerOpsNodePath": "/opt/homebrew/bin/node",
+        ]
+        let candidatePrefs = loadInstallPreferences(
+            bundleURL: candidate, bundledDefaults: synth, standard: standard, home: root)
+        assert(candidatePrefs.string(forKey: "CareerOpsDataRootPath") == synth["CareerOpsDataRootPath"] as? String,
+               "Temp candidate must keep baked --data-root, not the live personal root")
+        assert(candidatePrefs.string(forKey: "CareerOpsDataRootPath") != "/personal/data")
+
+        let primaryPrefs = loadInstallPreferences(
+            bundleURL: primary, bundledDefaults: synth, standard: standard, home: root)
+        assert(primaryPrefs.string(forKey: "CareerOpsDataRootPath") == "/personal/data",
+               "Primary install migrates legacy UserDefaults.standard path overrides once")
+        // Second load must not re-apply or wipe user changes in the suite
+        primaryPrefs.set("/moved/data", forKey: "CareerOpsDataRootPath")
+        let primaryAgain = loadInstallPreferences(
+            bundleURL: primary, bundledDefaults: synth, standard: standard, home: root)
+        assert(primaryAgain.string(forKey: "CareerOpsDataRootPath") == "/moved/data")
     }
 
     private static func testRuntimeArtifact(root: URL, node: URL) throws {
