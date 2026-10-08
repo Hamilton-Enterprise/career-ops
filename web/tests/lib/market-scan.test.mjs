@@ -306,7 +306,12 @@ test("a WTTJ query budget alone broadens through the real discovery pass; any re
   const healthy = await discover();
   assert.deepEqual(healthy.phases, ["precise", "broad"]);
   assert.equal(healthy.events.some(event => event.kind === "sourceError" || event.kind === "error"), false);
-  assert.ok(healthy.events.some(event => event.kind === "sourceDone" && event.source === "Welcome to the Jungle"));
+  const streamed = healthy.events.find(event => event.kind === "sourceDone" && event.source === "Welcome to the Jungle");
+  assert.ok(streamed, "known-limit completion is streamed as sourceDone");
+  assert.equal(streamed.state, "partial", "chip must show Parcial before the deferred summary");
+  assert.match(streamed.message ?? "", /feitas 12 de 15/i);
+  const summaryIndex = healthy.events.findIndex(event => event.kind === "summary");
+  assert.ok(healthy.events.indexOf(streamed) < summaryIndex, "Parcial streams before the summary arrives");
   const wttj = healthy.summary.sources.find(source => source.source === "Welcome to the Jungle");
   assert.deepEqual([wttj.state, wttj.limits, wttj.message], ["partial", ["query-limit"], `f${cap.slice(1)}`]);
   assert.equal(healthy.summary.status, "partial");
@@ -389,7 +394,9 @@ test("a WTTJ hit budget broadens alone or beside a query budget; a pagination fa
   const alone = await discover(["Quantum role", "Quantum lead"]);
   assert.deepEqual(alone.phases, ["precise", "broad"]);
   assert.equal(alone.events.some(event => event.kind === "sourceError" || event.kind === "error"), false);
-  assert.ok(alone.events.some(event => event.kind === "sourceDone" && event.source === "Welcome to the Jungle"));
+  const hitDone = alone.events.find(event => event.kind === "sourceDone" && event.source === "Welcome to the Jungle");
+  assert.equal(hitDone?.state, "partial");
+  assert.match(hitDone?.message ?? "", /lidos os primeiros 600 de 1450/i);
   assert.deepEqual([alone.wttj.state, alone.wttj.limits, alone.wttj.message], ["partial", ["hit-budget"], budget]);
   assert.equal(alone.summary.knownLimitsOnly, true);
 
@@ -403,7 +410,10 @@ test("a WTTJ hit budget broadens alone or beside a query budget; a pagination fa
     scan({ limits: [hitBudget], errors: [{ company: "Welcome to the Jungle", error: `wttj: incomplete pagination (${reason})` }] }, 2);
     const fault = await discover(["Quantum role", "Quantum lead"]);
     assert.deepEqual(fault.phases, ["precise"], reason);
-    assert.ok(fault.events.some(event => event.kind === "sourceError" && event.source === "Welcome to the Jungle"), reason);
+    // A partial receipt must not flash Falhou: stream Parcial, keep broad blocked.
+    const partialDone = fault.events.find(event => event.kind === "sourceDone" && event.source === "Welcome to the Jungle");
+    assert.equal(partialDone?.state, "partial", reason);
+    assert.equal(fault.events.some(event => event.kind === "sourceError" && event.source === "Welcome to the Jungle"), false, reason);
     assert.equal(fault.wttj.state, "partial");
     assert.equal(fault.wttj.limits, undefined);
     assert.match(fault.wttj.message, /cobertura ficou incompleta\. Lidos os primeiros 600 de 1450/);

@@ -13,13 +13,25 @@ export async function runMarketDiscovery(filters: ExploreFilters, onEvent: (e: S
   const plan = buildMarketPlan(filters.markets, filters.positive.length || filters.opportunityType === "freelance" ? filters.positive : loadProfileTargets(), filters.opportunityType, searchPlan);
   const complete = (run: MarketRun) => {
     for (const source of run.sources) {
-      // A known budget is not a failure; the summary still shows it as partial.
-      if (source.state === "ok" || onlyKnownLimits(source)) {
-        const provider = plan.jobBoards.find(b => b.name === source.source)?.provider;
-        onEvent({ kind: "sourceDone", source: source.source, count: run.offers.filter(o =>
-          o.sources?.includes(source.source) || (provider && o.sources?.includes(`${provider}-api`))).length });
+      const provider = plan.jobBoards.find(b => b.name === source.source)?.provider;
+      const count = run.offers.filter(o =>
+        o.sources?.includes(source.source) || (provider && o.sources?.includes(`${provider}-api`))).length;
+      // Partial (known budgets or incomplete coverage) must stream Parcial now —
+      // never Concluída via bare sourceDone, never Falhou via sourceError — because
+      // runDiscovery holds the summary until after broad-phase may run.
+      if (source.state === "ok") {
+        onEvent({ kind: "sourceDone", source: source.source, count });
+      } else if (source.state === "partial" || onlyKnownLimits(source)) {
+        onEvent({
+          kind: "sourceDone",
+          source: source.source,
+          count,
+          state: "partial",
+          ...(source.message ? { message: source.message } : {}),
+        });
+      } else {
+        onEvent({ kind: "sourceError", source: source.source, message: source.message ?? "Fonte indisponível." });
       }
-      else onEvent({ kind: "sourceError", source: source.source, message: source.message ?? "Fonte indisponível." });
     }
     for (const offer of run.offers) onEvent({ kind: "offer", offer });
     return run;

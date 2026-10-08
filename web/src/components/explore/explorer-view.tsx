@@ -440,7 +440,7 @@ function BlockedCard() {
     <div className="rounded-2xl border border-border bg-surface/30 px-6 py-12 text-center">
       <h2 className={`${instrumentSerif.className} text-2xl text-foreground`}>Escolhe um agente para pesquisar na web</h2>
       <p className="mx-auto mt-1.5 max-w-md text-sm text-muted">
-        Podes usar Claude Code, Codex, Gemini, Cursor ou outro agente instalado. A pesquisa direta continua disponível sem agente.
+        Usa um agente com isolamento só de leitura verificado (Claude Code ou Codex). A pesquisa direta continua disponível sem agente.
       </p>
       <Link href="/config" className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-brand px-3.5 py-2 text-sm font-semibold text-brand-foreground transition hover:brightness-110">
         <Settings className="size-4" /> Abrir Definições

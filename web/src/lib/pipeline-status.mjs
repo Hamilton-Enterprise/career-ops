@@ -32,11 +32,11 @@ export async function saveStatus(n, current, next, request = fetch) {
   });
   const result = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(typeof result?.error === "string" ? result.error : "Could not save status. Please try again.");
+    throw new Error(typeof result?.error === "string" ? result.error : "Não foi possível guardar o estado. Tenta novamente.");
   }
   // Inputs come from the canonical dropdown; the endpoint echoes that label.
   if (result?.ok !== true || result.status !== next) {
-    throw new Error("Could not confirm the saved status. Refresh before trying again.");
+    throw new Error("Não foi possível confirmar o estado guardado. Atualiza a página antes de tentar outra vez.");
   }
   return result.status;
 }
