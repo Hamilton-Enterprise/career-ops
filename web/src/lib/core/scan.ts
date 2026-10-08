@@ -43,9 +43,7 @@ const UNREACHABLE_RE = /Unreachable boards:\s+(\d+)/;
 const SUMMARY_RE = /New matches:\s+(\d+)/;
 
 function firstMatch(title: string, positives: string[]): string | undefined {
-  const lower = title.toLowerCase();
-  for (const k of positives) if (k && lower.includes(k.toLowerCase())) return k;
-  return undefined;
+  return positives.find(term => term && matchesOccupationTerms(title, [term]));
 }
 
 /** Spread-in helper: {} when there is no band (keeps `fit` truly absent rather

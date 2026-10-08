@@ -84,6 +84,28 @@ test('proximity bands expose totals accessibly, reasons and only supplied facts'
   for (const fact of ['Permanent', '40 h/semana', '2026-11-01', 'Vagas: 2', 'EUR']) assert.ok(html.includes(fact));
 });
 
+test('matched-query card text reaches normal-text contrast in light and dark', async t => {
+  context = base();
+  const html = render(DiscoveryCard, { offer:{ ...offer, matchedKeyword:'Sales Assistant' }, inPipeline:false });
+  const node = html.match(/<span class="([^"]+)">Sales Assistant<\/span>/);
+  assert.ok(node, 'the actual matchedKeyword branch is rendered');
+  const css = fs.readFileSync(new URL('../../src/app/globals.css', import.meta.url), 'utf8');
+  assert.match(css, /--brand-text: hsl\(26 80% 36%\)/);
+  assert.match(css, /--brand-text: hsl\(26 73% 51%\)/);
+  // Existing theme tokens on the card's bg-surface/40; /80 includes compositing.
+  const colors = { 'text-brand/80':{ light:'e39051', dark:'b46122' }, 'text-brand-text':{ light:'a55212', dark:'dd7627' } };
+  const luminance = hex => hex.match(/\w\w/g).map(value => parseInt(value,16) / 255)
+    .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4)
+    .reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index], 0);
+  assert.ok(colors[node[1]], 'the matched query uses an existing reviewed theme token');
+  for (const [theme, background] of [['light', 'fafaf8'], ['dark', '0f0f0f']]) await t.test(theme, () => {
+    const foreground = colors[node[1]][theme];
+    const ratio = (Math.max(luminance(background), luminance(foreground)) + .05) / (Math.min(luminance(background), luminance(foreground)) + .05);
+    t.diagnostic(`${theme}: #${foreground} on #${background}, ${ratio.toFixed(6)}:1`);
+    assert.ok(ratio >= 4.5, `${theme}: ${ratio.toFixed(6)}:1 must reach 4.5:1`);
+  });
+});
+
 test('settled receipt shows exact expansion and all completed source states/counts', () => {
   context = { ...base(), searchPhase: 'broad', expansion: { changes: ['Funções equivalentes: Retail Assistant.', 'Janela de pesquisa: 7 → 30 dias.'] },
     sources: { wttj: { state: 'ok', matches: 0 }, greenhouse: { state: 'partial', matches: 2, done: 100, total: 150 }, remotive: { state: 'error', message: 'Prazo excedido' } } };

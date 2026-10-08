@@ -124,3 +124,42 @@ test("ranking is pure and deterministic: total, publication date, company, then 
   assert.deepEqual(offers, original);
   assert.deepEqual(ranked[0].fit, { score: 0, band: "weak" });
 });
+
+test("explicit operators rank their proven query at the existing literal ceiling with deterministic ties", () => {
+  for (const phase of ["precise", "broad"]) for (const [query, accepted, rejected] of [
+    ["word:agent", "AI Agent Engineer", "Agentic Engineer"],
+    ["stem:agent", "Agentic Engineer", "Reagents Engineer"],
+    ["Python + SQL", "Python Developer with SQL", "Python Developer"],
+  ]) {
+    const plan = buildSearchPlan({ ...filters, positive:[query] }, phase);
+    const matched = { ...offer, title:accepted, matchedKeyword:query };
+    const result = rankOpportunity(matched, plan, now);
+    assert.deepEqual(result.components, { role:60, location:25, freshness:10, evidence:5 }, `${query}: ${phase}`);
+    assert.equal(result.total, 100);
+    assert.equal(result.reasons[0], `Função pedida: «${query}».`);
+    assert.equal(result.occupation, undefined);
+    const notMatched = { ...matched, title:rejected, url:"https://acme.example/jobs/0" };
+    assert.equal(rankOpportunity(notMatched, plan, now).components.role, 0, 'receipt metadata is not proof of a title match');
+    const offers = [
+      { ...matched, company:"Beta", url:"https://acme.example/jobs/2" },
+      { ...matched, postedAt:"2026-10-07", url:"https://acme.example/jobs/4" },
+      { ...matched, url:"https://acme.example/jobs/3" },
+      { ...matched, url:"https://acme.example/jobs/1" },
+      notMatched,
+    ];
+    const original = structuredClone(offers);
+    const ranked = rankOpportunities(offers, plan, now);
+    assert.deepEqual(ranked.map(item => item.url), [1, 3, 2, 4, 0].map(id => `https://acme.example/jobs/${id}`));
+    assert.deepEqual(rankOpportunities([...offers].reverse(), plan, now), ranked);
+    assert.deepEqual(offers, original);
+  }
+});
+
+test("generic no-role searches never inherit operator role points from receipt metadata", () => {
+  for (const phase of ["precise", "broad"]) {
+    const result = rankOpportunity({ ...offer, title:"AI Agent Engineer", matchedKeyword:"word:agent" }, buildSearchPlan({ ...filters, positive:[] }, phase), now);
+    assert.equal(result.components.role, 0);
+    assert.equal(result.total, 40);
+    assert.equal(result.reasons[0], "Sem correspondência profissional com a pesquisa.");
+  }
+});

@@ -115,7 +115,7 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
         )}
         {offer.matchedKeyword && (
           <span className="text-faint" title={freelance ? "Correspondência por palavra-chave no título." : "Correspondência por palavra-chave. Ainda não foi avaliada de A a F."}>
-            · corresponde a <span className="text-brand/80">{offer.matchedKeyword}</span>
+            · corresponde a <span className="text-brand-text">{offer.matchedKeyword}</span>
           </span>
         )}
         {offer.fit && !match && (

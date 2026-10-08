@@ -1,4 +1,4 @@
-import { matchOccupationTitle, resolveOccupations } from "./occupation-match.mjs";
+import { matchOccupationTitle, matchesOccupationTerms, resolveOccupations } from "./occupation-match.mjs";
 import { resolveLocationInputs } from "./location-concepts.mjs";
 import { normalizeTextKey } from "./core/normalize-text-key.mjs";
 import { buildMarketPlan, classifyMarketLocation } from "./market-presets.mjs";
@@ -15,7 +15,7 @@ const supplied = value => typeof value === "string" && value.trim().length > 0;
  * @param {DiscoveredOffer} offer @param {SearchPlan} plan @param {string} observedAt @returns {OpportunityMatch} */
 export function rankOpportunity(offer, plan, observedAt) {
   const literals = [...plan.occupations.map(item => item.input), ...plan.effectiveFilters.positive.filter(term => !resolveOccupations([term]).resolved.length)];
-  const literal = literals.find(term => contains(offer.title, term));
+  const literal = literals.find(term => matchesOccupationTerms(offer.title, [term]));
   const original = plan.occupations.find(item => item.input === literal);
   const occupation = original ? { occupationId: original.id, input: original.input, alias: original.input, language: original.language, kind: /** @type {'literal'} */ ("literal") } : literal ? undefined : matchOccupationTitle(offer.title, plan.occupations);
   const role = occupation?.kind === "literal" || literal ? 60 : occupation ? 50 : 0;

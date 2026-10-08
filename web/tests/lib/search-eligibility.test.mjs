@@ -48,7 +48,11 @@ test('actual seeded scanner/core preserves canonical title operators in precise 
     const events = [];
     const offers = await runDiscovery({ ...base, positive:seeded.filters.positive }, event => events.push(event));
     assert.deepEqual(offers.map(offer => offer.title).sort(), [...expected].sort());
+    assert.deepEqual(offers.map(offer => [offer.match.components.role, offer.match.total, offer.match.reasons[0], offer.matchedKeyword]),
+      expected.map(() => [60, phase === 'broad' ? 70 : 75, `Função pedida: «${query}».`, query]), 'operator evidence must survive eligibility, ranking and the matched-query receipt');
+    assert.ok(offers.every(offer => !offer.match.occupation), 'explicit operators must not invent catalog occupation evidence');
     assert.deepEqual(events.filter(event => event.kind === 'offer').map(event => event.offer.title).sort(), [...expected].sort());
+    assert.ok(events.filter(event => event.kind === 'offer').every(event => event.offer.matchedKeyword === query));
     assert.deepEqual(events.filter(event => event.kind === 'phaseStart').map(event => event.phase), phase === 'broad' ? ['precise', 'broad'] : ['precise']);
     assert.equal(events.findLast(event => event.kind === 'summary').status, 'ok');
   });
