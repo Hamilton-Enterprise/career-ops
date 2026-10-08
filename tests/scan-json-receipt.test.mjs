@@ -301,6 +301,51 @@ test('incomplete Workday pagination keeps recovered offers and marks the market 
   }
 });
 
+test('partial WTTJ pagination with zero matches reaches the receipt and stops the search ladder', async t => {
+  if (!existsSync(join(ROOT, 'web', 'src'))) return t.skip('web/ not present');
+  await import('../web/tests/helpers/web-ts-alias-loader.mjs');
+  const { runDiscovery } = await import('../web/src/lib/core/scan.ts');
+  const { parseMarketReceipt } = await import('../web/src/lib/core/market-merge.mjs');
+  const board = { name: 'Welcome to the Jungle', provider: 'wttj', enabled: true, wttj: { filters: 'offices.country_code:PT', max_hits: 300 } };
+  const root = workspace(`title_filter:\n  positive: ["Quantum Mechanic"]\njob_boards:\n  - ${JSON.stringify(board)}\n`);
+  try {
+    const bootstrap = `
+      import wttj from ${JSON.stringify(new URL('../providers/wttj.mjs', import.meta.url).href)};
+      const fetchWttj = wttj.fetch;
+      wttj.fetch = async (entry, ctx) => {
+        const jobs = await fetchWttj(entry, { ...ctx,
+          fetchText: async () => 'window.env = ' + JSON.stringify({ PUBLIC_ALGOLIA_APPLICATION_ID: 'AB12CD34', PUBLIC_ALGOLIA_API_KEY_CLIENT: '0123456789abcdef0123456789abcdef' }) + ';',
+          fetchJson: async (_url, opts) => {
+            const page = Number(new URLSearchParams(JSON.parse(opts.body).params).get('page'));
+            if (page > 0) throw new Error('fixture page 2 unavailable');
+            return { nbHits: 250, nbPages: 3, hits: Array.from({ length: 100 }, (_, i) => ({ objectID: 'o' + i, name: 'Vendedor ' + i, slug: 'vendedor-' + i, organization: { name: 'Loja', slug: 'loja' }, offices: [{ city: 'Lisboa', country: 'Portugal' }] })) };
+          } });
+        if (jobs.wttjTruncated !== 'transient') throw new Error('page 2 error did not mark transient truncation');
+        return jobs;
+      };
+      globalThis.fetch = () => { throw new Error('Network forbidden in fixture'); };
+      process.argv = [process.execPath, ${JSON.stringify(SCAN)}, '--dry-run', '--json'];
+      await import(${JSON.stringify(new URL('../scan.mjs', import.meta.url).href)});`;
+    const result = runJson(root, bootstrap);
+    const receipt = JSON.parse(result.stdout);
+    assert.equal(result.status, 2, result.stderr);
+    assert.equal(receipt.found, 100);
+    assert.equal(receipt.offers.length, 0);
+    assert.deepEqual(receipt.errors, [{ company: board.name, error: 'wttj: incomplete pagination (transient)' }]);
+    const plan = { opportunityType:'employment', markets:['portugal'], jobBoards:[board], skippedSources:[], locationPolicy:{markets:['portugal'], strict:true} };
+    const run = parseMarketReceipt(result.stdout, result.status, plan);
+    assert.notEqual(run.status, 'ok');
+    assert.equal(run.sources[0].state, 'error');
+    const phases = [];
+    await runDiscovery({ opportunityType:'employment', positive:['Quantum Mechanic'], negative:[], allow:[], block:[], blockHard:[], alwaysAllow:[], sinceDays:7, ats:[], markets:['portugal'], limitPerAts:150 }, () => {}, async (search, emit) => {
+      phases.push(search.phase);
+      emit({ kind:'summary', companiesScanned:run.scanned, unreachable:0, matches:0, status:run.status, sources:run.sources });
+      return [];
+    });
+    assert.deepEqual(phases, ['precise']);
+  } finally { rmSync(root, { recursive:true, force:true }); }
+});
+
 test('a receipt larger than the pipe buffer drains completely', () => {
   const script = [
     `import { emitJsonReceipt } from ${JSON.stringify(new URL('../scan.mjs', import.meta.url).href)};`,

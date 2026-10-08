@@ -18,7 +18,8 @@
 //       # Algolia filter expression, applied server-side (recommended).
 //       filters: 'offices.country_code:FR AND contract_type:full_time'
 //       queries: ["finops", "data platform engineer", "snowflake"]
-//       max_hits: 100        # optional, per query; capped at 200, or 1000 with filters
+//       max_hits: 100        # optional, total budget per query, read in pages of
+//                            # 100; capped at 200, or 1000 with filters
 //     enabled: true
 //
 // Prefer `filters` over broad keyword queries. A keyword alone cannot narrow a
@@ -52,6 +53,9 @@ const MAX_HITS_CAP = 200;
 // exhaust (e.g. product-management + France + full_time is ~450), so the cap is
 // raised to Algolia's per-request ceiling for this index when one is configured.
 const FILTERED_MAX_HITS_CAP = 1000;
+// The budget bounds the page count (at most 10 pages at the 1000 cap), so no
+// separate page cap is needed.
+const PAGE_SIZE = 100;
 const FILTERS_MAX_LEN = 1000;
 
 /** Pin a URL to an expected https host. */
@@ -106,8 +110,8 @@ export function parseEnvPayload(text) {
  *   - title:    `name`
  *   - url:      /en/companies/{organization.slug}/jobs/{slug} on the WTTJ site
  *   - company:  `organization.name`
- *   - location: offices[0] city+country, with ", Remote" appended when the
- *               posting allows fulltime remote
+ *   - location: every office as "City, Country", joined with "; ", with
+ *               ", Remote" appended once when the posting allows fulltime remote
  *   - postedAt: `published_at_timestamp` (epoch seconds → ms)
  *   - salary:   {min, max, currency} from salary_yearly_minimum/salary_maximum
  *
@@ -129,12 +133,16 @@ export function normalizeWttjHit(h) {
       ? h.organization.name.trim()
       : 'Welcome to the Jungle';
 
-  const office = Array.isArray(h.offices) && h.offices.length > 0 ? h.offices[0] : null;
-  const parts = [];
-  if (office && typeof office.city === 'string' && office.city.trim()) parts.push(office.city.trim());
-  if (office && typeof office.country === 'string' && office.country.trim()) parts.push(office.country.trim());
-  if (h.remote === 'fulltime') parts.push('Remote');
-  const location = parts.join(', ');
+  const offices = [];
+  for (const office of Array.isArray(h.offices) ? h.offices : []) {
+    if (!office || typeof office !== 'object') continue;
+    const parts = [];
+    if (typeof office.city === 'string' && office.city.trim()) parts.push(office.city.trim());
+    if (typeof office.country === 'string' && office.country.trim()) parts.push(office.country.trim());
+    const label = parts.join(', ');
+    if (label && !offices.includes(label)) offices.push(label);
+  }
+  const location = [offices.join('; '), h.remote === 'fulltime' ? 'Remote' : ''].filter(Boolean).join(', ');
 
   /** @type {{ title: string, url: string, company: string, location: string, postedAt?: number, salary?: {min: number, max: number, currency: string} }} */
   const job = { title, url, company, location };
@@ -202,17 +210,19 @@ export default {
     const { appId, apiKey } = parseEnvPayload(envText);
     const algoliaHost = `${appId}-dsn.algolia.net`;
 
-    // 2. One Algolia query per configured search term; dedup across queries.
+    // 2. Paged Algolia queries per configured search term; dedup across queries.
+    const url = assertHost(`https://${algoliaHost}/1/indexes/${INDEX}/query`, algoliaHost, 'algolia');
+    const hitsPerPage = Math.min(PAGE_SIZE, maxHits);
+    // A probe (verify-portals, discover-ats) asks for ctx.maxPages: 1 to learn
+    // the board is live; stopping there is not a truncated scan.
+    const probePages = Number.isInteger(ctx?.maxPages) && ctx.maxPages > 0 ? ctx.maxPages : Infinity;
     const byUrl = new Map();
+    let structural = false;
+    let transient = false;
     for (const query of queries) {
-      const url = assertHost(
-        `https://${algoliaHost}/1/indexes/${INDEX}/query`,
-        algoliaHost,
-        'algolia',
-      );
       const params = new URLSearchParams({
         query,
-        hitsPerPage: String(maxHits),
+        hitsPerPage: String(hitsPerPage),
         attributesToRetrieve:
           'name,slug,organization,offices,remote,published_at_timestamp,salary_yearly_minimum,salary_maximum,salary_period,salary_currency',
       });
@@ -220,30 +230,73 @@ export default {
       // faceted attributes; it never reaches a URL or host, so the assertHost
       // guard above still covers every request target.
       if (filters) params.set('filters', filters);
-      const json = /** @type {any} */ (
-        await ctx.fetchJson(url, {
-          method: 'POST',
-          redirect: 'error',
-          headers: {
-            'x-algolia-application-id': appId,
-            'x-algolia-api-key': apiKey,
-            // The client search key is referer-locked to the WTTJ site.
-            referer: `${SITE_ORIGIN}/`,
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify({ params: params.toString() }),
-        })
-      );
-      if (!json || !Array.isArray(json.hits)) {
-        throw new Error(
-          `wttj: unexpected Algolia response for query "${query}" — expected { hits: [...] }, got keys: [${json ? Object.keys(json).join(', ') : 'null'}]`,
-        );
+
+      const seen = new Set();
+      let collected = 0;
+      let nbHits = null;
+      let stop = 'complete';
+      for (let page = 0; ; page++) {
+        if (page >= probePages) { stop = 'probe'; break; }
+        params.set('page', String(page));
+        let json;
+        try {
+          json = /** @type {any} */ (
+            await ctx.fetchJson(url, {
+              method: 'POST',
+              redirect: 'error',
+              headers: {
+                'x-algolia-application-id': appId,
+                'x-algolia-api-key': apiKey,
+                // The client search key is referer-locked to the WTTJ site.
+                referer: `${SITE_ORIGIN}/`,
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify({ params: params.toString() }),
+            })
+          );
+          if (!json || !Array.isArray(json.hits)) {
+            throw new Error(
+              `wttj: unexpected Algolia response for query "${query}" — expected { hits: [...] }, got keys: [${json ? Object.keys(json).join(', ') : 'null'}]`,
+            );
+          }
+        } catch (err) {
+          if (page === 0) throw err;
+          console.error(`⚠️  wttj: ${entry.name} query "${query}" stopped at page ${page + 1} (${collected} hits kept): ${err.message}`);
+          stop = 'error';
+          break;
+        }
+        if (Number.isInteger(json.nbHits) && json.nbHits >= 0) nbHits = json.nbHits;
+        if (json.hits.length === 0) break;
+
+        let fresh = 0;
+        for (const h of json.hits) {
+          if (collected >= maxHits) break;
+          const job = normalizeWttjHit(h);
+          const key = typeof h?.objectID === 'string' && h.objectID ? h.objectID : job?.url ?? '';
+          if (key && seen.has(key)) continue;
+          if (key) seen.add(key);
+          fresh++;
+          collected++;
+          if (job && !byUrl.has(job.url)) byUrl.set(job.url, job);
+        }
+        if (fresh === 0) { stop = 'repeated'; break; }
+        if (collected >= maxHits) { stop = 'budget'; break; }
+        const lastPage = Number.isInteger(json.nbPages)
+          ? page + 1 >= json.nbPages
+          : json.hits.length < hitsPerPage;
+        if (lastPage) break;
       }
-      for (const h of json.hits) {
-        const job = normalizeWttjHit(h);
-        if (job && !byUrl.has(job.url)) byUrl.set(job.url, job);
-      }
+      if (stop === 'error') transient = true;
+      else if (stop !== 'probe' && nbHits !== null && nbHits > collected) structural = true;
+      else if (stop === 'budget' && nbHits === null) structural = true;
     }
-    return [...byUrl.values()];
+    const jobs = [...byUrl.values()];
+    // Same array-tag convention and reason values as workday.mjs's
+    // jobs.workdayTruncated; scan.mjs turns it into a receipt error so a
+    // partial board never certifies an empty result. Structural wins: a repeat
+    // run reaches the same wall.
+    if (structural) /** @type {any} */ (jobs).wttjTruncated = 'structural';
+    else if (transient) /** @type {any} */ (jobs).wttjTruncated = 'transient';
+    return jobs;
   },
 };

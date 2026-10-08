@@ -106,10 +106,28 @@ try {
     fail(`normalizeWttjHit() job = ${JSON.stringify(j1)}`);
   }
 
-  if (j1 && j1.location === 'Paris, France, Remote') {
-    pass('normalizeWttjHit() joins first-office city+country and appends Remote for fulltime-remote posts');
+  if (j1 && j1.location === 'Paris, France; Lyon, France, Remote') {
+    pass('normalizeWttjHit() joins every office as "City, Country" with "; " and appends Remote once for fulltime-remote posts');
   } else {
     fail(`normalizeWttjHit() location = ${JSON.stringify(j1 && j1.location)}`);
+  }
+
+  const officesOnly = normalizeWttjHit({
+    ...fullHit,
+    remote: 'partial',
+    offices: [{ city: 'Lisboa', country: 'Portugal' }, { city: ' ', country: 'Portugal' }, { city: 'Lisboa', country: 'Portugal' }, null],
+  });
+  if (officesOnly && officesOnly.location === 'Lisboa, Portugal; Portugal') {
+    pass('normalizeWttjHit() keeps a country-only office, drops repeated/invalid offices, and adds no Remote suffix for partial remote');
+  } else {
+    fail(`normalizeWttjHit() offices-only location = ${JSON.stringify(officesOnly && officesOnly.location)}`);
+  }
+
+  const remoteOnly = normalizeWttjHit({ ...fullHit, offices: [] });
+  if (remoteOnly && remoteOnly.location === 'Remote') {
+    pass('normalizeWttjHit() falls back to "Remote" for a fulltime-remote post without offices');
+  } else {
+    fail(`normalizeWttjHit() remote-only location = ${JSON.stringify(remoteOnly && remoteOnly.location)}`);
   }
 
   if (j1 && j1.postedAt === 1751500800000) {
@@ -184,6 +202,7 @@ try {
             opts,
             query: params.get('query'),
             hitsPerPage: params.get('hitsPerPage'),
+            page: Number(params.get('page') ?? 0),
             filters: params.get('filters'),
           };
           jsonCalls.push(call);
@@ -242,12 +261,115 @@ try {
     fail(`wttj.fetch() hitsPerPage=${q1.hitsPerPage}, queries=${happy.jsonCalls.map((c) => c.query).join(',')}`);
   }
 
-  const capped = mkCtx(ENV_OK, () => ({ hits: [] }));
-  await wttj.fetch({ name: 'WTTJ', provider: 'wttj', wttj: { queries: ['x'], max_hits: 500 } }, capped.ctx);
-  if (capped.jsonCalls[0].hitsPerPage === '200') {
-    pass('wttj.fetch() caps max_hits at 200 per query');
+  // A board of `total` distinct hits, served page by page as Algolia does.
+  const boardOf = (total) => ({ page, hitsPerPage }) => {
+    const size = Number(hitsPerPage);
+    const hits = [];
+    for (let i = page * size; i < Math.min(total, (page + 1) * size); i++) hits.push(mkHit(`job-${i}`, `Role ${i}`));
+    return { hits, nbHits: total, nbPages: Math.ceil(total / size), page, hitsPerPage: size };
+  };
+
+  const capped = mkCtx(ENV_OK, boardOf(5000));
+  const cappedJobs = await wttj.fetch({ name: 'WTTJ', provider: 'wttj', wttj: { queries: ['x'], max_hits: 500 } }, capped.ctx);
+  if (cappedJobs.length === 200 && capped.jsonCalls.length === 2 && capped.jsonCalls.every((c) => c.hitsPerPage === '100')) {
+    pass('wttj.fetch() caps the max_hits budget at 200 per query, read as two pages of 100');
   } else {
-    fail(`wttj.fetch() max_hits=500 → hitsPerPage=${capped.jsonCalls[0].hitsPerPage}`);
+    fail(`wttj.fetch() max_hits=500 → ${cappedJobs.length} jobs from ${capped.jsonCalls.length} pages (hitsPerPage=${capped.jsonCalls.map((c) => c.hitsPerPage)})`);
+  }
+
+  // --- Pagination (max_hits is the total budget per query) ---------------
+  const paged = mkCtx(ENV_OK, boardOf(250));
+  const pagedJobs = await wttj.fetch(
+    { name: 'WTTJ', provider: 'wttj', wttj: { filters: 'offices.country_code:PT', max_hits: 1000 } },
+    paged.ctx,
+  );
+  if (
+    pagedJobs.length === 250 &&
+    paged.jsonCalls.map((c) => c.page).join(',') === '0,1,2' &&
+    pagedJobs.wttjTruncated === undefined
+  ) {
+    pass('wttj.fetch() follows nbPages across three pages and does not flag a fully read result');
+  } else {
+    fail(`wttj.fetch() 3-page board → ${pagedJobs.length} jobs, pages=${paged.jsonCalls.map((c) => c.page)}, truncated=${pagedJobs.wttjTruncated}`);
+  }
+
+  const budget = mkCtx(ENV_OK, boardOf(500));
+  const budgetJobs = await wttj.fetch({ name: 'WTTJ', provider: 'wttj', wttj: { queries: ['x'], max_hits: 150 } }, budget.ctx);
+  if (budgetJobs.length === 150 && budget.jsonCalls.length === 2 && budgetJobs.wttjTruncated === 'structural') {
+    pass('wttj.fetch() stops at the max_hits budget and flags structural truncation when nbHits is larger');
+  } else {
+    fail(`wttj.fetch() budget 150 of 500 → ${budgetJobs.length} jobs, ${budget.jsonCalls.length} pages, truncated=${budgetJobs.wttjTruncated}`);
+  }
+
+  const exact = mkCtx(ENV_OK, boardOf(150));
+  const exactJobs = await wttj.fetch({ name: 'WTTJ', provider: 'wttj', wttj: { queries: ['x'], max_hits: 150 } }, exact.ctx);
+  if (exactJobs.length === 150 && exactJobs.wttjTruncated === undefined) {
+    pass('wttj.fetch() does not flag a budget that exactly covers nbHits');
+  } else {
+    fail(`wttj.fetch() budget 150 of 150 → ${exactJobs.length} jobs, truncated=${exactJobs.wttjTruncated}`);
+  }
+
+  const emptyPage = mkCtx(ENV_OK, (call) => (call.page === 1 ? { hits: [], nbHits: 300, nbPages: 3 } : boardOf(300)(call)));
+  const emptyPageJobs = await wttj.fetch({ name: 'WTTJ', provider: 'wttj', wttj: { queries: ['x'], max_hits: 200 } }, emptyPage.ctx);
+  if (emptyPageJobs.length === 100 && emptyPage.jsonCalls.length === 2 && emptyPageJobs.wttjTruncated === 'structural') {
+    pass('wttj.fetch() stops on an empty page and flags the hits nbHits still promised');
+  } else {
+    fail(`wttj.fetch() empty page 1 → ${emptyPageJobs.length} jobs, ${emptyPage.jsonCalls.length} pages, truncated=${emptyPageJobs.wttjTruncated}`);
+  }
+
+  const repeated = mkCtx(ENV_OK, (call) => boardOf(300)({ ...call, page: 0 }));
+  const repeatedJobs = await wttj.fetch({ name: 'WTTJ', provider: 'wttj', wttj: { queries: ['x'], max_hits: 200 } }, repeated.ctx);
+  if (repeatedJobs.length === 100 && repeated.jsonCalls.length === 2 && repeatedJobs.wttjTruncated === 'structural') {
+    pass('wttj.fetch() stops on a page whose hits were all seen already and flags the result');
+  } else {
+    fail(`wttj.fetch() repeated page → ${repeatedJobs.length} jobs, ${repeated.jsonCalls.length} pages, truncated=${repeatedJobs.wttjTruncated}`);
+  }
+
+  const laterError = mkCtx(ENV_OK, (call) => {
+    if (call.page === 1) throw new Error('fixture page 2 unavailable');
+    return boardOf(300)(call);
+  });
+  const origError = console.error;
+  const laterWarnings = [];
+  console.error = (...args) => { laterWarnings.push(args.join(' ')); };
+  let laterErrorJobs;
+  try {
+    laterErrorJobs = await wttj.fetch({ name: 'WTTJ', provider: 'wttj', wttj: { queries: ['x'], max_hits: 200 } }, laterError.ctx);
+  } finally {
+    console.error = origError;
+  }
+  if (
+    laterErrorJobs.length === 100 &&
+    laterErrorJobs.wttjTruncated === 'transient' &&
+    laterWarnings.some((w) => w.includes('fixture page 2 unavailable'))
+  ) {
+    pass('wttj.fetch() keeps page 1 when page 2 fails and flags transient truncation');
+  } else {
+    fail(`wttj.fetch() page-2 error → ${laterErrorJobs && laterErrorJobs.length} jobs, truncated=${laterErrorJobs && laterErrorJobs.wttjTruncated}`);
+  }
+
+  let firstPageErr = '';
+  try {
+    await wttj.fetch(
+      { name: 'WTTJ', provider: 'wttj', wttj: { queries: ['x'] } },
+      mkCtx(ENV_OK, () => { throw new Error('fixture first page down'); }).ctx,
+    );
+  } catch (err) { firstPageErr = err.message; }
+  if (firstPageErr === 'fixture first page down') {
+    pass('wttj.fetch() still throws when the first page fails');
+  } else {
+    fail(`wttj.fetch() first-page error = ${JSON.stringify(firstPageErr) || 'did not throw'}`);
+  }
+
+  const probe = mkCtx(ENV_OK, boardOf(500));
+  const probeJobs = await wttj.fetch(
+    { name: 'WTTJ', provider: 'wttj', wttj: { queries: ['x'], max_hits: 200 } },
+    { ...probe.ctx, maxPages: 1 },
+  );
+  if (probeJobs.length === 100 && probe.jsonCalls.length === 1 && probeJobs.wttjTruncated === undefined) {
+    pass('wttj.fetch() honours ctx.maxPages as a probe limit without flagging truncation');
+  } else {
+    fail(`wttj.fetch() ctx.maxPages=1 → ${probeJobs.length} jobs, ${probe.jsonCalls.length} pages, truncated=${probeJobs.wttjTruncated}`);
   }
 
   let noQueriesErr = '';
@@ -300,36 +422,36 @@ try {
   }
 
   // No filters → the 200 cap stands (an unfiltered query can match the whole board).
-  const unfilteredCap = mkCtx(ENV_OK, () => ({ hits: [] }));
-  await wttj.fetch({ name: 'WTTJ', provider: 'wttj', wttj: { queries: ['x'], max_hits: 5000 } }, unfilteredCap.ctx);
-  if (unfilteredCap.jsonCalls[0].hitsPerPage === '200') {
-    pass('wttj.fetch() still caps max_hits at 200 when no filters are configured');
+  const unfilteredCap = mkCtx(ENV_OK, boardOf(5000));
+  const unfilteredJobs = await wttj.fetch({ name: 'WTTJ', provider: 'wttj', wttj: { queries: ['x'], max_hits: 5000 } }, unfilteredCap.ctx);
+  if (unfilteredJobs.length === 200) {
+    pass('wttj.fetch() still caps the max_hits budget at 200 when no filters are configured');
   } else {
-    fail(`wttj.fetch() unfiltered max_hits=5000 → hitsPerPage=${unfilteredCap.jsonCalls[0].hitsPerPage}`);
+    fail(`wttj.fetch() unfiltered max_hits=5000 → ${unfilteredJobs.length} jobs`);
   }
 
-  // With filters → the cap rises to Algolia's per-request ceiling for this index.
-  const filteredCap = mkCtx(ENV_OK, () => ({ hits: [] }));
-  await wttj.fetch(
+  // With filters → the budget rises to 1000 hits, read across pages.
+  const filteredCap = mkCtx(ENV_OK, boardOf(5000));
+  const filteredCapJobs = await wttj.fetch(
     { name: 'WTTJ', provider: 'wttj', wttj: { filters: FILTER, max_hits: 5000 } },
     filteredCap.ctx,
   );
-  if (filteredCap.jsonCalls[0].hitsPerPage === '1000') {
-    pass('wttj.fetch() raises the max_hits cap to 1000 when filters narrow the board');
+  if (filteredCapJobs.length === 1000 && filteredCap.jsonCalls.length === 10) {
+    pass('wttj.fetch() raises the max_hits budget to 1000 when filters narrow the board');
   } else {
-    fail(`wttj.fetch() filtered max_hits=5000 → hitsPerPage=${filteredCap.jsonCalls[0].hitsPerPage}`);
+    fail(`wttj.fetch() filtered max_hits=5000 → ${filteredCapJobs.length} jobs from ${filteredCap.jsonCalls.length} pages`);
   }
 
   // A blank/whitespace filters value must not silently unlock the higher cap.
-  const blankFilter = mkCtx(ENV_OK, () => ({ hits: [] }));
-  await wttj.fetch(
+  const blankFilter = mkCtx(ENV_OK, boardOf(5000));
+  const blankFilterJobs = await wttj.fetch(
     { name: 'WTTJ', provider: 'wttj', wttj: { filters: '   ', queries: ['x'], max_hits: 5000 } },
     blankFilter.ctx,
   );
-  if (blankFilter.jsonCalls[0].hitsPerPage === '200' && blankFilter.jsonCalls[0].filters === null) {
-    pass('wttj.fetch() treats a blank wttj.filters as absent (cap stays 200, no filters param sent)');
+  if (blankFilterJobs.length === 200 && blankFilter.jsonCalls[0].filters === null) {
+    pass('wttj.fetch() treats a blank wttj.filters as absent (budget stays 200, no filters param sent)');
   } else {
-    fail(`wttj.fetch() blank filters → hitsPerPage=${blankFilter.jsonCalls[0].hitsPerPage}, filters=${JSON.stringify(blankFilter.jsonCalls[0].filters)}`);
+    fail(`wttj.fetch() blank filters → ${blankFilterJobs.length} jobs, filters=${JSON.stringify(blankFilter.jsonCalls[0].filters)}`);
   }
 
   let longFilterErr = '';

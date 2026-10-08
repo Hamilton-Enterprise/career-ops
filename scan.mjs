@@ -4024,11 +4024,14 @@ async function main() {
       if (!Array.isArray(jobs)) {
         throw new Error(`${provider.id}: fetch() did not return an array`);
       }
-      if (provider.id === 'workday' && jobs.workdayTruncated !== undefined) {
-        const reason = jobs.workdayTruncated === WORKDAY_TRUNCATED_REASON.TRANSIENT
-          || jobs.workdayTruncated === WORKDAY_TRUNCATED_REASON.STRUCTURAL
-          ? jobs.workdayTruncated : 'unknown';
-        errors.push({ company: company.name, error: `workday: incomplete pagination (${reason})` });
+      // wttj tags its array with the same reason values as workday.
+      const truncated = provider.id === 'workday' ? jobs.workdayTruncated
+        : provider.id === 'wttj' ? jobs.wttjTruncated : undefined;
+      if (truncated !== undefined) {
+        const reason = truncated === WORKDAY_TRUNCATED_REASON.TRANSIENT
+          || truncated === WORKDAY_TRUNCATED_REASON.STRUCTURAL
+          ? truncated : 'unknown';
+        errors.push({ company: company.name, error: `${provider.id}: incomplete pagination (${reason})` });
       }
       totalFound += jobs.length;
       if (!company._isBoard && jobs.length === 0) {
