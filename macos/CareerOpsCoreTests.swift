@@ -139,6 +139,16 @@ struct CareerOpsCoreTests {
         let primaryAgain = loadInstallPreferences(
             bundleURL: primary, bundledDefaults: synth, standard: standard, home: root)
         assert(primaryAgain.string(forKey: "CareerOpsDataRootPath") == "/moved/data")
+
+        let suite = UserDefaults(suiteName: "career-ops-runtime-\(UUID().uuidString)")!
+        suite.set("/old/runtime/aaaa", forKey: "CareerOpsRuntimePath")
+        syncBundleRuntimePath(suite, infoRuntimePath: "/new/runtime/bbbb")
+        assert(suite.string(forKey: "CareerOpsRuntimePath") == "/new/runtime/bbbb",
+               "Each launch must adopt the Info.plist runtime, not a stale suite value")
+        syncBundleRuntimePath(suite, infoRuntimePath: "  ")
+        assert(suite.string(forKey: "CareerOpsRuntimePath") == "/new/runtime/bbbb")
+        syncBundleRuntimePath(suite, infoRuntimePath: nil)
+        assert(suite.string(forKey: "CareerOpsRuntimePath") == "/new/runtime/bbbb")
     }
 
     private static func testRuntimeArtifact(root: URL, node: URL) throws {
