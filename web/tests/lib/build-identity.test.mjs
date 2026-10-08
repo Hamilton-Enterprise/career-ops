@@ -1,9 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { captureBuildIdentity, versionPayload } from "../../src/lib/build-identity.mjs";
+import { PHASE_PRODUCTION_BUILD, PHASE_PRODUCTION_SERVER } from "next/constants.js";
+import { IDENTITY_FILE, captureBuildIdentity, versionPayload } from "../../src/lib/build-identity.mjs";
 
 const WEB_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -90,4 +93,26 @@ test("next.config.mjs captures the identity into Next's build-time env", () => {
   const config = readFileSync(join(WEB_ROOT, "next.config.mjs"), "utf8");
   assert.match(config, /captureBuildIdentity/);
   assert.match(config, /\benv:/);
+});
+
+test("next build writes the same identity next to BUILD_ID for the app bundle", async () => {
+  const { default: nextConfig } = await import("../../next.config.mjs");
+  const config = nextConfig(PHASE_PRODUCTION_BUILD);
+  const distDir = mkdtempSync(join(tmpdir(), "identity-"));
+  try {
+    await config.compiler.runAfterProductionCompile({ projectDir: WEB_ROOT, distDir });
+    const written = JSON.parse(readFileSync(join(distDir, IDENTITY_FILE), "utf8"));
+    assert.deepEqual(written, config.env);
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: WEB_ROOT }).toString().trim();
+    assert.equal(written.CAREER_OPS_BUILD_SHA, head);
+  } finally {
+    rmSync(distDir, { recursive: true, force: true });
+  }
+});
+
+test("next start neither recaptures the identity nor rewrites the file", async () => {
+  const { default: nextConfig } = await import("../../next.config.mjs");
+  const config = nextConfig(PHASE_PRODUCTION_SERVER);
+  assert.deepEqual(config.env, {});
+  assert.equal(config.compiler?.runAfterProductionCompile, undefined);
 });

@@ -1,5 +1,8 @@
 import { join } from "node:path";
 
+/** Written next to BUILD_ID; macos/build-identity.sh reads it into the app bundle. */
+export const IDENTITY_FILE = "career-ops-identity.json";
+
 function attempt(read) {
   try {
     return read();

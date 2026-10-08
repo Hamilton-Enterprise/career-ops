@@ -32,6 +32,7 @@ build_dir="$(mktemp -d "$script_dir/../work/macos-build/run.XXXXXX")"
 swiftc -parse-as-library "$script_dir/CareerOpsCore.swift" "$script_dir/CareerOpsCoreTests.swift" -o "$build_dir/core-tests"
 "$build_dir/core-tests"
 "$script_dir/test-install.sh"
+"$script_dir/test-build-identity.sh"
 if "$test_only"; then exit 0; fi
 
 [[ -d "$checkout" ]] || { printf '%s\n' 'A pasta do projeto não existe.' >&2; exit 2; }
@@ -44,6 +45,7 @@ node_path="$(cd "$(dirname "$node_path")" && pwd -P)/$(basename "$node_path")"
 [[ -f "$checkout/web/server.mjs" && -f "$checkout/web/.next/BUILD_ID" ]] || {
     printf '%s\n' 'Falta o launcher ou a compilação web. Execute npm run build em web/.' >&2; exit 2;
 }
+"$script_dir/build-identity.sh" "$checkout" >/dev/null
 if [[ -n "$data_root" ]]; then
     [[ -d "$data_root" ]] || { printf '%s\n' 'A pasta de dados não existe.' >&2; exit 2; }
     data_root="$(cd "$data_root" && pwd -P)"
@@ -61,8 +63,7 @@ bundle="$build_dir/Career Ops.app"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
 swiftc -parse-as-library -target "$(uname -m)-apple-macosx13.0" -O "$script_dir/CareerOpsCore.swift" "$script_dir/CareerOpsApp.swift" -framework AppKit -framework WebKit -o "$bundle/Contents/MacOS/CareerOps"
 cp "$script_dir/Info.plist" "$bundle/Contents/Info.plist"
-build_sha="$(git -C "$checkout" rev-parse HEAD 2>/dev/null || true)"
-plutil -insert CareerOpsBuildSHA -string "$build_sha" "$bundle/Contents/Info.plist"
+"$script_dir/build-identity.sh" "$checkout" "$bundle/Contents/Info.plist" >/dev/null
 defaults="$bundle/Contents/Resources/Defaults.plist"
 plutil -create xml1 "$defaults"
 plutil -insert CareerOpsCheckoutPath -string "$checkout" "$defaults"
