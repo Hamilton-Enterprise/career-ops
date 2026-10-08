@@ -255,7 +255,7 @@ for (const { id, name } of agents) {
     await waitFor(() => { try { process.kill(pid, 0); return false; } catch { return true; } }, "timed-out child remains alive");
     assert.match(text, /tempo limite/);
     assert.doesNotMatch(text, /SECRET_FROM_STDERR|PRIVATE_PROMPT/);
-    assert.equal(fs.existsSync(f.records()[0].cwd), false, "timeout must remove cwd");
+    await waitFor(() => !fs.existsSync(f.records()[0].cwd), "timeout must remove cwd after the child releases it");
     assertPreserved(f);
     const outcome = await providerOutcome(t, text);
     assert.equal(outcome.phase, 'failed');
@@ -273,8 +273,11 @@ for (const { id, name } of agents) {
     t.mock.method(fs, "mkdtempSync", (...args) => { cwd = realMkdtemp(...args); return cwd; });
     if (id !== "codex") fs.writeFileSync(path.join(f.bins, agent.bin), "#!/nonexistent/PRIVATE_INTERPRETER\n");
     else {
-      // Delete after the cached probe stat, immediately after creating cwd.
-      t.mock.method(fs, "mkdtempSync", (...args) => { cwd = realMkdtemp(...args); fs.unlinkSync(path.join(f.bins, agent.bin)); return cwd; });
+      // Delete what this platform actually launches after the cached probe
+      // stat, immediately after creating cwd. Windows resolves npm's shim to
+      // the .cjs target; POSIX executes the extensionless shim itself.
+      const launchFile = path.join(f.bins, process.platform === "win32" ? `${agent.bin}.cjs` : agent.bin);
+      t.mock.method(fs, "mkdtempSync", (...args) => { cwd = realMkdtemp(...args); fs.unlinkSync(launchFile); return cwd; });
     }
     const response = await invoke(id);
     assert.equal(response.status, 200);
