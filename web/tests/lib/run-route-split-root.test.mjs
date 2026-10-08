@@ -3,6 +3,7 @@ import { test } from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import "../helpers/web-ts-alias-loader.mjs";
 
 const { POST } = await import("../../src/app/api/run/route.ts");
@@ -10,7 +11,7 @@ const { readLanguageConfig } = await import("../../src/lib/career-ops.ts");
 
 function fixture(t, { market = false, pdf = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-run-split-")));
-  const code = path.join(root, "checkout");
+  const code = path.join(root, "engine", "checkout");
   const data = path.join(root, "user-data");
   const bins = path.join(root, "bin");
   const recordFile = path.join(root, "invocation.json");
@@ -23,9 +24,19 @@ function fixture(t, { market = false, pdf = false } = {}) {
   fs.writeFileSync(path.join(code, "modes", "pdf.md"), "# Tailoring rules\n");
   fs.writeFileSync(path.join(code, "verify-portals.mjs"), "// System verifier\n");
   fs.writeFileSync(path.join(data, "cv.md"), "# Synthetic CV\n");
-  fs.writeFileSync(path.join(data, "config", "profile.yml"), `candidate:\n  full_name: Synthetic Candidate\nlanguage:\n  output: pt-PT\n${market ? "  modes_dir: [modes/de, modes/zh]\n" : ""}`);
+  fs.writeFileSync(path.join(data, "config", "profile.yml"), `candidate:\n  full_name: Synthetic Candidate\ncv:\n  template: custom\nlanguage:\n  output: pt-PT\n${market ? "  modes_dir: [modes/de, modes/zh]\n" : ""}`);
   fs.writeFileSync(path.join(data, "reports", "001-synthetic-2026-10-08.md"), "# Synthetic report\n");
-  fs.writeFileSync(path.join(code, "cv-templates.mjs"), `import path from "node:path";\nexport function resolveTemplate() { return path.join(import.meta.dirname, "templates", "cv-template.custom.html"); }\n`);
+  // Use the real core resolver, including its module-load data-root lookup.
+  const engine = fileURLToPath(new URL("../../../", import.meta.url));
+  for (const file of ["cv-templates.mjs", "path-resolver.mjs", "lib/is-main-module.mjs", "providers/_html-entities.mjs"]) {
+    fs.mkdirSync(path.dirname(path.join(code, file)), { recursive: true });
+    fs.copyFileSync(path.join(engine, file), path.join(code, file));
+  }
+  fs.symlinkSync(path.join(engine, "node_modules"), path.join(code, "node_modules"), "dir");
+  fs.mkdirSync(path.join(code, "templates"));
+  for (const name of ["cv-template.html", "cv-template.custom.html"]) {
+    fs.writeFileSync(path.join(code, "templates", name), "{{NAME}}{{EXPERIENCE}}{{EDUCATION}}");
+  }
   // Replace only the external model and PDF renderer. Resolution, preflight,
   // permissions, real processes, stream parsing and user-file paths stay real.
   const record = `const fs = require("node:fs"); const path = require("node:path");`;
@@ -112,11 +123,48 @@ test("relative data-root overrides retain their original base in the worker and 
   assert.equal(fs.existsSync(path.join(f.data, "marked.json")), true);
 });
 
+test("a relative data root and a separate runtime select the user's template through the real resolver", async t => {
+  const f = fixture(t, { pdf: true });
+  const runtime = path.join(path.dirname(f.data), "runtime");
+  fs.mkdirSync(path.join(runtime, "web"), { recursive: true });
+  // Resolving ../user-data against the engine checkout selects this decoy.
+  const wrongData = path.join(path.dirname(f.code), "user-data", "config");
+  fs.mkdirSync(wrongData, { recursive: true });
+  fs.writeFileSync(path.join(wrongData, "profile.yml"), "cv:\n  template: standard\n");
+  process.env.CAREER_OPS_ROOT = "../user-data";
+  const priorCwd = process.cwd();
+  process.chdir(path.join(runtime, "web"));
+  try {
+    const response = await invoke("pdf");
+    assert.equal(response.status, 200);
+    const events = (await response.text()).trim().split("\n").map(JSON.parse);
+    assert.equal(events.at(-1).type, "done", JSON.stringify(events));
+    assert.equal(f.record().dataRoot, f.data);
+    const prompt = f.record().args[f.record().args.indexOf("-p") + 1];
+    assert.ok(prompt.includes("templates/cv-template.custom.html"), "template must follow the route's user profile, not the code-root decoy");
+  } finally {
+    process.chdir(priorCwd);
+  }
+});
+
+test("an explicit profile override still takes precedence over the route's resolved default profile", async t => {
+  const f = fixture(t, { pdf: true });
+  fs.mkdirSync(path.join(f.code, "config"));
+  fs.writeFileSync(path.join(f.code, "config", "profile.yml"), "cv:\n  template: standard\n");
+  process.env.CAREER_OPS_PROFILE = "config/profile.yml";
+  const response = await invoke("pdf");
+  assert.equal(response.status, 200);
+  await response.text();
+  const prompt = f.record().args[f.record().args.indexOf("-p") + 1];
+  assert.ok(prompt.includes("templates/cv-template.html"));
+  assert.equal(prompt.includes("templates/cv-template.custom.html"), false);
+});
+
 test("marker-selected user data is passed explicitly to a worker running in the code checkout", async t => {
   const f = fixture(t);
   const priorCwd = process.cwd();
   fs.mkdirSync(path.join(f.code, "web"));
-  fs.writeFileSync(path.join(f.code, ".career-ops-data"), "../user-data\n");
+  fs.writeFileSync(path.join(f.code, ".career-ops-data"), path.relative(f.code, f.data) + "\n");
   delete process.env.CAREER_OPS_ROOT;
   delete process.env.CAREER_OPS_DATA_DIR;
   process.chdir(path.join(f.code, "web"));

@@ -135,9 +135,9 @@ export async function POST(req: Request) {
   // is: the worker has no Bash (#2172), so it cannot run cv-templates.mjs and the
   // prompt used to name the base template outright, silently ignoring cv.template
   // (#4034). Only pdf fills a template, so nothing else pays for the lookup.
-  // The resolver and templates belong to code; the core resolver reads the
-  // profile through its data-root contract (see cv-template.mjs).
-  const cvTemplate = kind === "pdf" ? await resolveCvTemplate(codeRoot) : undefined;
+  // Load the system resolver from code, but pin the user profile to the data
+  // root resolved here rather than the imported module's relative env base.
+  const cvTemplate = kind === "pdf" ? await resolveCvTemplate(codeRoot, path.join(dataRoot, "config", "profile.yml")) : undefined;
   const prompt = `The engine checkout is ${JSON.stringify(codeRoot)}. Read system modes, scripts and templates there. The user data root is ${JSON.stringify(dataRoot)}: resolve cv.md, article-digest.md, config/, modes/_profile.md, modes/_custom.md, voice-dna.md, writing-samples/, portals.yml, data/, reports/, output/, documents/, jds/, batch/tracker-additions/ and interview-prep/ there for ALL user-data reads and writes, including paths in mode instructions. Keep system files in the engine checkout.\n\n` +
     buildPrompt({ kind, input, memory: readMemory(), today, postedAt, lang, cvTemplate });
 
