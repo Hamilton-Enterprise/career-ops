@@ -5,7 +5,7 @@ import { careerOpsRoot } from "@/lib/career-ops";
 import { dropNewTabs } from "./diagnose";
 import type { DriveStep } from "./issue";
 import { CAPS } from "../worker-capabilities.mjs";
-import { scopeFrom } from "../claude-invocation.mjs";
+import { CLAUDE_READ_ONLY_ISOLATION, scopeFrom } from "../claude-invocation.mjs";
 
 export type { DriveStep };
 
@@ -68,7 +68,7 @@ const PLANNER_DENIED = [scopeFrom("").disallowed, "Read", "Glob", "Grep"].join("
 /** One planner turn (Claude-first: --resume keeps the loop's context cheaply). */
 function plannerTurn(binPath: string, prompt: string, resumeId: string | null): Promise<{ out: string; sessionId: string | null }> {
   const base = resumeId ? ["-p", "--resume", resumeId, prompt] : ["-p", prompt];
-  const args = [...base, "--output-format", "json", "--strict-mcp-config", "--disallowedTools", PLANNER_DENIED];
+  const args = [...base, "--output-format", "json", ...CLAUDE_READ_ONLY_ISOLATION, "--disallowedTools", PLANNER_DENIED];
   return new Promise((resolve) => {
     // Claude-only by construction — driveSession returns before the loop unless
     // cliId is "claude", and this argv is Claude's own (--resume, --output-format

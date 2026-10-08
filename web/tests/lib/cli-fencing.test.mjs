@@ -25,7 +25,11 @@ const claudeArgv = (allowed = "Read,Glob,Grep") => {
   // --strict-mcp-config included: verification requires it for a non-writing record,
   // because a deny list describes only native tools and an MCP server could supply
   // a write tool beside them.
-  return ["-p", "PROMPT", "--strict-mcp-config", "--allowedTools", scope.allowed, "--disallowedTools", scope.disallowed];
+  // --settings too: hooks are shell commands outside both tool lists.
+  return [
+    "-p", "PROMPT", "--strict-mcp-config", "--settings", '{"disableAllHooks":true}',
+    "--allowedTools", scope.allowed, "--disallowedTools", scope.disallowed,
+  ];
 };
 
 /** Read a `-c key=value` override back out of a built argv. */
@@ -660,6 +664,47 @@ test("a non-writing claude argv that names an MCP config is refused even with --
   // And a writing worker keeps its configured servers, as with --strict-mcp-config.
   const writeScope = scopeFrom("Read,WebFetch,WebSearch,Write,Edit,Bash,Glob,Grep");
   const writeArgs = ["-p", "PROMPT", "--mcp-config", "servers.json", "--allowedTools", writeScope.allowed, "--disallowedTools", writeScope.disallowed];
+  assert.doesNotThrow(() => fenceArgs({ cliId: "claude", args: writeArgs, capabilities: CAPS.workspaceWrite }));
+});
+
+test("a non-writing claude argv that leaves hooks enabled is refused", () => {
+  // Given user/project hooks run shell commands that neither tool list names,
+  // so a writes:false worker with hooks loaded can still write while its deny
+  // list reads as complete.
+  const scope = scopeFrom("Read,Glob,Grep");
+  const base = ["-p", "PROMPT", "--strict-mcp-config", "--allowedTools", scope.allowed, "--disallowedTools", scope.disallowed];
+  const refused = {
+    "no override": base,
+    "hooks not disabled": [...base, "--settings", '{"disableAllHooks":false}'],
+    "unrelated settings": [...base, "--settings", '{"model":"sonnet"}'],
+    "a settings file nobody can inspect": [...base, "--settings", "settings.json"],
+    "a later override that re-enables hooks": [...base, "--settings", '{"disableAllHooks":true}', "--settings", "{}"],
+    "the equals form without the key": [...base, "--settings={}"],
+  };
+  // When each is presented for a non-writing worker
+  // Then it is refused, with the same kind of message as the MCP refusal.
+  for (const [name, args] of Object.entries(refused)) {
+    assert.throws(
+      () => fenceArgs({ cliId: "claude", args, capabilities: CAPS.localReadOnly }),
+      /disableAllHooks/,
+      `${name} must be refused`,
+    );
+  }
+
+  // And an inline override that disables hooks passes, in either spelling and
+  // alongside other keys a caller may have merged into the same object.
+  for (const extra of [
+    ["--settings", '{"disableAllHooks":true}'],
+    ['--settings={"disableAllHooks":true}'],
+    ["--settings", '{"model":"sonnet","disableAllHooks":true}'],
+  ]) {
+    const args = [...base, ...extra];
+    assert.deepEqual(fenceArgs({ cliId: "claude", args, capabilities: CAPS.localReadOnly }).args, args);
+  }
+
+  // And a writing worker keeps the user's hooks.
+  const writeScope = scopeFrom("Read,WebFetch,WebSearch,Write,Edit,Bash,Glob,Grep");
+  const writeArgs = ["-p", "PROMPT", "--allowedTools", writeScope.allowed, "--disallowedTools", writeScope.disallowed];
   assert.doesNotThrow(() => fenceArgs({ cliId: "claude", args: writeArgs, capabilities: CAPS.workspaceWrite }));
 });
 

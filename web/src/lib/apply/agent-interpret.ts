@@ -4,7 +4,7 @@ import { resolveCli } from "@/lib/clis";
 import { careerOpsRoot } from "@/lib/career-ops";
 import type { ApplyField } from "./extract";
 import { CAPS } from "../worker-capabilities.mjs";
-import { scopeFrom } from "../claude-invocation.mjs";
+import { CLAUDE_READ_ONLY_ISOLATION, scopeFrom } from "../claude-invocation.mjs";
 
 // Deny list DERIVED, never hand-written: every one of the six advisor argvs
 // that spelled its own omitted MultiEdit, which --permission-mode acceptEdits
@@ -91,7 +91,7 @@ Return ONLY a JSON array, no prose, no code fence:
 // keeps the two from disagreeing about which CLI is being run.
 function runPlanner(binPath: string, cliId: string, argsFor: (p: string) => string[], prompt: string): Promise<string> {
   const isClaude = cliId === "claude";
-  const args = isClaude ? ["-p", prompt, "--permission-mode", "acceptEdits", "--strict-mcp-config", "--allowedTools", ADVISOR_SCOPE.allowed, "--disallowedTools", ADVISOR_SCOPE.disallowed] : argsFor(prompt);
+  const args = isClaude ? ["-p", prompt, "--permission-mode", "acceptEdits", ...CLAUDE_READ_ONLY_ISOLATION, "--allowedTools", ADVISOR_SCOPE.allowed, "--disallowedTools", ADVISOR_SCOPE.disallowed] : argsFor(prompt);
   return new Promise((resolve) => {
     // Reads the captured controls and returns JSON — the narrowest scope here:
     // the Claude branch allows Read alone and denies fetching outright.

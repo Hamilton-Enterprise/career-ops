@@ -1,6 +1,6 @@
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
 import { CAPS } from "@/lib/worker-capabilities.mjs";
-import { scopeFrom } from "@/lib/claude-invocation.mjs";
+import { CLAUDE_READ_ONLY_ISOLATION, scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
 import type { CliSpec } from "@/lib/clis";
 
@@ -65,11 +65,11 @@ export function runPlanner(opts: {
   const { cliId, spec, binPath, prompt, fieldCount, cwd, t0, log } = opts;
 
   const isClaude = cliId === "claude";
-  // --strict-mcp-config with no --mcp-config = load ZERO MCP servers → much
-  // faster startup (skips the user's global playwright/gmail/linear/… servers
-  // the planner doesn't need; it only reads local files).
+  // No MCP server and no hook: faster startup (skips the user's global
+  // playwright/gmail/linear/… servers the planner doesn't need; it only reads
+  // local files), and nothing outside the tool lists can write.
   const args = isClaude
-    ? ["-p", prompt, "--permission-mode", "acceptEdits", "--strict-mcp-config", "--allowedTools", ADVISOR_SCOPE.allowed, "--disallowedTools", ADVISOR_SCOPE.disallowed]
+    ? ["-p", prompt, "--permission-mode", "acceptEdits", ...CLAUDE_READ_ONLY_ISOLATION, "--allowedTools", ADVISOR_SCOPE.allowed, "--disallowedTools", ADVISOR_SCOPE.disallowed]
     : spec.args(prompt);
   // A runtime with no verified fencing mechanism plans with its default access.
   // log() is the caller's non-fatal channel; it surfaces in the collapsed

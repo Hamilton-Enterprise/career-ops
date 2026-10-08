@@ -247,6 +247,28 @@ test("claudeCliArgs: MCP is locked for non-writing kinds, kept for writing ones"
   }
 });
 
+test("claudeCliArgs: user and project hooks are off for non-writing kinds, untouched for writing ones", () => {
+  // Given hooks run arbitrary shell commands outside the tool lists, so a
+  // `writes: false` worker with the user's hooks still loaded can write through
+  // them while every deny list here reads as complete.
+  const nonWriting = KNOWN_KINDS.filter((k) => !capabilitiesFor(k).writes);
+  const writing = KNOWN_KINDS.filter((k) => capabilitiesFor(k).writes);
+
+  for (const kind of nonWriting) {
+    const args = claudeCliArgs({ kind, prompt: "x" });
+    // Then the argv that ships carries exactly one inline settings override,
+    // and it disables every hook.
+    assert.equal(args.filter((a) => a === "--settings").length, 1, `${kind} carries one --settings`);
+    assert.deepEqual(JSON.parse(argValue(args, "--settings")), { disableAllHooks: true }, `${kind} disables hooks`);
+  }
+
+  // And a writing kind keeps the user's configuration: no settings override.
+  for (const kind of writing) {
+    const args = claudeCliArgs({ kind, prompt: "x" });
+    assert.ok(!args.some((a) => a === "--settings" || a.startsWith("--settings=")), `${kind} must not be forced`);
+  }
+});
+
 test("claudeCliArgs: carries the prompt and the streaming flags", () => {
   // Given any run
   const args = claudeCliArgs({ kind: "pdf", prompt: "PROMPT-BODY" });
