@@ -2,6 +2,7 @@ import { matchOccupationTitle, matchesOccupationTerms, resolveOccupations } from
 import { resolveLocationInputs } from "./location-concepts.mjs";
 import { normalizeTextKey } from "./core/normalize-text-key.mjs";
 import { buildMarketPlan, classifyMarketLocation } from "./market-presets.mjs";
+import { MARKET_LABEL } from "./explore-state.mjs";
 
 const text = value => normalizeTextKey(String(value ?? "").normalize("NFD").replace(/\p{M}/gu, "").replace(/([\p{L}]+)(?:\/a|\(a\))/giu, "$1"), " ").replace(/\s+/gu, " ");
 const contains = (value, phrase) => Boolean(text(phrase)) && (` ${text(value)} `).includes(` ${text(phrase)} `);
@@ -48,7 +49,7 @@ export function rankOpportunity(offer, plan, observedAt) {
     `Localização: mesma cidade (${geography.input}).` : geography.scope === "metro" ?
     `Localização: Área Metropolitana de Lisboa (${geography.matched}).` : geography.scope === "remote" ?
     "Localização: trabalho remoto aceite." : geography.scope === "country" ?
-    `Localização: país selecionado (${geography.input}).` : `Localização: termo pedido (${geography.input}).`);
+    `Localização: país selecionado (${MARKET_LABEL[geography.input] ?? geography.input}).` : `Localização: termo pedido (${geography.input}).`);
 
   let published = supplied(offer.postedAt) && /^\d{4}-\d{2}-\d{2}$/.test(offer.postedAt) ? Date.parse(`${offer.postedAt}T00:00:00Z`) : NaN;
   if (Number.isFinite(published) && new Date(published).toISOString().slice(0, 10) !== offer.postedAt) published = NaN;

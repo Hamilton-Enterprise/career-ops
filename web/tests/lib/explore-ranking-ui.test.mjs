@@ -6,6 +6,7 @@ import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { loadBindings, transform } from 'next/dist/build/swc/index.js';
 import * as state from '../../src/lib/explore-state.mjs';
+import * as cliPick from '../../src/lib/cli-pick.mjs';
 import * as explore from '../../src/lib/explore.ts';
 import * as exploreAi from '../../src/lib/explore-ai.ts';
 import * as marketPresets from '../../src/lib/market-presets.mjs';
@@ -23,7 +24,7 @@ async function load(filename, deps = {}) {
   const module = { exports: {} };
   new Function('require', 'module', 'exports', code)(id => ({
     'lucide-react': new Proxy({}, { get: () => icon }), '@/lib/cn': { cn: (...v) => v.filter(Boolean).join(' ') },
-    '@/lib/fonts': { instrumentSerif: { className: 'serif' } }, '@/lib/explore-state.mjs': state,
+    '@/lib/fonts': { instrumentSerif: { className: 'serif' } }, '@/lib/explore-state.mjs': state, '@/lib/cli-pick.mjs': cliPick,
     './explore-provider': { useExplore: () => context },
     '@/components/jobs/job-store': { useJobs: () => ({ jobs: [], startJob() {} }) },
     '@/components/cost/cost-badge': { CostBadge: () => null }, '@/components/apply/apply-backdrop': { ApplyBackdrop: () => null },

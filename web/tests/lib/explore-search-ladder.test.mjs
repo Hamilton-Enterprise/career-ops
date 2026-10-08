@@ -5,6 +5,8 @@ import os from "node:os";
 process.env.CAREER_OPS_CODE_ROOT = os.tmpdir();
 import "../helpers/web-ts-alias-loader.mjs";
 const { runDiscovery } = await import("@/lib/core/scan");
+const { buildMarketPlan } = await import("../../src/lib/market-presets.mjs");
+const { parseMarketReceipt } = await import("../../src/lib/core/market-merge.mjs");
 
 const filters = { opportunityType: "employment", positive: ["Operador de Loja"], negative: [], allow: ["Lisboa"], block: [], blockHard: [], alwaysAllow: [], sinceDays: 7, ats: ["workday"], markets: ["portugal"], limitPerAts: 150 };
 const healthy = { kind: "summary", companiesScanned: 2, companiesAvailable: 2, unreachable: 0, matches: 0, capHit: false, datasetStatus: { workday: "ok" }, postingsDroppedNoDate: 0, status: "ok", sources: [{ source: "workday", state: "ok" }, { source: "Landing.jobs", state: "ok" }] };
@@ -76,6 +78,39 @@ test("a market-only healthy zero broadens without requiring inapplicable ATS met
   const summary = { kind: "summary", companiesScanned: 1, unreachable: 0, matches: 0, status: "ok", sources: [{ source: "Welcome to the Jungle", state: "ok" }] };
   const result = await run(summary, [], [], { ...filters, opportunityType: "freelance", ats: [], markets: [] });
   assert.equal(result.plans.length, 2);
+});
+
+test("a WTTJ query budget alone is still a healthy zero for the summary gate", async () => {
+  const positive = Array.from({ length: 15 }, (_, index) => `Quantum role ${index}`);
+  const input = { ...filters, positive, ats: [], allow: [], markets: ["portugal"] };
+  const emptyReceipt = JSON.stringify({ version: "careerops.scan.receipt@1", scanned: 2, skipped: 0, found: 0, filtered: 0, duplicates: 0, added: 0, added_urls: [], offers: [], errors: [], unverified_zero: [], dry_run: true });
+  const summaries = [];
+  const phases = [];
+  await runDiscovery(input, event => { if (event.kind === "summary") summaries.push(event); }, async (plan, emit) => {
+    phases.push(plan.phase);
+    const run = parseMarketReceipt(emptyReceipt, 0, buildMarketPlan(plan.effectiveFilters.markets, plan.effectiveFilters.positive, plan.effectiveFilters.opportunityType, plan));
+    const incomplete = run.sources.filter(source => source.state !== "ok").map(source => source.source);
+    emit({ kind: "summary", companiesScanned: run.scanned, unreachable: 0, matches: 0, status: run.status, sources: run.sources, missingLocation: 0, ...(run.queryLimitedOnly ? { queryLimited: true } : {}), ...(incomplete.length ? { incomplete } : {}) });
+    return [];
+  });
+  assert.deepEqual(phases, ["precise", "broad"]);
+  const wttj = summaries.at(-1).sources.find(source => source.source === "Welcome to the Jungle");
+  assert.equal(wttj.state, "partial");
+  assert.equal(summaries.at(-1).status, "partial");
+});
+
+test("a query budget beside any other shortfall still stops", async () => {
+  const limited = { source: "Welcome to the Jungle", state: "partial", limit: "query-limit", message: "feitas 12 de 15 pesquisas" };
+  for (const patch of [
+    { status: "partial", queryLimited: true, sources: [...healthy.sources, limited, { source: "Landing.jobs", state: "partial" }], incomplete: ["Welcome to the Jungle", "Landing.jobs"] },
+    { status: "partial", queryLimited: true, sources: [...healthy.sources, { ...limited, limit: undefined }], incomplete: ["Welcome to the Jungle"] },
+    { status: "partial", queryLimited: true, sources: [...healthy.sources, limited], incomplete: ["Welcome to the Jungle", "workday"] },
+    { status: "failed", sources: [...healthy.sources, limited], queryLimited: true },
+    { status: "partial", sources: [...healthy.sources, limited], incomplete: ["Welcome to the Jungle"] },
+  ]) {
+    assert.equal((await run({ ...healthy, ...patch })).plans.length, 1, JSON.stringify(patch));
+  }
+  assert.equal((await run({ ...healthy, status: "partial", queryLimited: true, sources: [...healthy.sources, limited], incomplete: ["Welcome to the Jungle"] })).plans.length, 2);
 });
 
 test("a streamed error blocks broadening even beside an otherwise healthy summary", async () => {

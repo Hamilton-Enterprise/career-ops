@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { scoreTone } from "@/lib/format";
-import { resolveCliId } from "@/lib/saved-cli";
+import { resolveCliForAction } from "@/lib/saved-cli";
 import { readJobStream } from "@/lib/job-stream.mjs";
 
 export type JobStep = { kind: "tool" | "status"; label: string; ts: number };
@@ -119,7 +119,7 @@ export function JobsProvider({ children }: { children: React.ReactNode }) {
         // A stale saved id is replaced silently otherwise — name the switch in
         // the job log so a transient "not installed" can't rewrite the user's
         // choice without a record.
-        const cliId = await resolveCliId((stale, replacement) => {
+        const { cliId, blocked } = await resolveCliForAction(opts.kind, (stale, replacement) => {
           const label = replacement
             ? `O agente guardado «${stale}» não está instalado; será usado «${replacement}»`
             : `O agente guardado «${stale}» não está instalado`;
@@ -133,6 +133,15 @@ export function JobsProvider({ children }: { children: React.ReactNode }) {
             status: "error",
             endedAt: Date.now(),
             steps: [...j.steps, { kind: "status", label: "Nenhum agente configurado. Abre Configuração e guarda a escolha.", ts: Date.now() }],
+          }));
+          return;
+        }
+        if (blocked) {
+          patch(id, (j) => ({
+            ...j,
+            status: "error",
+            endedAt: Date.now(),
+            steps: [...j.steps, { kind: "status", label: `${blocked} Escolhe outro agente em Configuração.`, ts: Date.now() }],
           }));
           return;
         }

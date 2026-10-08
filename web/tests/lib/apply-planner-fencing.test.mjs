@@ -131,6 +131,7 @@ test("the Claude planner argv carries the derived deny list, not a hand-written 
     const argv = run.buf.split("\n").filter(Boolean);
     assert.equal(argv.includes("WRONG"), false, "the Claude carve-out builds the argv, spec.args is bypassed");
     assert.ok(argv.includes("--strict-mcp-config"), "a non-writing worker loads no MCP server");
+    assert.deepEqual(JSON.parse(argv[argv.indexOf("--settings") + 1]), { disableAllHooks: true }, "a non-writing worker runs no hook");
     const disallowed = argv[argv.indexOf("--disallowedTools") + 1];
     const allowed = argv[argv.indexOf("--allowedTools") + 1];
     assert.equal(allowed, "Read,Glob,Grep");

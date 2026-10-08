@@ -2,8 +2,8 @@ import { normalizeUrl } from "./url-key.mjs";
 import { classifyMarketLocation } from "../market-presets.mjs";
 
 /** @typedef {import('../explore').DiscoveredOffer} DiscoveredOffer */
-/** @typedef {{source:string, state:'ok'|'partial'|'error'|'skipped', message?:string}} SourceState */
-/** @typedef {{offers:DiscoveredOffer[], sources:SourceState[], missingLocation:number, valid:boolean, status:'ok'|'partial'|'failed', scanned:number}} MarketRun */
+/** @typedef {{source:string, state:'ok'|'partial'|'error'|'skipped', message?:string, limit?:'query-limit'}} SourceState */
+/** @typedef {{offers:DiscoveredOffer[], sources:SourceState[], missingLocation:number, valid:boolean, status:'ok'|'partial'|'failed', scanned:number, queryLimitedOnly?:boolean}} MarketRun */
 
 /** @param {DiscoveredOffer} offer */
 function origins(offer) {
@@ -64,7 +64,8 @@ export function mergeDiscoveredOffers(atsOffers, marketOffers) {
  * @param {boolean} timedOut @returns {MarketRun} */
 export function parseMarketReceipt(output, exitCode, plan, timedOut = false) {
   const sources = plan.jobBoards.map(({ name }) => ({ source: name, state: /** @type {'ok'|'partial'|'error'|'skipped'} */ ('ok') }));
-  sources.push(...plan.skippedSources.map(({ source, reason }) => ({ source, state: /** @type {'skipped'} */ ('skipped'), message: reason })));
+  sources.push(...plan.skippedSources.filter(({ reason }) => reason !== "query-limit")
+    .map(({ source, reason }) => ({ source, state: /** @type {'skipped'} */ ('skipped'), message: reason })));
   /** @type {MarketRun} */
   const run = { offers: [], sources, missingLocation: 0, valid: false, status: "failed", scanned: 0 };
   let receipt;
@@ -125,6 +126,22 @@ export function parseMarketReceipt(output, exitCode, plan, timedOut = false) {
       source.message = "Um ou mais fornecedores não foram executados; o recibo não identifica quais.";
     }
   }
+  for (const skipped of plan.skippedSources) {
+    if (skipped.reason !== "query-limit") continue;
+    const board = plan.jobBoards.find(({ provider }) => provider === skipped.source);
+    const source = sources.find(s => s.source === board?.name);
+    if (!board?.wttj || !source) continue;
+    const consulted = board.wttj.queries.length;
+    const cap = `feitas ${consulted} de ${consulted + skipped.omitted.length} pesquisas; os restantes termos continuam a filtrar os títulos recebidos.`;
+    // An unconfirmed zero is a different shortfall; runMarketDiscovery marks it.
+    if (source.state === "ok" && Array.isArray(receipt.unverified_zero) && !receipt.unverified_zero.includes(source.source)) {
+      source.state = "partial";
+      source.limit = "query-limit";
+      source.message = cap;
+    } else if (source.state !== "ok") source.message = source.message ? `${source.message.replace(/\.?$/u, ".")} F${cap.slice(1)}` : cap;
+  }
   run.status = !run.valid ? "failed" : timedOut || exitCode !== 0 || receipt.errors.length || sources.some(s => s.state !== "ok") ? "partial" : "ok";
+  run.queryLimitedOnly = run.status === "partial" && !timedOut && exitCode === 0 && !receipt.errors.length &&
+    sources.every(s => s.state === "ok" || s.limit === "query-limit");
   return run;
 }

@@ -1,5 +1,6 @@
 import { cleanChips } from "./clean-chips.mjs";
 import { priorityCompaniesFor } from "./priority-companies.mjs";
+import { countryAliases } from "./location-concepts.mjs";
 
 /** @typedef {"portugal" | "spain" | "united-kingdom" | "switzerland" | "luxembourg" | "netherlands" | "europe" | "remote"} MarketId */
 /** @typedef {"employment" | "freelance"} OpportunityType */
@@ -36,13 +37,35 @@ const REMOTE_BOARDS = [
 
 /** @typedef {{ name: string, provider: string, enabled: boolean, careers_url?: string, api?: string, lang?: string, wttj?: { queries: string[], filters: string } }} MarketBoard */
 
+// WTTJ runs one sequential Algolia request per query inside the scan timeout;
+// title matching still uses every term.
+export const WTTJ_QUERY_LIMIT = 12;
+
+/** @typedef {{ source: string, reason: "missing-search-terms" } | { source: "wttj", reason: "query-limit", omitted: string[] }} SkippedSource */
+
+/** Terms arrive in buildSearchPlan order (originals, spelling variants, additions),
+ *  so the first distinct queries are the user's own words.
+ *  @param {unknown} terms @returns {{ queries: string[], omitted: string[] }} */
+function wttjQueries(terms) {
+  const seen = new Set();
+  const distinct = cleanChips(terms).filter(term => {
+    const key = normalized(term).replace(/([\p{L}]+)(?:\/a|\(a\))/gu, "$1");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { queries: distinct.slice(0, WTTJ_QUERY_LIMIT), omitted: distinct.slice(WTTJ_QUERY_LIMIT) };
+}
+
 /** The caller supplies positive terms, or profile terms when positives are empty.
  *  This pure planner never invents a search query or reads the user's files.
  *  @param {unknown} selected @param {unknown} terms @param {unknown} opportunityType
  *  @param {{ occupationIds?: string[], locationResolution?: import('./location-concepts.mjs').LocationResolution }} [searchPlan] */
 export function buildMarketPlan(selected, terms, opportunityType = "employment", searchPlan = {}) {
   const markets = cleanMarkets(selected);
-  const queries = cleanChips(terms);
+  const { queries, omitted } = wttjQueries(terms);
+  /** @type {SkippedSource[]} */
+  const queryLimit = omitted.length ? [{ source: "wttj", reason: "query-limit", omitted }] : [];
   const type = opportunityType === "freelance" ? "freelance" : "employment";
   if (type === "freelance") {
     const countries = new Set();
@@ -61,13 +84,13 @@ export function buildMarketPlan(selected, terms, opportunityType = "employment",
       markets,
       jobBoards: [{ name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: { queries, filters } }],
       locationPolicy: { markets, strict: markets.length > 0, locationResolution: searchPlan.locationResolution },
-      skippedSources: [],
+      skippedSources: queryLimit,
     };
   }
   /** @type {Map<string, MarketBoard>} */
   const boards = new Map();
   const wttjCountries = new Set();
-  /** @type {{ source: string, reason: string }[]} */
+  /** @type {SkippedSource[]} */
   const skippedSources = [];
   /** @param {MarketBoard} board */
   const add = (board) => boards.set(`${board.provider}:${board.careers_url || board.api ? new URL(board.careers_url || board.api).hostname : board.lang ?? ""}`, board);
@@ -90,10 +113,12 @@ export function buildMarketPlan(selected, terms, opportunityType = "employment",
     }
   }
   if (wttjCountries.size) {
-    if (queries.length) add({ name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: {
-      queries, filters: [...wttjCountries].map((code) => `offices.country_code:${code}`).join(" OR "),
-    } });
-    else skippedSources.push({ source: "wttj", reason: "missing-search-terms" });
+    if (queries.length) {
+      add({ name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: {
+        queries, filters: [...wttjCountries].map((code) => `offices.country_code:${code}`).join(" OR "),
+      } });
+      skippedSources.push(...queryLimit);
+    } else skippedSources.push({ source: "wttj", reason: "missing-search-terms" });
   }
   return { opportunityType: type, markets, jobBoards: [...boards.values()], locationPolicy: { markets, strict: markets.length > 0, locationResolution: searchPlan.locationResolution }, skippedSources };
 }
@@ -119,22 +144,77 @@ const EUROPE = [
 ];
 const PORTUGUESE_CITIES = ["lisbon", "lisboa", "porto", "oporto", "braga", "coimbra", "faro", "aveiro", "setubal", "funchal"];
 const SPANISH_CITIES = ["madrid", "barcelona", "valencia", "sevilla", "seville", "malaga", "bilbao", "zaragoza"];
-const MARKET_LOCATIONS = {
+/** @type {Record<string, { names: string[], cities: string[] }>} */
+const MARKET_LOCATIONS = Object.fromEntries(Object.entries({
   portugal: { names: PORTUGAL, cities: PORTUGUESE_CITIES },
   spain: { names: SPAIN, cities: SPANISH_CITIES },
   "united-kingdom": { names: ["united kingdom", "great britain", "uk", "gb", "england", "scotland", "wales", "northern ireland"], cities: ["london", "edinburgh", "glasgow", "manchester", "birmingham", "bristol", "leeds", "liverpool", "cardiff", "belfast"] },
-  switzerland: { names: ["switzerland", "ch"], cities: ["zurich", "geneva", "basel", "bern", "lausanne", "lucerne", "lugano"] },
+  switzerland: { names: ["switzerland", "ch"], cities: ["zurich", "geneva", "basel", "bern", "lausanne", "lucerne", "lugano", "neuchatel", "appenzell"] },
   luxembourg: { names: ["luxembourg", "lu"], cities: ["luxembourg city", "esch-sur-alzette", "differdange"] },
   netherlands: { names: ["netherlands", "the netherlands", "holland", "nl"], cities: ["amsterdam", "rotterdam", "the hague", "utrecht", "eindhoven", "groningen", "maastricht"] },
-};
+}).map(([market, { names, cities }]) => [market, { names: [...new Set([...names, ...countryAliases(market).map(normalized)])], cities }]));
+// Foreign places that make a homonym target city foreign ("London, Ontario").
+const FOREIGN_PLACES = [
+  "united states", "estados unidos", "etats-unis", "etats unis", "vereinigte staaten", "verenigde staten", "usa", "us", "eua", "eeuu",
+  "canada", "kanada", "mexico", "mexique", "mexiko", "brazil", "brasil", "bresil", "brasilien", "brazilie",
+  "argentina", "argentine", "argentinien", "chile", "colombia", "colombie", "kolumbien", "peru", "venezuela", "uruguay",
+  "paraguay", "bolivia", "ecuador", "cuba", "puerto rico", "costa rica", "panama", "nicaragua", "honduras", "guatemala",
+  "suriname", "australia", "australie", "australien", "new zealand", "india", "inde", "indien", "singapore", "south africa",
+  "africa do sul", "sudafrica", "angola", "mozambique", "mocambique", "cabo verde", "cape verde", "philippines", "filipinas",
+  // US states; "washington" is omitted because it is also an English town.
+  "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut", "delaware", "florida", "georgia",
+  "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine", "maryland", "massachusetts",
+  "michigan", "minnesota", "mississippi", "missouri", "montana", "nebraska", "nevada", "new hampshire", "new jersey",
+  "new mexico", "new york", "north carolina", "north dakota", "ohio", "oklahoma", "oregon", "pennsylvania", "rhode island",
+  "south carolina", "south dakota", "tennessee", "texas", "utah", "vermont", "virginia", "west virginia", "wisconsin", "wyoming",
+  // Canadian provinces and territories.
+  "ontario", "quebec", "british columbia", "alberta", "manitoba", "saskatchewan", "nova scotia", "new brunswick",
+  "newfoundland", "prince edward island", "yukon", "nunavut", "northwest territories",
+];
+// Uppercase-only, and only as a comma part after a city: "NL" stays the Netherlands.
+const REGION_CODES = new Set([
+  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME",
+  "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI",
+  "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+  "ON", "QC", "BC", "AB", "MB", "SK", "NS", "NB", "PE", "YT", "NU", "NT",
+]);
 const OTHER_COUNTRIES = [...new Set([
   ...EUROPE.filter(name => !["europe", "europa", "eu", "eea", "eee"].includes(name)),
   ...Object.values(MARKET_LOCATIONS).flatMap(({ names }) => names),
-  ...Object.values(COUNTRY_CODES).flat(),
-  "united states", "usa", "us", "canada", "brazil", "australia", "india", "singapore",
-  "wisconsin", "south carolina", "new york", "texas",
+  ...Object.values(COUNTRY_CODES).flat().map(normalized),
+  ...FOREIGN_PLACES,
 ])];
 const ISO_COUNTRY_CODES = new Set(EUROPE_CODES.map(code => code.toLowerCase()));
+
+// ISO 3166-2 subdivision codes (ES provinces and communities, NL provinces, CH cantons):
+// inside its own market "Amsterdam, NH" is Noord-Holland, not New Hampshire.
+const SUBDIVISION_CODES = {
+  spain: new Set([
+    "A", "AB", "AL", "AV", "B", "BA", "BI", "BU", "C", "CA", "CC", "CE", "CO", "CR", "CS", "CU", "GC", "GI", "GR", "GU",
+    "H", "HU", "J", "L", "LE", "LO", "LU", "M", "MA", "ML", "MU", "NA", "O", "OR", "P", "PM", "PO", "S", "SA", "SE", "SG",
+    "SO", "SS", "T", "TE", "TF", "TO", "V", "VA", "VI", "Z", "ZA",
+    "AN", "AR", "AS", "CB", "CL", "CM", "CN", "CT", "EX", "GA", "IB", "MC", "MD", "NC", "PV", "RI", "VC",
+  ]),
+  netherlands: new Set(["DR", "FL", "FR", "GE", "GR", "LI", "NB", "NH", "OV", "UT", "ZE", "ZH"]),
+  switzerland: new Set([
+    "AG", "AI", "AR", "BE", "BL", "BS", "FR", "GE", "GL", "GR", "JU", "LU", "NE", "NW", "OW", "SG", "SH", "SO", "SZ", "TG",
+    "TI", "UR", "VD", "VS", "ZG", "ZH",
+  ]),
+};
+
+function qualifierCodes(group) {
+  return group.split(",").slice(1).map(part => part.trim());
+}
+
+function regionCodeQualifier(group, ownCodes = new Set()) {
+  return qualifierCodes(group).some(code => REGION_CODES.has(code) && !ownCodes.has(code));
+}
+
+function namesCountry(rawLocation) {
+  const location = normalized(rawLocation);
+  return OTHER_COUNTRIES.some(name => !ISO_COUNTRY_CODES.has(name) && containsWord(location, [name])) ||
+    containsWord(rawLocation, EUROPE_CODES) || locationGroups(rawLocation).some(regionCodeQualifier);
+}
 
 function locationGroups(location) {
   return location.split(/[;|/]+/u).map(part => part.trim()).filter(Boolean);
@@ -158,6 +238,8 @@ function countryLocation(location, market, resolution) {
   return locationGroups(location).some(group => {
     const normalizedGroup = normalized(group);
     const parts = locationParts(group);
+    const ownCodes = SUBDIVISION_CODES[market] ?? new Set();
+    const ownParts = new Set(qualifierCodes(group).filter(code => ownCodes.has(code)).map(code => code.toLowerCase()));
     // ponytail: unknown qualifiers fail closed; add observed neighborhood/postcode forms to the catalog when needed.
     if (parts.some(part => resolvedCities.includes(part)) &&
         parts.some(part => !cities.includes(part) && !names.includes(part))) return false;
@@ -169,7 +251,7 @@ function countryLocation(location, market, resolution) {
       .some(name => {
         if (matchedTargets.some(targetName => targetName.includes(name))) return false;
         return parts.includes(name) || containsWord(normalizedGroup, [name]);
-      }) || parts.some(part => ISO_COUNTRY_CODES.has(part) && !targetCodes.has(part));
+      }) || parts.some(part => ISO_COUNTRY_CODES.has(part) && !targetCodes.has(part) && !ownParts.has(part)) || regionCodeQualifier(group, ownCodes);
     if (foreignCountry) return false;
     return targetCountry || parts.some(part => cities.includes(part));
   });
@@ -216,12 +298,12 @@ export function classifyMarketLocation(offer, plan) {
     }
   }
   if (!plan.locationPolicy.strict) return { accepted: true };
-  const portugal = countryLocation(location, "portugal", resolution);
-  const spain = countryLocation(location, "spain", resolution);
-  const unitedKingdom = countryLocation(location, "united-kingdom", resolution);
-  const switzerland = countryLocation(location, "switzerland", resolution);
-  const luxembourg = countryLocation(location, "luxembourg", resolution);
-  const netherlands = countryLocation(location, "netherlands", resolution);
+  const portugal = countryLocation(rawLocation, "portugal", resolution);
+  const spain = countryLocation(rawLocation, "spain", resolution);
+  const unitedKingdom = countryLocation(rawLocation, "united-kingdom", resolution);
+  const switzerland = countryLocation(rawLocation, "switzerland", resolution);
+  const luxembourg = countryLocation(rawLocation, "luxembourg", resolution);
+  const netherlands = countryLocation(rawLocation, "netherlands", resolution);
   // ISO codes retain case: English "at" is not the country code AT.
   const europe = portugal || spain || containsWord(location, EUROPE) || containsWord(rawLocation, EUROPE_CODES);
   for (const market of plan.markets) {
@@ -231,7 +313,8 @@ export function classifyMarketLocation(offer, plan) {
         (market === "europe" && europe)) {
       return { accepted: true };
     }
-    if (market === "remote") {
+    // A published national restriction is only eligible through its own selected market.
+    if (market === "remote" && !namesCountry(rawLocation)) {
       const origins = [offer.source, offer.ats, offer.provider, ...(offer.sources ?? [])].filter((v) => typeof v === "string").map(v => normalized(v).replace(/-(api|full)$/, ""));
       const remoteSource = REMOTE_BOARDS.some(([name, id]) => origins.includes(normalized(name)) || origins.includes(id));
       if (remoteSource || containsWord(location, ["remote", "remoto", "remota"])) {

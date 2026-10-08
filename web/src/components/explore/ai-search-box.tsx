@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef } from "react";
+import Link from "next/link";
 import { ArrowRight, Search } from "lucide-react";
 import { CostBadge } from "@/components/cost/cost-badge";
 
@@ -27,6 +28,7 @@ export function AiSearchBox({
   onSubmit,
   cliConfigured,
   cliName,
+  blockedReason = null,
   onRunScan,
 }: {
   intent: string;
@@ -34,6 +36,8 @@ export function AiSearchBox({
   onSubmit: () => void;
   cliConfigured: boolean;
   cliName?: string;
+  /** Why the chosen agent cannot run AI search (agent-availability.mjs), or null. */
+  blockedReason?: string | null;
   onRunScan: () => void;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -63,14 +67,21 @@ export function AiSearchBox({
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              if (intent.trim()) onSubmit();
+              if (intent.trim() && !blockedReason) onSubmit();
             }
           }}
           placeholder="Ex.: apoio ao cliente em Lisboa, horário diurno, sem vendas"
         />
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <span className="text-[12px] text-muted">
-            {cliConfigured ? (
+            {blockedReason ? (
+              <>
+                {blockedReason}{" "}
+                <Link href="/config" className="text-brand hover:underline">
+                  Escolher outro agente
+                </Link>
+              </>
+            ) : cliConfigured ? (
               <>
                 Pesquisa a web pública com <span className="text-foreground">{cliName || "o agente escolhido"}</span> e usa os teus tokens.
               </>
@@ -80,7 +91,7 @@ export function AiSearchBox({
           </span>
           <button
             type="button"
-            disabled={!intent.trim()}
+            disabled={!intent.trim() || !!blockedReason}
             onClick={onSubmit}
             className="inline-flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-brand-foreground shadow-sm transition hover:brightness-110 disabled:opacity-50"
           >

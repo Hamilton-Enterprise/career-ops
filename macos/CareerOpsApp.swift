@@ -38,9 +38,11 @@ func presentJavaScriptPrompt(_ prompt: String, defaultText: String?, in window: 
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate,
+                         WKScriptMessageHandler {
     private var window: NSWindow!
     private var webView: WKWebView!
+    private var webPreferences: WebPreferenceStore?
     private var server: Process?
     private var probe: Process?
     private var timer: Timer?
@@ -89,7 +91,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         window.minSize = NSSize(width: 640, height: 480)
         window.center()
         window.isReleasedWhenClosed = false
-        webView = WKWebView(frame: window.contentView!.bounds)
+        let webConfiguration = WKWebViewConfiguration()
+        webConfiguration.userContentController.add(self, name: webPreferenceHandlerName)
+        webView = WKWebView(frame: window.contentView!.bounds, configuration: webConfiguration)
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -134,6 +138,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         failureShown = false
         generation = UUID()
         let token = generation
+        webPreferences = nil
+        installPreferenceScript()
         let config = configuration()
         if let error = validateConfiguration(config) { fail(error); return }
         let process = Process()
@@ -177,6 +183,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             try log?.seekToEnd()
             try log?.write(contentsOf: Data("\n--- Arranque \(Date()) ---\n".utf8))
         } catch { fail("Não foi possível abrir o registo local: \(error.localizedDescription)"); return }
+        webPreferences = WebPreferenceStore(defaults: preferences, dataRoot: effectiveDataRoot(config))
+        installPreferenceScript()
         let process = Process()
         let pipe = Pipe()
         var parser = ServerURLParser()
@@ -217,6 +225,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                 self.fail("O servidor não respondeu em 30 segundos. Consulte o registo e tente novamente.")
             }
         } catch { fail("Não foi possível iniciar o servidor: \(error.localizedDescription)") }
+    }
+
+    private func installPreferenceScript() {
+        let controller = webView.configuration.userContentController
+        controller.removeAllUserScripts()
+        guard let webPreferences else { return }
+        controller.addUserScript(WKUserScript(source: webPreferenceUserScript(snapshot: webPreferences.snapshot(),
+                                                                              generation: generation.uuidString),
+                                              injectionTime: .atDocumentStart, forMainFrameOnly: true))
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        let frameOrigin = message.frameInfo.securityOrigin
+        let sender = WebPreferenceSender(isOurWebView: message.webView === webView, isMainFrame: message.frameInfo.isMainFrame,
+                                         scheme: frameOrigin.protocol, host: frameOrigin.host, port: frameOrigin.port)
+        guard let webPreferences,
+              let change = webPreferenceChange(message.body, from: sender, origin: origin, generation: generation.uuidString),
+              webPreferences.apply(change) else { return }
+        installPreferenceScript()
     }
 
     private func checkReady(_ url: URL, token: UUID) {

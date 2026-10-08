@@ -5,7 +5,7 @@ import { statusBlock, dismissConsent, tryApplyTrigger, dropNewTabs, classifyEmpt
 import { interpretFormWithAgent } from "./agent-interpret";
 import { resolveCli } from "../clis";
 import { fencingReport } from "../cli-fencing.mjs";
-import { CAPS } from "../worker-capabilities.mjs";
+import { ACTION_CAPABILITIES } from "../worker-capabilities.mjs";
 
 /** The frame with the most interactive controls — where the agentic interpreter
  *  should look when deterministic extraction found nothing usable. */
@@ -294,7 +294,7 @@ export async function openSession(url: string, cliId?: string, forceAgent?: bool
   // LAUNCH the interpreter reports, not on aiInterpreted: an empty
   // interpretation still ran the agent, and an interpreter that never launched
   // it (no CLI, no controls, refused argv) owes no warning.
-  const interpretFencing = agentSpawned && cliId ? fencingReport({ cliId, cliName: resolveCli(cliId)?.spec.name ?? cliId, capabilities: CAPS.localReadOnly }) : null;
+  const interpretFencing = agentSpawned && cliId ? fencingReport({ cliId, cliName: resolveCli(cliId)?.spec.name ?? cliId, capabilities: ACTION_CAPABILITIES.apply }) : null;
   if (interpretFencing?.notice) issues.push({ level: "warn", code: "cli-unfenced", message: interpretFencing.notice });
   if (unlabeled > 0) issues.push({ level: "warn", code: "unlabeled-fields", message: `${unlabeled} ${unlabeled > 1 ? "campos não têm" : "campo não tem"} um rótulo claro. ${unlabeled > 1 ? "Revê-os" : "Revê-o"} antes do envio.` });
 
@@ -367,7 +367,7 @@ export async function finalizeDrivenSession(id: string, cliId?: string): Promise
   // LAUNCH the interpreter reports, not on aiInterpreted: an empty
   // interpretation still ran the agent, and an interpreter that never launched
   // it (no CLI, no controls, refused argv) owes no warning.
-  const interpretFencing = agentSpawned && cliId ? fencingReport({ cliId, cliName: resolveCli(cliId)?.spec.name ?? cliId, capabilities: CAPS.localReadOnly }) : null;
+  const interpretFencing = agentSpawned && cliId ? fencingReport({ cliId, cliName: resolveCli(cliId)?.spec.name ?? cliId, capabilities: ACTION_CAPABILITIES.apply }) : null;
   if (interpretFencing?.notice) issues.push({ level: "warn", code: "cli-unfenced", message: interpretFencing.notice });
   const cap = await captchaWarning(s.page);
   if (cap) issues.push(cap);

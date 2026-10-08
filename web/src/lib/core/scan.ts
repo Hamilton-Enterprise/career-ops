@@ -493,11 +493,13 @@ async function runDiscoveryPass(searchPlan: SearchPlan, onEvent: (e: ScanEvent) 
   }
   const valid = (ats.length > 0 && atsValid) || marketRun?.valid === true;
   const status = !valid ? "failed" : sources.some(s => s.state !== "ok") || atsErrors.length > 0 || marketRun?.status === "partial" ? "partial" : "ok";
+  const queryLimited = status === "partial" && atsErrors.length === 0 && marketRun !== null && "queryLimitedOnly" in marketRun && marketRun.queryLimitedOnly === true &&
+    sources.every(s => s.state === "ok" || s.limit === "query-limit");
   if (!valid) onEvent({ kind: "error", message: atsErrors[0] ?? "Nenhuma fonte selecionada devolveu um resultado válido." });
   onEvent({
     ...(atsSummary ?? { kind: "summary", companiesScanned: 0, unreachable: 0, matches: 0 }),
     companiesScanned: (atsSummary?.companiesScanned ?? 0) + (marketRun?.scanned ?? 0),
-    matches: offers.length, status, sources, missingLocation,
+    matches: offers.length, status, sources, missingLocation, ...(queryLimited ? { queryLimited: true as const } : {}),
     ...(sources.some(s => s.state !== "ok") ? { incomplete: sources.filter(s => s.state !== "ok").map(s => s.source) } : {}),
   });
   return offers;
@@ -506,9 +508,11 @@ async function runDiscoveryPass(searchPlan: SearchPlan, onEvent: (e: ScanEvent) 
 type Summary = Extract<ScanEvent, { kind: "summary" }>;
 
 function healthyZero(summary: Summary | undefined, filters: ExploreFilters): boolean {
-  if (!summary || summary.status !== "ok" || summary.matches !== 0 ||
-      !summary.sources?.length || summary.sources.some(source => source.state !== "ok") ||
-      summary.incomplete?.length || summary.unreachable !== 0 || (summary.missingLocation ?? 0) > 0 ||
+  // A query budget is a known limit, not an unconfirmed zero, so it may still broaden.
+  const limited = new Set(summary?.queryLimited ? summary.sources?.filter(source => source.state === "partial" && source.limit === "query-limit").map(source => source.source) : []);
+  if (!summary || !(summary.status === "ok" || (summary.status === "partial" && limited.size > 0)) || summary.matches !== 0 ||
+      !summary.sources?.length || summary.sources.some(source => source.state !== "ok" && !limited.has(source.source)) ||
+      summary.incomplete?.some(source => !limited.has(source)) || summary.unreachable !== 0 || (summary.missingLocation ?? 0) > 0 ||
       !Number.isFinite(summary.companiesScanned) || summary.companiesScanned <= 0 ||
       summary.capHit === true || (summary.postingsDroppedNoDate ?? 0) > 0 ||
       Object.values(summary.datasetStatus ?? {}).some(state => state !== "ok")) return false;

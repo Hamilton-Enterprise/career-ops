@@ -13,7 +13,8 @@ export async function runMarketDiscovery(filters: ExploreFilters, onEvent: (e: S
   const plan = buildMarketPlan(filters.markets, filters.positive.length || filters.opportunityType === "freelance" ? filters.positive : loadProfileTargets(), filters.opportunityType, searchPlan);
   const complete = (run: MarketRun) => {
     for (const source of run.sources) {
-      if (source.state === "ok") {
+      // A known query budget is not a failure; the summary still shows it as partial.
+      if (source.state === "ok" || source.limit === "query-limit") {
         const provider = plan.jobBoards.find(b => b.name === source.source)?.provider;
         onEvent({ kind: "sourceDone", source: source.source, count: run.offers.filter(o =>
           o.sources?.includes(source.source) || (provider && o.sources?.includes(`${provider}-api`))).length });

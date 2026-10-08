@@ -35,26 +35,30 @@ export function resolveOccupations(inputs) {
   return { resolved, unresolved, ambiguous };
 }
 
-/** Original literals always precede translations; omitted includes capped literals.
+/** Every original literal is kept; only translations count toward `limit`.
+ * Additions rotate per language, then per occupation, so one concept cannot
+ * fill the budget; omitted lists only the additions that were cut.
  * @param {unknown} inputs @param {string[]} languages @param {number} [limit=12] */
 export function expandOccupationTerms(inputs, languages, limit = 12) {
   const originals = cleanChips(inputs);
   const { resolved: occupations } = resolveOccupations(originals);
-  const candidates = [...originals];
-  for (const occupation of occupations) {
-    for (const language of cleanChips(languages).map(language => language.toLowerCase().split("-")[0])) {
-      candidates.push(...(occupation.concept.queryTerms[language] ?? []));
-    }
+  const concepts = [...new Map(occupations.map(occupation => [occupation.id, occupation.concept])).values()];
+  // Deduplicate in language order before rotating, so an accent-only twin keeps
+  // the spelling of the earlier language.
+  const seen = new Set(originals.map(normalized));
+  const queues = [...new Set(cleanChips(languages).map(language => language.toLowerCase().split("-")[0]))]
+    .flatMap(language => concepts.map(concept => (concept.queryTerms[language] ?? []).filter(term => {
+      const key = normalized(term);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })));
+  const additions = [], total = queues.flat().length;
+  for (let round = 0; additions.length < total; round++) {
+    for (const queue of queues) if (round < queue.length) additions.push(queue[round]);
   }
-  const seen = new Set();
-  const unique = candidates.filter(term => {
-    const key = normalized(term);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
   const cap = Number.isFinite(limit) ? Math.min(12, Math.max(0, Math.floor(limit))) : 12;
-  return { terms: unique.slice(0, cap), occupations, omitted: unique.slice(cap) };
+  return { terms: [...originals, ...additions.slice(0, cap)], occupations, omitted: additions.slice(cap) };
 }
 
 /** @param {string} title @param {ResolvedOccupation[]} occupations @returns {OccupationEvidence | null} */

@@ -22,7 +22,18 @@ type Cli = {
   url: string;
   installed: boolean;
   path: string | null;
+  /** Per-action verdict from agent-availability.mjs, via /api/clis. */
+  actions?: { id: string; label: string; available: boolean; reason: string | null }[];
 };
+
+/** Unavailable actions grouped by their shared reason, so each reason is said once. */
+function unavailableByReason(actions: Cli["actions"]): [string, string[]][] {
+  const groups = new Map<string, string[]>();
+  for (const a of actions ?? []) {
+    if (!a.available && a.reason) groups.set(a.reason, [...(groups.get(a.reason) ?? []), a.label]);
+  }
+  return [...groups];
+}
 
 type Mode = "cli" | "key" | "manual";
 
@@ -169,25 +180,37 @@ export function ConfigForm() {
                   );
 
                   if (c.installed) {
+                    const blocked = unavailableByReason(c.actions);
                     return (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => setCliId(c.id)}
-                        aria-pressed={selected}
-                        className={cn(rowClassName, "w-full cursor-pointer text-left")}
-                      >
-                        <Check className="size-4 shrink-0 text-emerald-400" />
-                        <span className="flex min-w-0 flex-1 items-center gap-2">
-                          <span className={cn("font-medium", selected ? "text-foreground" : "")}>
-                            {c.name}
+                      <div key={c.id}>
+                        <button
+                          type="button"
+                          onClick={() => setCliId(c.id)}
+                          aria-pressed={selected}
+                          aria-describedby={blocked.length > 0 ? `cli-limits-${c.id}` : undefined}
+                          className={cn(rowClassName, "w-full cursor-pointer text-left")}
+                        >
+                          <Check className="size-4 shrink-0 text-emerald-400" />
+                          <span className="flex min-w-0 flex-1 items-center gap-2">
+                            <span className={cn("font-medium", selected ? "text-foreground" : "")}>
+                              {c.name}
+                            </span>
+                            <span className="font-mono text-xs text-faint">{c.run}</span>
                           </span>
-                          <span className="font-mono text-xs text-faint">{c.run}</span>
-                        </span>
-                        <span className="hidden max-w-[40%] shrink-0 truncate text-xs text-faint sm:block">
-                          {c.path}
-                        </span>
-                      </button>
+                          <span className="hidden max-w-[40%] shrink-0 truncate text-xs text-faint sm:block">
+                            {c.path}
+                          </span>
+                        </button>
+                        {blocked.length > 0 && (
+                          <ul id={`cli-limits-${c.id}`} className="mt-1 space-y-0.5 px-4 text-xs text-muted">
+                            {blocked.map(([reason, labels]) => (
+                              <li key={reason}>
+                                <span className="text-foreground">Indisponível: {labels.join(", ")}.</span> {reason}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
                     );
                   }
 
