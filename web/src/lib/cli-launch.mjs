@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -60,4 +61,58 @@ export function prepareCliLaunch(binPath, args, platform = process.platform) {
   }
 
   return unresolved();
+}
+
+/**
+ * Terminate a CLI run together with every process it started.
+ *
+ * POSIX: the child must have been spawned `detached`, so it leads its own
+ * process group and `kill(-pid)` reaches its descendants. Windows has neither
+ * process groups nor signals, and `child.kill()` ends only the direct child —
+ * descendants survive holding its stdio and working directory. There the tree
+ * is ended with `taskkill /T /F`, spawned without a shell. taskkill failing
+ * because the tree is already gone is the expected outcome, not an error.
+ *
+ * @param {{ pid?: number, exitCode: number | null, signalCode: string | null, kill: (signal?: NodeJS.Signals) => boolean }} child
+ * @param {NodeJS.Signals} signal Ignored on Windows, where termination is always forced.
+ * @param {{ platform?: string, spawnProcess?: typeof spawn, kill?: (pid: number, signal: NodeJS.Signals) => unknown }} [deps]
+ * @returns {boolean} Whether a termination was dispatched.
+ */
+export function terminateCliTree(
+  child,
+  signal,
+  { platform = process.platform, spawnProcess = spawn, kill = (pid, sig) => process.kill(pid, sig) } = {},
+) {
+  const directKill = () => {
+    try {
+      return child.kill(signal);
+    } catch {
+      return false;
+    }
+  };
+
+  if (platform === "win32") {
+    // An exited child's PID may already belong to an unrelated process.
+    if (!child.pid || child.exitCode !== null || child.signalCode !== null) return false;
+    try {
+      const taskkill = spawnProcess("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      taskkill.on("error", directKill);
+      return true;
+    } catch {
+      return directKill();
+    }
+  }
+
+  if (child.pid) {
+    try {
+      kill(-child.pid, signal);
+      return true;
+    } catch {
+      /* group may already be gone; fall back to the direct child */
+    }
+  }
+  return directKill();
 }

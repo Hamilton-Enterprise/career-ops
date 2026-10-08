@@ -1,4 +1,5 @@
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
+import { terminateCliTree } from "@/lib/cli-launch.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -145,7 +146,8 @@ export async function POST(req: Request) {
         ]
       : spec.args(prompt);
 
-  // POSIX process groups let cancellation/timeout terminate descendants too.
+  // POSIX process groups let cancellation/timeout terminate descendants too
+  // (Windows ends the tree with taskkill instead; see terminateCliTree).
   const useProcessGroup = process.platform !== "win32";
 
   // Declared BEFORE the spawn: fencing can refuse the argv, and the temporary
@@ -216,30 +218,16 @@ export async function POST(req: Request) {
     }
   };
 
-  const signalChild = (signal: NodeJS.Signals): boolean => {
-    if (useProcessGroup && child.pid) {
-      try {
-        process.kill(-child.pid, signal);
-        return true;
-      } catch {
-        /* group may already be gone; fall back to the direct child */
-      }
-    }
-
-    try {
-      return child.kill(signal);
-    } catch {
-      return false;
-    }
-  };
-
+  // The work directory is removed only on the child's `close`, never here:
+  // until the tree is gone it may still write into it, and on Windows a live
+  // process holding it as cwd makes the removal fail outright.
   const terminateChild = () => {
-    const termSent = signalChild("SIGTERM");
+    const termSent = terminateCliTree(child, "SIGTERM");
 
     if (!termSent || forceKill) return;
 
     forceKill = setTimeout(() => {
-      signalChild("SIGKILL");
+      terminateCliTree(child, "SIGKILL");
       forceKill = undefined;
     }, 5_000);
 
@@ -255,7 +243,6 @@ export async function POST(req: Request) {
       let codexStderr = "";
       killer = setTimeout(() => {
         terminateChild();
-        cleanupChildCwd();
         terminal(usable ? "partial" : "error", `${spec.name}: a pesquisa excedeu o tempo limite.`);
         safeClose();
       }, 480_000);
@@ -419,7 +406,6 @@ export async function POST(req: Request) {
       }
 
       terminateChild();
-      cleanupChildCwd();
     },
   });
 
