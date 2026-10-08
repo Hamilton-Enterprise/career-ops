@@ -68,9 +68,14 @@ test("the existing provider preserves snapshots and applies assistant patches wi
   const slots = [];
   const effects = [];
   const writes = [];
+  const storedResults = new Map();
   for (const name of ["localStorage", "sessionStorage"]) {
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
-    Object.defineProperty(globalThis, name, { configurable: true, value: { getItem: () => null, setItem: (...args) => writes.push(args) } });
+    Object.defineProperty(globalThis, name, { configurable: true, value: {
+      getItem: (key) => name === "sessionStorage" ? storedResults.get(key) ?? null : null,
+      setItem: (key, value) => { writes.push([key, value]); if (name === "sessionStorage") storedResults.set(key, value); },
+      removeItem: (key) => { if (name === "sessionStorage") storedResults.delete(key); },
+    } });
     t.after(() => { if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name]; });
   }
   let cursor = 0;
@@ -121,6 +126,39 @@ test("the existing provider preserves snapshots and applies assistant patches wi
   assert.deepEqual(render().filters, employment);
   effects.forEach((effect) => effect());
   assert.deepEqual(writes, []);
+
+  // Results belong to the opportunity type that produced them. A type switch
+  // must not display a freelance scan under employment filters (or vice versa),
+  // and both settled result sets must survive the switch within this tab.
+  storedResults.set("career-ops:explore-results:employment", JSON.stringify({
+    v: 1, mode: "scan", phase: "results",
+    offers: [{ url: "https://example.test/job", title: "Farmácia", company: "Acme", location: "Lisboa" }],
+    matchCount: 1, companiesScanned: 4, companiesAvailable: 4, capHit: false, droppedNoDate: 0,
+    sources: { greenhouse: { state: "ok" } }, partial: false, status: "1 oferta encontrada.", error: "",
+    scannerMissing: false, added: [], aiTrace: [], aiCost: { searches: 0, candidates: 0, fetches: 0 }, aiIntent: "",
+  }));
+  storedResults.set("career-ops:explore-results:freelance", JSON.stringify({
+    v: 1, mode: "scan", phase: "empty-current", offers: [], matchCount: 0,
+    companiesScanned: 1, companiesAvailable: 1, capHit: false, droppedNoDate: 0,
+    sources: { wttj: { state: "ok" } }, partial: false, status: "Nenhuma oferta encontrada.", error: "",
+    scannerMissing: false, added: [], aiTrace: [], aiCost: { searches: 0, candidates: 0, fetches: 0 }, aiIntent: "",
+  }));
+
+  slots.length = 0;
+  ctx = render();
+  effects[0]();
+  ctx = render();
+  assert.equal(ctx.phase, "results");
+  assert.equal(ctx.offers[0].title, "Farmácia");
+  ctx.setFilters({ ...ctx.filters, opportunityType: "freelance" });
+  ctx = render();
+  assert.equal(ctx.phase, "empty-current");
+  assert.equal(ctx.companiesScanned, 1);
+  assert.deepEqual(ctx.offers, []);
+  ctx.setFilters({ ...ctx.filters, opportunityType: "employment" });
+  ctx = render();
+  assert.equal(ctx.phase, "results");
+  assert.equal(ctx.offers[0].title, "Farmácia");
 });
 
 test("the existing explorer page passes the employment seed when opening a freelance URL", async (t) => {

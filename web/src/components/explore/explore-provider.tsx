@@ -17,6 +17,7 @@ import {
   type ExploreFilters,
   type ExploreMode,
   type OpportunitySnapshots,
+  type OpportunityType,
   type ScanEvent,
 } from "@/lib/explore";
 import { makeAiStreamParser, type AiTraceChunk } from "@/lib/explore-ai";
@@ -90,6 +91,7 @@ export function useExplore(): ExploreCtx {
 // tokens). Persist the SETTLED result set per-tab so a reload or a mode toggle never
 // throws the work away (disc#5 — "came back to explore, work is lost").
 const RESULTS_KEY = "career-ops:explore-results";
+const resultKey = (type: OpportunityType) => `${RESULTS_KEY}:${type}`;
 type ResultSnapshot = {
   v: number;
   mode: ExploreMode;
@@ -142,22 +144,57 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   const filtersRef = useRef(filters);
   filtersRef.current = filters;
 
+  const restoreResults = useCallback((snap: ResultSnapshot | null) => {
+    const valid = snap?.v === 1 && Array.isArray(snap.offers) ? snap : null;
+    setModeState(valid?.mode === "ai" ? "ai" : "scan");
+    setOffers(valid?.offers ?? []);
+    setMatchCount(valid ? (typeof valid.matchCount === "number" ? valid.matchCount : valid.offers.length) : 0);
+    setCompaniesScanned(valid?.companiesScanned ?? 0);
+    setCompaniesAvailable(valid?.companiesAvailable ?? 0);
+    setCapHit(!!valid?.capHit);
+    setDroppedNoDate(valid?.droppedNoDate ?? 0);
+    setSources(valid?.sources ?? {});
+    setPartial(!!valid?.partial);
+    setStatus(typeof valid?.status === "string" ? valid.status : "");
+    setError(typeof valid?.error === "string" ? valid.error : "");
+    setScannerMissing(!!valid?.scannerMissing);
+    setAdded(new Set(Array.isArray(valid?.added) ? valid.added : []));
+    setAiTrace(Array.isArray(valid?.aiTrace) ? valid.aiTrace : []);
+    setAiCost(valid?.aiCost ?? { searches: 0, candidates: 0, fetches: 0 });
+    setAiIntent(typeof valid?.aiIntent === "string" ? valid.aiIntent : "");
+    const running = new Set<Phase>(["casting", "scanning", "revealing", "hunting"]);
+    setPhase(valid ? (running.has(valid.phase) ? (valid.offers.length ? "results" : "idle") : valid.phase) : "idle");
+  }, []);
+
+  const restoreResultsFor = useCallback((type: OpportunityType) => {
+    let snap: ResultSnapshot | null = null;
+    try {
+      snap = JSON.parse(sessionStorage.getItem(resultKey(type)) || "null") as ResultSnapshot | null;
+    } catch {
+      snap = null;
+    }
+    restoreResults(snap);
+  }, [restoreResults]);
+
   const setFilters = useCallback((f: ExploreFilters) => {
     touched.current = true;
-    const state = f.opportunityType !== filtersRef.current.opportunityType
+    const changedType = f.opportunityType !== filtersRef.current.opportunityType;
+    const state = changedType
       ? switchOpportunitySnapshot(snapshotsRef.current, filtersRef.current, f.opportunityType)
       : { snapshots: updateOpportunitySnapshot(snapshotsRef.current, f), filters: structuredClone(f) };
     snapshotsRef.current = state.snapshots;
     filtersRef.current = state.filters;
     setFiltersState(state.filters);
-  }, []);
+    if (changedType) restoreResultsFor(state.filters.opportunityType);
+  }, [restoreResultsFor]);
   const initFilters = useCallback((f: ExploreFilters, employmentSeed?: ExploreFilters) => {
     if (touched.current) return;
     snapshotsRef.current = createOpportunitySnapshots(f, employmentSeed);
     const active = structuredClone(snapshotsRef.current[f.opportunityType]);
     filtersRef.current = active;
     setFiltersState(active);
-  }, []);
+    restoreResultsFor(active.opportunityType);
+  }, [restoreResultsFor]);
 
   const discover = useCallback(async () => {
     if (runningRef.current) return;
@@ -412,33 +449,27 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   }, [added, router]);
 
   const applyPatch = useCallback((raw: Record<string, unknown>, opts?: { merge?: boolean; run?: boolean }) => {
+    const previousType = filtersRef.current.opportunityType;
     const state = applyOpportunityPatch(snapshotsRef.current, filtersRef.current, raw, opts?.merge ?? false);
     touched.current = true;
     snapshotsRef.current = state.snapshots;
     filtersRef.current = state.filters;
     setFiltersState(state.filters);
+    if (state.filters.opportunityType !== previousType) restoreResultsFor(state.filters.opportunityType);
     if (opts?.run) void discover();
-  }, [discover]);
+  }, [discover, restoreResultsFor]);
 
   const reset = useCallback(() => {
     runningRef.current = false;
-    setPhase("idle");
-    setOffers([]);
-    setSources({});
-    setMatchCount(0);
-    setCompaniesScanned(0);
-    setStatus("");
-    setPartial(false);
-    setError("");
-    setScannerMissing(false);
-    setAiTrace([]);
-    setAiCost({ searches: 0, candidates: 0, fetches: 0 });
+    restoreResults(null);
     try {
       sessionStorage.removeItem(RESULTS_KEY);
+      sessionStorage.removeItem(resultKey("employment"));
+      sessionStorage.removeItem(resultKey("freelance"));
     } catch {
       /* ignore */
     }
-  }, []);
+  }, [restoreResults]);
 
   // AI search — orchestrate modes/web-search.md via the user's CLI, streamed.
   const discoverAI = useCallback(async () => {
@@ -562,33 +593,8 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   // an SSR hydration mismatch.
   useEffect(() => {
     if (runningRef.current) return;
-    let snap: ResultSnapshot | null = null;
-    try {
-      snap = JSON.parse(sessionStorage.getItem(RESULTS_KEY) || "null") as ResultSnapshot | null;
-    } catch {
-      snap = null;
-    }
-    if (!snap || snap.v !== 1 || !Array.isArray(snap.offers)) return;
-    setModeState(snap.mode === "ai" ? "ai" : "scan");
-    setOffers(snap.offers);
-    setMatchCount(typeof snap.matchCount === "number" ? snap.matchCount : snap.offers.length);
-    setCompaniesScanned(snap.companiesScanned ?? 0);
-    setCompaniesAvailable(snap.companiesAvailable ?? 0);
-    setCapHit(!!snap.capHit);
-    setDroppedNoDate(snap.droppedNoDate ?? 0);
-    setSources(snap.sources ?? {});
-    setPartial(!!snap.partial);
-    setStatus(typeof snap.status === "string" ? snap.status : "");
-    setError(typeof snap.error === "string" ? snap.error : "");
-    setScannerMissing(!!snap.scannerMissing);
-    setAdded(new Set(Array.isArray(snap.added) ? snap.added : []));
-    setAiTrace(Array.isArray(snap.aiTrace) ? snap.aiTrace : []);
-    setAiCost(snap.aiCost ?? { searches: 0, candidates: 0, fetches: 0 });
-    if (typeof snap.aiIntent === "string") setAiIntent(snap.aiIntent);
-    // Never rehydrate INTO a running phase — no live stream backs it.
-    const RUNNING = new Set<Phase>(["casting", "scanning", "revealing", "hunting"]);
-    setPhase(RUNNING.has(snap.phase) ? (snap.offers.length ? "results" : "idle") : snap.phase);
-  }, []);
+    restoreResultsFor(filtersRef.current.opportunityType);
+  }, [restoreResultsFor]);
 
   // Persist only SETTLED states (never mid-stream) so a reload restores a complete set.
   useEffect(() => {
@@ -599,11 +605,11 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
         v: 1, mode, phase, offers, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, sources,
         partial, status, error, scannerMissing, added: [...added], aiTrace, aiCost, aiIntent,
       };
-      sessionStorage.setItem(RESULTS_KEY, JSON.stringify(snap));
+      sessionStorage.setItem(resultKey(filters.opportunityType), JSON.stringify(snap));
     } catch {
       /* sessionStorage full/unavailable — non-fatal */
     }
-  }, [phase, mode, offers, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, sources, partial, status, error, scannerMissing, added, aiTrace, aiCost, aiIntent]);
+  }, [filters.opportunityType, phase, mode, offers, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, sources, partial, status, error, scannerMissing, added, aiTrace, aiCost, aiIntent]);
 
   const value = useMemo(
     () => ({
