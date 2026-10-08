@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildMarketPlan } from "../../src/lib/market-presets.mjs";
 import { mergeDiscoveredOffers, parseMarketReceipt } from "../../src/lib/core/market-merge.mjs";
+import { discoverySourceReasons } from "../../src/lib/explore-state.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -126,6 +127,19 @@ test("timeout and unexplained nonzero exits retain valid offers and mark sources
     assert.deepEqual(run.sources.map(s => s.state), ["error", "skipped"]);
     assert.ok(run.sources[0].message);
   }
+});
+
+test("a WTTJ query limit is partial coverage on the WTTJ source, not a separate skipped source", () => {
+  const terms = Array.from({ length: 15 }, (_, index) => `Role ${index}`);
+  const plan = buildMarketPlan(["portugal"], terms);
+  const run = parseMarketReceipt(receipt([offer]), 0, plan);
+  assert.deepEqual(run.sources.map(s => [s.source, s.state]), [["Landing.jobs", "ok"], ["Welcome to the Jungle", "partial"]]);
+  assert.equal(run.status, "partial");
+  assert.equal(run.valid, true);
+  const sources = Object.fromEntries(run.sources.map(({ source, ...state }) => [source, state]));
+  assert.deepEqual(discoverySourceReasons(sources), ["Welcome to the Jungle: consultados 12 de 15 termos; os restantes só filtram títulos de outras fontes."]);
+  const failed = parseMarketReceipt(receipt([], [{ company: "Welcome to the Jungle", error: "timeout" }]), 2, plan);
+  assert.deepEqual(failed.sources.find(s => s.source === "Welcome to the Jungle"), { source: "Welcome to the Jungle", state: "error", message: "timeout" });
 });
 
 test("an empty receipt with only skipped providers is not a healthy empty search", () => {
