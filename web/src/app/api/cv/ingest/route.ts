@@ -7,6 +7,7 @@ import { careerOpsRoot } from "@/lib/career-ops";
 import { CAPS } from "@/lib/worker-capabilities.mjs";
 import { scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
+import { CV_UPLOAD_MAX_BYTES, cvTextLengthError, cvUploadError, cvUploadSizeMessage } from "@/lib/cv/quality";
 
 // Deny list DERIVED, never hand-written: every one of the six advisor argvs
 // that spelled its own omitted MultiEdit, which --permission-mode acceptEdits
@@ -14,8 +15,9 @@ import { fencingReport } from "@/lib/cli-fencing.mjs";
 const ADVISOR_SCOPE = scopeFrom("Read,Glob,Grep");
 
 // Parse a CV (pasted text or an uploaded PDF) into clean cv.md markdown by running
-// the USER'S OWN CLI headless — the web never ships a heavyweight parser, and the
-// real CV NEVER leaves the machine (local-first, PII-safe). This route is a
+// the USER'S OWN CLI headless — the web never ships a heavyweight parser. The file
+// stays on this machine, but the chosen agent may send its content to its model
+// provider; the UI says so. This route is a
 // PROPOSER: it produces candidate markdown only; the actual write to cv.md happens
 // via the existing POST /api/cv after the user confirms (propose-then-confirm).
 export const runtime = "nodejs";
@@ -62,7 +64,7 @@ OUTPUT PROTOCOL:
 ${source}`;
 }
 
-const TEXT_SRC = (t: string) => `SOURCE (the user's CV, pasted as text — convert it):\n"""\n${t.slice(0, 24000)}\n"""`;
+const TEXT_SRC = (t: string) => `SOURCE (the user's CV, pasted as text — convert it):\n"""\n${t}\n"""`;
 const FILE_SRC = (p: string) => `SOURCE: the user's CV is the file at this local path — READ it with your file/Read tool, then convert it:\n${p}`;
 
 export async function POST(req: Request) {
@@ -78,12 +80,22 @@ export async function POST(req: Request) {
       cliId = body.cliId || "";
       const text = (body.text || "").trim();
       if (!text) return Response.json({ error: "O texto do CV está vazio." }, { status: 400 });
+      const tooLong = cvTextLengthError(text.length);
+      if (tooLong) return Response.json({ error: tooLong }, { status: 413 });
       promptSource = TEXT_SRC(text);
     } else if (ctype.includes("multipart/form-data")) {
+      // formData() buffers the whole body, so the declared length is the only
+      // guard available before reading it.
+      const declared = Number(req.headers.get("content-length") || 0);
+      if (declared > CV_UPLOAD_MAX_BYTES + 64 * 1024) {
+        return Response.json({ error: cvUploadSizeMessage(declared) }, { status: 413 });
+      }
       const form = await req.formData();
       cliId = String(form.get("cliId") || "");
       const file = form.get("file");
       if (!(file instanceof File)) return Response.json({ error: "Não foi recebido nenhum ficheiro." }, { status: 400 });
+      const rejected = cvUploadError(file);
+      if (rejected) return Response.json({ error: rejected.message }, { status: rejected.status });
       // Resolve first: if no CLI can run, that is the error to show, not the PDF
       // one below, which would wrongly say Claude is missing (#4607).
       resolved = resolveCliOrFallback(cliId);
@@ -92,18 +104,23 @@ export async function POST(req: Request) {
       // is granted here. Tell non-Claude users plainly instead of failing opaquely.
       // Judged on the CLI that will actually run: a stale saved id falls back to
       // the sole installed CLI, and that may well be Claude.
-      if (resolved.spec.id !== "claude" && /\.(pdf|docx)$/i.test(file.name)) {
-        return Response.json({ error: "A leitura de um PDF exige Claude Code. Em alternativa, cola o texto do CV." }, { status: 400 });
+      const binary = file.name.match(/\.(pdf|docx)$/i)?.[1].toLowerCase();
+      if (resolved.spec.id !== "claude" && binary) {
+        const kind = binary === "pdf" ? "um PDF" : "um documento Word";
+        return Response.json(
+          { error: `Nesta app, só o Claude Code tem acesso de leitura a ficheiros; o ${resolved.spec.name} não consegue abrir ${kind}. Cola o texto do CV ou escolhe o Claude Code em Configuração.` },
+          { status: 400 },
+        );
       }
       const ext = (file.name.match(/\.[a-z0-9]+$/i)?.[0] || ".pdf").toLowerCase();
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-cv-"));
-      tempFile = path.join(dir, `cv${ext}`); // outside the repo, basename-only
+      tempFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-cv-")), `cv${ext}`); // outside the repo, basename-only
       fs.writeFileSync(tempFile, Buffer.from(await file.arrayBuffer()), { mode: 0o600 }); // PII → owner-only
       promptSource = FILE_SRC(tempFile);
     } else {
       return Response.json({ error: "Este formato de conteúdo não é suportado." }, { status: 400 });
     }
   } catch {
+    if (tempFile) cleanupTemp(tempFile);
     return Response.json({ error: "Pedido inválido." }, { status: 400 });
   }
 

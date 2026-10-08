@@ -8,7 +8,7 @@ import remarkGfm from "remark-gfm";
 import { Upload, FileText, Loader2, Check, AlertTriangle, Lock, ArrowRight, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { instrumentSerif } from "@/lib/fonts";
-import { cvReadiness, parseCvStream, type CvSeed } from "@/lib/cv/quality";
+import { cvReadiness, cvUploadError, finishCvStream, parseCvStream, type CvSeed } from "@/lib/cv/quality";
 import { DEFAULT_FILTERS, filtersToParams } from "@/lib/explore";
 
 type Phase = "input" | "parsing" | "review" | "saving" | "error";
@@ -37,24 +37,40 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
   const [seed, setSeed] = useState<CvSeed | null>(null);
   const [err, setErr] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  // The last agent request, so an interrupted conversion can be retried as-is.
+  const lastRequest = useRef<RequestInit | null>(null);
+  const [canRetry, setCanRetry] = useState(false);
 
   const readiness = md ? cvReadiness(md) : null;
 
   // Stream the ingest, parsing markers live.
   const runStream = useCallback(async (init: RequestInit) => {
+    lastRequest.current = init;
     setPhase("parsing");
     setTrace("A ler o CV…");
     setErr("");
+    setCanRetry(false);
+    setMd("");
+    const fail = (message: string, retry: boolean) => {
+      setMd(""); // a partial conversion is never offered for saving
+      setSeed(null);
+      setErr(message);
+      setCanRetry(retry);
+      setPhase("error");
+    };
     try {
       const r = await fetch("/api/cv/ingest", init);
       if (r.status === 404) {
-        setErr("Escolhe primeiro um agente em Configuração para ler o CV localmente.");
-        setPhase("error");
+        fail("Escolhe primeiro um agente em Configuração para ler o CV.", false);
+        return;
+      }
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        fail(d.error || "O pedido foi recusado. Tenta novamente ou cola o texto.", false);
         return;
       }
       if (!r.body) {
-        setErr("O agente não respondeu.");
-        setPhase("error");
+        fail("O agente não respondeu. Nada foi guardado.", true);
         return;
       }
       const reader = r.body.getReader();
@@ -66,30 +82,29 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
         buf += dec.decode(value, { stream: true });
         const parsed = parseCvStream(buf);
         if (parsed.error) {
-          setErr(parsed.error === "unreadable" ? "Não foi possível extrair texto do ficheiro. Se for uma imagem digitalizada, cola o texto." : "Não foi possível interpretar o CV. Cola o texto para continuar.");
-          setPhase("error");
+          const outcome = finishCvStream(buf);
+          if (!outcome.ok) fail(outcome.message, outcome.retry);
           return;
         }
         if (parsed.trace) setTrace(parsed.trace.split("\n").filter(Boolean).slice(-1)[0] || "A ler o CV…");
         if (parsed.markdown) setMd(parsed.markdown);
         if (parsed.seed) setSeed(parsed.seed);
       }
-      const final = parseCvStream(buf);
-      if (!final.markdown.trim()) {
-        setErr("Não foi possível ler um CV. Cola o texto para continuar.");
-        setPhase("error");
+      const final = finishCvStream(buf);
+      if (!final.ok) {
+        fail(final.message, final.retry);
         return;
       }
       setMd(final.markdown);
       setSeed(final.seed);
       setPhase("review");
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Erro ao receber a resposta do agente.");
-      setPhase("error");
+    } catch {
+      fail("A ligação ao agente caiu antes do fim da conversão. Nada foi guardado. Tenta novamente.", true);
     }
   }, []);
 
   const ingestText = (text: string) => {
+    setCanRetry(false);
     const trimmed = text.trim();
     if (!trimmed) {
       setErr("O texto está vazio. Cola o conteúdo do CV.");
@@ -109,6 +124,13 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
   };
 
   const ingestFile = (file: File) => {
+    setCanRetry(false);
+    const rejected = cvUploadError(file);
+    if (rejected) {
+      setErr(rejected.message);
+      setPhase("error");
+      return;
+    }
     // .md/.txt/.markdown fast path — plain text, NO CLI needed, instant.
     if (/\.(md|markdown|txt)$/i.test(file.name)) {
       file
@@ -214,7 +236,7 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
             </button>
             <input ref={fileRef} type="file" accept=".pdf,.md,.markdown,.txt,.docx" hidden onChange={(e) => e.target.files?.[0] && ingestFile(e.target.files[0])} />
             <span className="inline-flex items-center gap-1 text-[11px] text-faint">
-              <Lock className="size-3" /> O ficheiro é processado neste computador pelo agente escolhido.
+              <Lock className="size-3" /> O ficheiro fica neste computador, mas o agente escolhido pode enviar o conteúdo ao respetivo fornecedor.
             </span>
             <button
               type="button"
@@ -236,9 +258,18 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
               </Link>
             </div>
           ) : (
-            <p className="flex items-center gap-1.5 text-[13px] text-amber-600 dark:text-amber-400">
-              <AlertTriangle className="size-3.5 shrink-0" /> {err}
-            </p>
+            <div className="flex flex-wrap items-center gap-2 text-[13px] text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="size-3.5 shrink-0" /> <span>{err}</span>
+              {canRetry && lastRequest.current && (
+                <button
+                  type="button"
+                  onClick={() => lastRequest.current && void runStream(lastRequest.current)}
+                  className="inline-flex items-center gap-1 rounded-md bg-amber-500/20 px-2.5 py-1 font-medium text-amber-700 transition hover:bg-amber-500/30 dark:text-amber-200 max-sm:min-h-[44px]"
+                >
+                  <RotateCcw className="size-3.5" /> Tentar novamente
+                </button>
+              )}
+            </div>
           ))}
       </div>
     );

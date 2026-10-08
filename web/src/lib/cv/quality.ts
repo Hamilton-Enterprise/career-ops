@@ -38,12 +38,46 @@ export function cvReadiness(md: string): CvReadiness {
   return { scoreable, words, hasExperience, hasSkills, hint };
 }
 
+// ── CV ingest limits (shared by the route and the client) ──
+export const CV_TEXT_MAX_CHARS = 24000;
+export const CV_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+const CV_UPLOAD_EXT = /\.(pdf|docx|md|markdown|txt)$/i;
+
+const ptCount = (n: number) => n.toLocaleString("pt-PT");
+
+/** Pasted text over the limit is refused, never truncated. */
+export function cvTextLengthError(chars: number): string | null {
+  if (chars <= CV_TEXT_MAX_CHARS) return null;
+  return `O texto tem ${ptCount(chars)} caracteres; o limite é ${ptCount(CV_TEXT_MAX_CHARS)}. Encurta-o ou carrega o ficheiro.`;
+}
+
+export function cvUploadSizeMessage(bytes: number): string {
+  return `O ficheiro tem ${(bytes / 1024 / 1024).toFixed(1).replace(".", ",")} MB; o limite é ${CV_UPLOAD_MAX_BYTES / 1024 / 1024} MB.`;
+}
+
+/** Judged on name and size only, so it can run before the file is read. */
+export function cvUploadError(file: { name: string; size: number }): { status: number; message: string } | null {
+  if (!CV_UPLOAD_EXT.test(file.name)) {
+    const ext = file.name.match(/\.[^./]+$/)?.[0] || "sem extensão";
+    return { status: 415, message: `Formato não suportado (${ext}). Usa PDF, Word (.docx), Markdown ou texto (.txt).` };
+  }
+  if (file.size > CV_UPLOAD_MAX_BYTES) {
+    return { status: 413, message: cvUploadSizeMessage(file.size) };
+  }
+  return null;
+}
+
 // ── CV ingest stream markers (parallel to the <<act:>>/<<offer:>> envelopes) ──
 export type CvSeed = { title?: string; roles?: string[]; location?: string };
-export type CvIngestResult = { markdown: string; seed: CvSeed | null; error: string | null; trace: string };
+export type CvIngestResult = { markdown: string; seed: CvSeed | null; error: string | null; trace: string; complete: boolean };
+
+const START = "<<cv:start>>";
+const END = "<<cv:end>>";
+const occurrences = (s: string, marker: string) => s.split(marker).length - 1;
 
 /** Parse the full accumulated ingest stream text into its parts. Tolerant: a
- *  still-streaming buffer just yields partial markdown + the pre-start trace. */
+ *  still-streaming buffer just yields partial markdown + the pre-start trace.
+ *  `complete` is true only for exactly one start/end pair around a non-empty body. */
 export function parseCvStream(buf: string): CvIngestResult {
   const errM = buf.match(/<<cv:error>>\s*(\{[^}]*\})/);
   if (errM) {
@@ -53,16 +87,17 @@ export function parseCvStream(buf: string): CvIngestResult {
     } catch {
       /* keep default */
     }
-    return { markdown: "", seed: null, error: reason, trace: buf.split("<<cv:error>>")[0].trim() };
+    return { markdown: "", seed: null, error: reason, trace: buf.split("<<cv:error>>")[0].trim(), complete: false };
   }
 
-  const start = buf.indexOf("<<cv:start>>");
+  const start = buf.indexOf(START);
   const trace = (start === -1 ? buf : buf.slice(0, start)).replace(/<<cv:[a-z]+>>.*$/s, "").trim();
-  if (start === -1) return { markdown: "", seed: null, error: null, trace };
+  if (start === -1) return { markdown: "", seed: null, error: null, trace, complete: false };
 
-  const afterStart = buf.slice(start + "<<cv:start>>".length);
-  const end = afterStart.indexOf("<<cv:end>>");
+  const afterStart = buf.slice(start + START.length);
+  const end = afterStart.indexOf(END);
   const markdown = (end === -1 ? afterStart : afterStart.slice(0, end)).replace(/^\s*\n/, "").trimEnd();
+  const complete = end !== -1 && occurrences(buf, START) === 1 && occurrences(buf, END) === 1 && markdown.trim() !== "";
 
   let seed: CvSeed | null = null;
   const seedM = buf.match(/<<cv:seed>>\s*(\{[\s\S]*?\})/);
@@ -78,5 +113,21 @@ export function parseCvStream(buf: string): CvIngestResult {
       /* malformed seed → ignore */
     }
   }
-  return { markdown, seed, error: null, trace };
+  return { markdown, seed, error: null, trace, complete };
+}
+
+export type CvIngestOutcome = { ok: true; markdown: string; seed: CvSeed | null } | { ok: false; message: string; retry: boolean };
+
+/** What the finished stream allows: review only a complete envelope, otherwise
+ *  an explanation and no text to save. */
+export function finishCvStream(buf: string): CvIngestOutcome {
+  const r = parseCvStream(buf);
+  if (r.complete) return { ok: true, markdown: r.markdown, seed: r.seed };
+  if (r.error === "unreadable") return { ok: false, retry: false, message: "Não foi possível extrair texto do ficheiro. Se for uma imagem digitalizada, cola o texto." };
+  if (r.error) return { ok: false, retry: true, message: "O agente não conseguiu interpretar o CV. Nada foi guardado. Tenta novamente ou cola o texto." };
+  if (occurrences(buf, START) > 1 || occurrences(buf, END) > 1) {
+    return { ok: false, retry: true, message: "A resposta do agente veio com marcadores repetidos e não se sabe onde acaba o CV. Nada foi guardado. Tenta novamente." };
+  }
+  if (r.markdown.trim()) return { ok: false, retry: true, message: "A conversão foi interrompida antes do fim e o CV ficou incompleto. Nada foi guardado. Tenta novamente." };
+  return { ok: false, retry: true, message: "O agente terminou sem devolver um CV. Nada foi guardado. Tenta novamente ou cola o texto." };
 }
