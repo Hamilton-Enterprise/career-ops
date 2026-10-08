@@ -171,7 +171,7 @@ export function parseMarketReceipt(output, exitCode, plan, timedOut = false) {
     const source = sources.find(s => s.source === limit?.company);
     const counts = [limit?.read, limit?.total, limit?.queries];
     if (!source || limit.kind !== "hit-budget" || !counts.every(n => Number.isSafeInteger(n) && n > 0)) continue;
-    noteLimit(source, "hit-budget", `lidos os primeiros ${limit.read} de ${limit.total} resultados em ${limit.queries} ${limit.queries === 1 ? "pesquisa" : "pesquisas"}.`);
+    noteLimit(source, "hit-budget", `lidos os primeiros ${limit.read} de ${limit.total} resultados em ${limit.queries} ${limit.queries === 1 ? "pesquisa" : "pesquisas"} (limite por pesquisa).`);
   }
   run.status = !run.valid ? "failed" : timedOut || exitCode !== 0 || receipt.errors.length || sources.some(s => s.state !== "ok") ? "partial" : "ok";
   run.knownLimitsOnly = run.status === "partial" && !timedOut && exitCode === 0 && !receipt.errors.length &&

@@ -383,7 +383,7 @@ test("a WTTJ hit budget broadens alone or beside a query budget; a pagination fa
     return { events, summary, phases: events.filter(event => event.kind === "phaseStart").map(event => event.phase),
       wttj: summary.sources.find(source => source.source === "Welcome to the Jungle") };
   };
-  const budget = "lidos os primeiros 600 de 1450 resultados em 2 pesquisas.";
+  const budget = "lidos os primeiros 600 de 1450 resultados em 2 pesquisas (limite por pesquisa).";
 
   scan({ limits: [hitBudget] });
   const alone = await discover(["Quantum role", "Quantum lead"]);
@@ -397,7 +397,7 @@ test("a WTTJ hit budget broadens alone or beside a query budget; a pagination fa
   assert.deepEqual(both.phases, ["precise", "broad"]);
   assert.equal(both.events.some(event => event.kind === "sourceError" || event.kind === "error"), false);
   assert.deepEqual(both.wttj.limits, ["query-limit", "hit-budget"]);
-  assert.equal(both.wttj.message, "feitas 12 de 15 pesquisas; os restantes termos continuam a filtrar os títulos recebidos. Lidos os primeiros 600 de 1450 resultados em 2 pesquisas.");
+  assert.equal(both.wttj.message, "feitas 12 de 15 pesquisas; os restantes termos continuam a filtrar os títulos recebidos. Lidos os primeiros 600 de 1450 resultados em 2 pesquisas (limite por pesquisa).");
 
   for (const reason of ["structural", "transient"]) {
     scan({ limits: [hitBudget], errors: [{ company: "Welcome to the Jungle", error: `wttj: incomplete pagination (${reason})` }] }, 2);

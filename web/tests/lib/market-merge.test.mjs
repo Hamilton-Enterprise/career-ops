@@ -216,7 +216,7 @@ test("a WTTJ hit budget is a known limit; pagination faults say what failed", ()
   const limit = { company: "Welcome to the Jungle", kind: "hit-budget", read: 300, total: 450, queries: 1 };
   const withLimits = (errors, limits) => JSON.stringify({ ...JSON.parse(receipt([], errors)), limits });
   const budget = parseMarketReceipt(withLimits([], [limit]), 0, plan);
-  assert.deepEqual(budget.sources[0], { source: "Welcome to the Jungle", state: "partial", limits: ["hit-budget"], message: "lidos os primeiros 300 de 450 resultados em 1 pesquisa." });
+  assert.deepEqual(budget.sources[0], { source: "Welcome to the Jungle", state: "partial", limits: ["hit-budget"], message: "lidos os primeiros 300 de 450 resultados em 1 pesquisa (limite por pesquisa)." });
   assert.equal(budget.knownLimitsOnly, true);
   assert.equal(budget.valid, true);
   for (const bad of [{ ...limit, kind: "other" }, { ...limit, read: 0 }, { ...limit, total: "450" }, { ...limit, company: "Unknown" }]) {
@@ -226,5 +226,5 @@ test("a WTTJ hit budget is a known limit; pagination faults say what failed", ()
   assert.equal(transient.sources[0].message, "Uma ou mais pesquisas desta fonte falharam antes do fim; a cobertura ficou incompleta.");
   const structural = parseMarketReceipt(withLimits([{ company: "Welcome to the Jungle", error: "wttj: incomplete pagination (structural)" }], [limit]), 2, plan);
   assert.deepEqual([structural.sources[0].state, structural.sources[0].limits, structural.knownLimitsOnly], ["partial", undefined, false]);
-  assert.equal(structural.sources[0].message, "A fonte não deixou ler todos os resultados que anunciou; a cobertura ficou incompleta. Lidos os primeiros 300 de 450 resultados em 1 pesquisa.");
+  assert.equal(structural.sources[0].message, "A fonte não deixou ler todos os resultados que anunciou; a cobertura ficou incompleta. Lidos os primeiros 300 de 450 resultados em 1 pesquisa (limite por pesquisa).");
 });

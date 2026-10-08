@@ -20,6 +20,7 @@
 //       queries: ["finops", "data platform engineer", "snowflake"]
 //       max_hits: 100        # optional, total budget per query, read in pages of
 //                            # 100; capped at 200, or 1000 with filters
+//       timeout_ms: 10000    # optional per-request Algolia timeout (default 10 s)
 //     enabled: true
 //
 // Prefer `filters` over broad keyword queries. A keyword alone cannot narrow a
@@ -56,9 +57,10 @@ const FILTERED_MAX_HITS_CAP = 1000;
 // The budget bounds the page count (at most 10 pages at the 1000 cap), so no
 // separate page cap is needed.
 const PAGE_SIZE = 100;
-// Algolia answers in well under a second; 5 s keeps the web plan's worst case
-// (12 queries x 3 pages) inside its 230 s scan deadline.
-const ALGOLIA_TIMEOUT_MS = 5_000;
+// Per-request Algolia deadline. A caller with a tight scan deadline (the web
+// plan) lowers it per board with `timeout_ms`.
+const DEFAULT_TIMEOUT_MS = 10_000;
+const MAX_TIMEOUT_MS = 60_000;
 const FILTERS_MAX_LEN = 1000;
 
 /** Pin a URL to an expected https host. */
@@ -192,7 +194,9 @@ function resolveConfig(entry) {
   const cap = filters ? FILTERED_MAX_HITS_CAP : MAX_HITS_CAP;
   const maxHits =
     Number.isInteger(cfg.max_hits) && cfg.max_hits > 0 ? Math.min(cfg.max_hits, cap) : DEFAULT_MAX_HITS;
-  return { queries: effectiveQueries, filters, maxHits };
+  const timeoutMs =
+    Number.isInteger(cfg.timeout_ms) && cfg.timeout_ms > 0 ? Math.min(cfg.timeout_ms, MAX_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS;
+  return { queries: effectiveQueries, filters, maxHits, timeoutMs };
 }
 
 /** @type {Provider} */
@@ -204,7 +208,7 @@ export default {
   },
 
   async fetch(entry, ctx) {
-    const { queries, filters, maxHits } = resolveConfig(entry);
+    const { queries, filters, maxHits, timeoutMs } = resolveConfig(entry);
 
     // 1. Fresh Algolia credentials from the site's public env endpoint.
     const envText = await ctx.fetchText(assertHost(ENV_URL, 'www.welcometothejungle.com', 'env'), {
@@ -250,7 +254,7 @@ export default {
             await ctx.fetchJson(url, {
               method: 'POST',
               redirect: 'error',
-              timeoutMs: ALGOLIA_TIMEOUT_MS,
+              timeoutMs,
               headers: {
                 'x-algolia-application-id': appId,
                 'x-algolia-api-key': apiKey,

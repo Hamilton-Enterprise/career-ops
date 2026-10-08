@@ -218,7 +218,7 @@ test("combined saved searches execute both ATS and market sources with a market-
         if (script === "scan.mjs") {
           assert.deepEqual(overlay.job_boards, [
             { name: "Landing.jobs", provider: "landingjobs", enabled: true },
-            { name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: { queries: ["designer"], filters: "offices.country_code:PT", max_hits: 300 } },
+            { name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: { queries: ["designer"], filters: "offices.country_code:PT", max_hits: 300, timeout_ms: 5000 } },
           ]);
           assert.equal(overlay.location_filter.strict, true);
           assert.equal(overlay.companies, undefined);

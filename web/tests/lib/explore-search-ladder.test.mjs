@@ -126,7 +126,7 @@ test("a streamed error blocks broadening even beside an otherwise healthy summar
 });
 
 test("a hit budget, alone or with a query budget, is a known limit for the summary gate", async () => {
-  const budget = { source: "Welcome to the Jungle", state: "partial", limits: ["hit-budget"], message: "lidos os primeiros 300 de 450 resultados em 1 pesquisa." };
+  const budget = { source: "Welcome to the Jungle", state: "partial", limits: ["hit-budget"], message: "lidos os primeiros 300 de 450 resultados em 1 pesquisa (limite por pesquisa)." };
   const both = { ...budget, limits: ["query-limit", "hit-budget"] };
   for (const wttj of [budget, both]) {
     assert.equal((await run({ ...healthy, status: "partial", knownLimitsOnly: true, sources: [...healthy.sources, wttj], incomplete: ["Welcome to the Jungle"] })).plans.length, 2);

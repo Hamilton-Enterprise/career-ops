@@ -1761,13 +1761,16 @@ search_queries:
 # - name: Welcome to the Jungle           # global board via WTTJ's public Algolia index
 #   provider: wttj
 #   wttj:
-#     queries: ["ai engineer", "data platform engineer"]  # REQUIRED — the board is global,
-#                                 # so explicit searches must be configured; each query is a
+#     queries: ["ai engineer", "data platform engineer"]  # queries and/or filters REQUIRED —
+#                                 # the board is global, so it must be narrowed; each query is a
 #                                 # separate Algolia search, results deduped across queries
+#     # filters: 'offices.country_code:FR'  # Algolia filter expression; alone, it reads
+#                                 # everything that passes the filter
 #     max_hits: 100        # optional total budget per query (default 100), read in pages
 #                          # of 100; capped at 200, or 1000 with `filters`. Reaching it
 #                          # is reported as a known limit, not an error.
 #                          # Several offices become one location joined with "; ".
+#     timeout_ms: 10000    # optional per-request Algolia timeout (default 10 s, max 60 s)
 #   enabled: true
 #
 # - name: Agentic Engineering Jobs        # AI-agent engineering roles (SSR HTML, one fetch)

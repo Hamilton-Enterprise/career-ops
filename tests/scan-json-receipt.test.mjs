@@ -382,7 +382,7 @@ test('a WTTJ max_hits budget is a known receipt limit, not an error, and exits 0
     assert.equal(run.status, 'partial');
     assert.equal(run.knownLimitsOnly, true);
     assert.deepEqual([run.sources[0].state, run.sources[0].limits, run.sources[0].message],
-      ['partial', ['hit-budget'], 'lidos os primeiros 400 de 800 resultados em 2 pesquisas.']);
+      ['partial', ['hit-budget'], 'lidos os primeiros 400 de 800 resultados em 2 pesquisas (limite por pesquisa).']);
   } finally { rmSync(root, { recursive:true, force:true }); }
 });
 

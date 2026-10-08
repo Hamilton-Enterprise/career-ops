@@ -255,10 +255,20 @@ try {
     fail(`wttj.fetch() Algolia headers = ${JSON.stringify(q1.opts.headers)}`);
   }
 
-  if (happy.jsonCalls.every((c) => c.opts.timeoutMs === 5000)) {
-    pass('wttj.fetch() bounds each Algolia request at 5 s so 12 queries x 3 pages fit the scan deadline');
+  if (happy.jsonCalls.every((c) => c.opts.timeoutMs === 10000)) {
+    pass('wttj.fetch() bounds each Algolia request at 10 s by default');
   } else {
-    fail(`wttj.fetch() Algolia timeoutMs = ${JSON.stringify(happy.jsonCalls.map((c) => c.opts.timeoutMs))}`);
+    fail(`wttj.fetch() default Algolia timeoutMs = ${JSON.stringify(happy.jsonCalls.map((c) => c.opts.timeoutMs))}`);
+  }
+
+  const quick = mkCtx(ENV_OK, () => ({ hits: [] }));
+  await wttj.fetch({ name: 'WTTJ', provider: 'wttj', wttj: { queries: ['x'], timeout_ms: 5000 } }, quick.ctx);
+  const sloppy = mkCtx(ENV_OK, () => ({ hits: [] }));
+  await wttj.fetch({ name: 'WTTJ', provider: 'wttj', wttj: { queries: ['x'], timeout_ms: 'fast' } }, sloppy.ctx);
+  if (quick.jsonCalls[0].opts.timeoutMs === 5000 && sloppy.jsonCalls[0].opts.timeoutMs === 10000) {
+    pass('wttj.fetch() honours wttj.timeout_ms and ignores an invalid value');
+  } else {
+    fail(`wttj.fetch() timeout_ms → ${quick.jsonCalls[0].opts.timeoutMs}, invalid → ${sloppy.jsonCalls[0].opts.timeoutMs}`);
   }
 
   if (q1.hitsPerPage === '100' && happy.jsonCalls.map((c) => c.query).join(',') === 'finops,snowflake') {
