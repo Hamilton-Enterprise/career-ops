@@ -26,7 +26,7 @@ function block(key, items) {
  * no location_filter at all and the scan would honor none of it (#3102).
  *
  * @param {{positive:string[], negative:string[], allow:string[], block:string[], alwaysAllow:string[], blockHard:string[]}} f
- * @param {object[]} jobBoards
+ * @param {object[]} jobBoards Ordinary provider entries, including careers_url/api.
  * @param {boolean} strictLocation
  * @returns {string}
  */
@@ -46,7 +46,8 @@ export function serializePortals(f, jobBoards = [], strictLocation = false) {
     out += block("block", f.block);
   }
   if (jobBoards.length) {
-    // JSON flow objects are valid YAML, including nested provider configuration.
+    // JSON flow objects retain ordinary provider fields (careers_url, api) and
+    // nested configuration, so directed employers use the same job_boards path.
     // JSON.stringify quotes every user scalar without a second serializer.
     out += "job_boards:\n" + jobBoards.map((board) => `  - ${JSON.stringify(board)}\n`).join("");
   }

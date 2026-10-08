@@ -1,4 +1,5 @@
 import { cleanChips } from "./clean-chips.mjs";
+import { priorityCompaniesFor } from "./priority-companies.mjs";
 
 /** @typedef {"portugal" | "spain" | "united-kingdom" | "switzerland" | "luxembourg" | "netherlands" | "europe" | "remote"} MarketId */
 /** @typedef {"employment" | "freelance"} OpportunityType */
@@ -33,7 +34,7 @@ const REMOTE_BOARDS = [
   ["We Work Remotely", "weworkremotely"],
 ];
 
-/** @typedef {{ name: string, provider: string, enabled: boolean, lang?: string, wttj?: { queries: string[], filters: string } }} MarketBoard */
+/** @typedef {{ name: string, provider: string, enabled: boolean, careers_url?: string, api?: string, lang?: string, wttj?: { queries: string[], filters: string } }} MarketBoard */
 
 /** The caller supplies positive terms, or profile terms when positives are empty.
  *  This pure planner never invents a search query or reads the user's files.
@@ -69,7 +70,8 @@ export function buildMarketPlan(selected, terms, opportunityType = "employment",
   /** @type {{ source: string, reason: string }[]} */
   const skippedSources = [];
   /** @param {MarketBoard} board */
-  const add = (board) => boards.set(`${board.provider}:${board.lang ?? ""}`, board);
+  const add = (board) => boards.set(`${board.provider}:${board.careers_url || board.api ? new URL(board.careers_url || board.api).hostname : board.lang ?? ""}`, board);
+  for (const board of priorityCompaniesFor(markets, searchPlan.occupationIds)) add(board);
   for (const market of markets) {
     if (market === "portugal" || market === "europe") {
       add({ name: "Landing.jobs", provider: "landingjobs", enabled: true });

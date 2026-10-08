@@ -6,6 +6,53 @@ import { resolveLocationInputs } from "../../src/lib/location-concepts.mjs";
 
 const { cleanMarkets, encodeMarkets, decodeMarkets, buildMarketPlan, classifyMarketLocation } = marketPresets;
 
+test("Portuguese retail and pharmacy concepts place Auchan before existing market boards", () => {
+  for (const occupationId of ["retail-assistant", "sales-assistant", "pharmacy-assistant"]) {
+    const plan = buildMarketPlan(["portugal"], ["Operador de Loja"], "employment", { occupationIds: [occupationId] });
+    assert.deepEqual(plan.jobBoards, [
+      { name: "Auchan Portugal", provider: "workday", enabled: true, careers_url: "https://auchanportugal.wd3.myworkdayjobs.com/auchan-retail" },
+      { name: "Landing.jobs", provider: "landingjobs", enabled: true },
+      { name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: { queries: ["Operador de Loja"], filters: "offices.country_code:PT" } },
+    ]);
+  }
+});
+
+test("directed sources collapse repeated markets and concepts while retaining all generic feeds", () => {
+  const plan = buildMarketPlan(["portugal", "portugal", "spain", "europe", "remote"], ["Sales Assistant"], "employment", {
+    occupationIds: ["retail-assistant", "retail-assistant", "sales-assistant", "pharmacy-assistant"],
+  });
+  assert.deepEqual(plan.jobBoards.map(board => [board.provider, board.lang ?? ""]), [
+    ["workday", ""], ["landingjobs", ""], ["manfred", "ES"], ["manfred", "EN"],
+    ["remoteok", ""], ["remotive", ""], ["himalayas", ""], ["jobicy", ""], ["jobspresso", ""], ["workingnomads", ""], ["weworkremotely", ""], ["wttj", ""],
+  ]);
+  assert.equal(plan.jobBoards.filter(board => board.careers_url?.includes("auchanportugal")).length, 1);
+  assert.equal(plan.jobBoards.some(board => /primark/i.test(JSON.stringify(board))), false);
+});
+
+test("unrelated concepts, countries and freelance cannot select directed employers", () => {
+  for (const markets of [[], ["spain"], ["united-kingdom"], ["switzerland"], ["luxembourg"], ["netherlands"], ["remote"], ["europe"]]) {
+    assert.equal(buildMarketPlan(markets, ["Sales Assistant"], "employment", { occupationIds: ["retail-assistant"] }).jobBoards.some(board => board.provider === "workday"), false);
+  }
+  for (const occupationIds of [[], ["web-developer"], ["app-developer"], ["chatbot-developer"], ["ai-automation"], ["unknown"]]) {
+    assert.equal(buildMarketPlan(["portugal"], ["Operador de Loja"], "employment", { occupationIds }).jobBoards.some(board => board.provider === "workday"), false);
+  }
+  assert.equal(buildMarketPlan(["portugal"], ["Sales Assistant"], "freelance", { occupationIds: ["retail-assistant"] }).jobBoards.some(board => board.provider === "workday"), false);
+});
+
+test("priority catalog accepts selectors only and returns independent reviewed boards", async () => {
+  const catalog = await import("../../src/lib/priority-companies.mjs").catch(() => ({}));
+  assert.equal(typeof catalog.priorityCompaniesFor, "function");
+  const injectedUrl = "http://127.0.0.1/private";
+  assert.deepEqual(catalog.priorityCompaniesFor([injectedUrl], ["retail-assistant"]), []);
+  assert.deepEqual(catalog.priorityCompaniesFor(["portugal"], [injectedUrl, { careers_url: injectedUrl }]), []);
+  const boards = catalog.priorityCompaniesFor(["portugal", "portugal"], ["retail-assistant", "pharmacy-assistant"]);
+  assert.equal(boards.length, 1);
+  boards[0].careers_url = injectedUrl;
+  assert.equal(catalog.priorityCompaniesFor(["portugal"], ["retail-assistant"])[0].careers_url, "https://auchanportugal.wd3.myworkdayjobs.com/auchan-retail");
+  const plan = buildMarketPlan(["portugal"], [injectedUrl], "employment", { occupationIds: ["retail-assistant"], priorityCompanies: [{ provider: "workday", careers_url: injectedUrl }] });
+  assert.equal(plan.jobBoards[0].careers_url, "https://auchanportugal.wd3.myworkdayjobs.com/auchan-retail");
+});
+
 test("resolved city aliases and explicit metro terms reject even unknown foreign qualifiers", () => {
   for (const phase of ["precise", "broad"]) {
     const plan = buildMarketPlan(["portugal"], [], "employment", { locationResolution: resolveLocationInputs("Lisboa", phase), occupationIds: ["retail-assistant"] });

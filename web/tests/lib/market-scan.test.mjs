@@ -6,6 +6,7 @@ import path from "node:path";
 import * as yaml from "js-yaml";
 import "../helpers/web-ts-alias-loader.mjs";
 import { buildSearchPlan } from "../../src/lib/search-plan.mjs";
+import workday from "../../../providers/workday.mjs";
 
 const { runMarketDiscovery } = await import("@/lib/core/market-scan");
 const { runDiscovery } = await import("@/lib/core/scan");
@@ -26,6 +27,26 @@ async function sandbox(t, script, profile = "") {
   });
   return root;
 }
+
+test("directed Workday source uses the ordinary ephemeral market scan and source receipts", async t => {
+  const payload = { ...receipt, scanned: 3, offers: [{ ...receipt.offers[0], company: "Auchan Portugal", title: "Operador/a de loja", source: "workday-api", url: "https://auchanportugal.wd3.myworkdayjobs.com/auchan-retail/job/Lisboa/Operador_JR123" }] };
+  const root = await sandbox(t, `import fs from 'node:fs'; fs.writeFileSync('arguments.json', JSON.stringify({args:process.argv.slice(2),portals:process.env.CAREER_OPS_PORTALS,config:fs.readFileSync(process.env.CAREER_OPS_PORTALS,'utf8')})); console.log(${JSON.stringify(JSON.stringify(payload))});`);
+  const input = { ...filters, positive: ["Operador de Loja"] };
+  const events = [];
+  const run = await runMarketDiscovery(input, event => events.push(event), buildSearchPlan(input, "precise"));
+  const recorded = JSON.parse(fs.readFileSync(path.join(root, "arguments.json"), "utf8"));
+  const config = yaml.load(recorded.config);
+  assert.deepEqual(config.job_boards[0], { name: "Auchan Portugal", provider: "workday", enabled: true, careers_url: "https://auchanportugal.wd3.myworkdayjobs.com/auchan-retail" });
+  assert.deepEqual(workday.detect(config.job_boards[0]), { url: "https://auchanportugal.wd3.myworkdayjobs.com/wday/cxs/auchanportugal/auchan-retail/jobs" });
+  assert.equal(config.tracked_companies, undefined);
+  assert.deepEqual(recorded.args, ["--dry-run", "--json", "--since", "7"]);
+  assert.equal(run.status, "ok");
+  assert.equal(run.offers[0].source, "workday-api");
+  assert.equal(events[0].source, "Auchan Portugal");
+  assert.equal(events.find(event => event.kind === "sourceDone" && event.source === "Auchan Portugal").count, 1);
+  assert.equal(fs.existsSync(recorded.portals), false);
+  assert.equal(fs.existsSync(path.join(root, "data")), false);
+});
 
 test("market child uses dry-run JSON, ephemeral config, and cleans it after success", async t => {
   const root = await sandbox(t, `import fs from 'node:fs'; fs.writeFileSync('arguments.json', JSON.stringify({ args: process.argv.slice(2), portals: process.env.CAREER_OPS_PORTALS, config: fs.readFileSync(process.env.CAREER_OPS_PORTALS, 'utf8') })); console.log(${JSON.stringify(JSON.stringify(receipt))});`);
