@@ -52,7 +52,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <Icon className="size-4" />
                   {label}
                   {chip && (
-                    <span className="ml-auto rounded-full border border-brand/30 bg-brand-soft px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-brand-text">
+                    <span className="ml-auto rounded-full border border-brand/30 bg-brand-soft px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-foreground">
                       {chip}
                     </span>
                   )}

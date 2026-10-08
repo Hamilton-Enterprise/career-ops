@@ -107,7 +107,7 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
         )}
         {unverified && (
           <span
-            className="inline-flex items-center gap-1 rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-600 dark:text-amber-300"
+            className="inline-flex items-center gap-1 rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 font-medium text-foreground"
             title={freelance ? "Encontrada na web pública. Abre a página para confirmar se a oportunidade continua disponível." : "Encontrada na web pública. A avaliação abre a página para confirmar se a oferta continua disponível."}
           >
             <ShieldQuestion className="size-3" /> por confirmar
@@ -187,7 +187,7 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
               type="button"
               onClick={evaluate}
               title={unverified ? "Avalia de A a F e confirma se a oferta está disponível. Usa tokens." : "Faz uma avaliação de A a F. Usa tokens."}
-              className="inline-flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-brand/30 px-2.5 py-2 text-xs font-medium text-brand transition-colors hover:bg-brand-soft max-sm:min-h-[44px]"
+              className="inline-flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-brand/30 px-2.5 py-2 text-xs font-medium text-foreground transition-colors hover:bg-brand-soft max-sm:min-h-[44px]"
             >
               Avaliar <Coins className="size-3.5 opacity-80" />
             </button>
