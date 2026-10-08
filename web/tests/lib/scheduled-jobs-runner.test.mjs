@@ -25,10 +25,13 @@ import {
   MAX_ATTEMPTS,
   MAX_RUNS,
   nextFutureRun,
+  preciseOffersFromMarketReceipt,
   recordCompletion,
   runnerResourcePath,
 } from "../../scripts/scheduled-jobs-runner.mjs";
 import { assertScheduledJobBody } from "../../src/lib/scheduled-job-input.mjs";
+import { buildSearchPlan } from "../../src/lib/search-plan.mjs";
+import { DEFAULT_FILTERS } from "../../src/lib/explore.ts";
 
 const WEB_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -762,5 +765,249 @@ test("completion history is capped at 100 records", async () => {
 test("a non-object scheduled-job patch is rejected by input validation", () => {
   for (const value of [null, "status", ["status"]]) {
     assert.throws(() => assertScheduledJobBody(value), /object/);
+  }
+});
+
+const UK_RECEIPT_OFFERS = [
+  { url: "https://jobs.example/uk", company: "OK", title: "Sales Assistant", location: "London, UK", source: "wttj-api" },
+  { url: "https://jobs.example/on", company: "CA", title: "Sales Assistant", location: "London, Ontario", source: "wttj-api" },
+  { url: "https://jobs.example/role", company: "Wrong", title: "Account Manager", location: "London, UK", source: "wttj-api" },
+  { url: "https://jobs.example/al", company: "US", title: "Sales Assistant", location: "Birmingham, AL", source: "wttj-api" },
+];
+
+test("saved searches apply precise occupation matching before persisting and leave the job snapshot unchanged", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-occupation-"));
+  fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [engineer]\n", "utf8");
+  const filters = { markets: ["united-kingdom"], positive: ["Sales Assistant"], sinceDays: 7, limitPerAts: 150 };
+  const job = {
+    id: "11111111-1111-4111-8111-111111111111",
+    engine: "portals",
+    filters: structuredClone(filters),
+  };
+  const snapshot = structuredClone(job.filters);
+  try {
+    let persisted = [];
+    const result = executeJob(temp, job, {
+      spawnFn: () => ({
+        status: 0,
+        stdout: JSON.stringify({
+          version: "careerops.scan.receipt@1", dry_run: true, scanned: 1, skipped: 0,
+          offers: UK_RECEIPT_OFFERS, errors: [], limits: [], unverified_zero: [],
+        }),
+        stderr: "",
+      }),
+      writerSpawnFn: (_node, _args, options) => {
+        persisted = JSON.parse(options.input);
+        return { status: 0, stdout: JSON.stringify({ added: persisted.length }), stderr: "" };
+      },
+    });
+    assert.equal(result.state, "success");
+    assert.equal(result.rolesFound, 1);
+    assert.deepEqual(persisted.map((offer) => offer.url), ["https://jobs.example/uk"]);
+    assert.deepEqual(job.filters, snapshot);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("saved search and direct precise search keep the same offers from one receipt", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-parity-"));
+  fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [engineer]\n", "utf8");
+  const filters = {
+    ...DEFAULT_FILTERS,
+    ats: [],
+    markets: ["united-kingdom"],
+    positive: ["Sales Assistant"],
+  };
+  const receipt = {
+    version: "careerops.scan.receipt@1", dry_run: true, scanned: 1, skipped: 0,
+    offers: UK_RECEIPT_OFFERS, errors: [], limits: [], unverified_zero: [],
+  };
+  const stdout = JSON.stringify(receipt);
+  const direct = preciseOffersFromMarketReceipt(stdout, 0, buildSearchPlan(filters, "precise"))
+    .map((offer) => offer.url)
+    .sort();
+  try {
+    let persisted = [];
+    const result = executeJob(temp, {
+      id: "11111111-1111-4111-8111-111111111111",
+      engine: "portals",
+      filters: { markets: ["united-kingdom"], positive: ["Sales Assistant"], sinceDays: 7 },
+    }, {
+      spawnFn: () => ({ status: 0, stdout, stderr: "" }),
+      writerSpawnFn: (_node, _args, options) => {
+        persisted = JSON.parse(options.input);
+        return { status: 0, stdout: JSON.stringify({ added: persisted.length }), stderr: "" };
+      },
+    });
+    assert.equal(result.state, "success");
+    assert.deepEqual(persisted.map((offer) => offer.url).sort(), direct);
+    assert.deepEqual(direct, ["https://jobs.example/uk"]);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("saved searches report known WTTJ limits as partial with Explore pt-PT sentences", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-known-limits-"));
+  fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [x]\n", "utf8");
+  const positive = Array.from({ length: 15 }, (_, index) => `UniqueRole${index}`);
+  try {
+    const result = executeJob(temp, {
+      id: "11111111-1111-4111-8111-111111111111",
+      engine: "portals",
+      filters: { markets: ["portugal"], positive, sinceDays: 7 },
+    }, {
+      spawnFn: () => ({
+        status: 0,
+        stdout: JSON.stringify({
+          version: "careerops.scan.receipt@1", dry_run: true, scanned: 1, skipped: 0, unverified_zero: [],
+          offers: [{
+            url: "https://jobs.example/pt", company: "PT", title: "UniqueRole0 associate",
+            location: "Lisboa, Portugal", source: "landingjobs-api",
+          }],
+          errors: [],
+          limits: [{ company: "Welcome to the Jungle", kind: "hit-budget", read: 300, total: 900, queries: 2 }],
+        }),
+        stderr: "",
+      }),
+      writerSpawnFn: (_node, _args, options) => {
+        const persisted = JSON.parse(options.input);
+        return { status: 0, stdout: JSON.stringify({ added: persisted.length }), stderr: "" };
+      },
+    });
+    assert.equal(result.state, "success");
+    assert.equal(result.rolesFound, 1);
+    assert.match(result.message, /^Partial scan finished/i);
+    assert.match(result.message, /feitas 12 de 15 pesquisas; os restantes termos continuam a filtrar os títulos recebidos/i);
+    assert.match(result.message, /lidos os primeiros 300 de 900 resultados em 2 pesquisas \(limite por pesquisa\)/i);
+    assert.doesNotMatch(result.message, /\(error\)/);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("saved searches never run an automatic broad phase after a healthy zero", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-no-broad-"));
+  fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [designer]\n", "utf8");
+  try {
+    const sinceArgs = [];
+    const result = executeJob(temp, {
+      id: "11111111-1111-4111-8111-111111111111",
+      engine: "portals",
+      filters: { markets: ["portugal"], positive: ["designer"], sinceDays: 7 },
+    }, {
+      spawnFn: (_node, args) => {
+        sinceArgs.push(args.slice(args.indexOf("--since"), args.indexOf("--since") + 2));
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            version: "careerops.scan.receipt@1", dry_run: true, scanned: 1, skipped: 0,
+            offers: [], errors: [], limits: [], unverified_zero: [],
+          }),
+          stderr: "",
+        };
+      },
+    });
+    assert.equal(result.state, "success");
+    assert.equal(result.rolesFound, 0);
+    assert.deepEqual(sinceArgs, [["--since", "7"]]);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("saved market searches preserve ATS incompleteness signals in the completion message", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-ats-incomplete-"));
+  fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [designer]\ncompanies:\n  - name: Existing\n    careers_url: https://example.com/jobs\n", "utf8");
+  const job = {
+    id: "11111111-1111-4111-8111-111111111111",
+    engine: "full",
+    filters: { ats: ["lever"], markets: ["portugal"], positive: ["designer"], sinceDays: 7, limitPerAts: 150 },
+  };
+  try {
+    const result = executeJob(temp, job, {
+      spawnFn: (_node, [script]) => {
+        if (script === "scan-ats-full.mjs") {
+          return {
+            status: 0,
+            stdout: JSON.stringify({
+              postingsKept: 1, companiesScanned: 150, companiesAvailable: 8000, capHit: true,
+              stoppedEarly: true, postingsDroppedNoDate: 4,
+              datasetStatus: { lever: "stale" },
+              offers: [{
+                url: "https://ats.example/1", company: "ATS 1", title: "Designer",
+                location: "Lisboa, Portugal", source: "lever-full",
+              }],
+              errors: [{ company: "lever", error: "rate limited" }],
+            }),
+            stderr: "",
+          };
+        }
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            version: "careerops.scan.receipt@1", dry_run: true, scanned: 1, skipped: 0,
+            offers: [], errors: [], limits: [], unverified_zero: [],
+          }),
+          stderr: "",
+        };
+      },
+      writerSpawnFn: (_node, _args, options) => {
+        const persisted = JSON.parse(options.input);
+        return { status: 0, stdout: JSON.stringify({ added: persisted.length }), stderr: "" };
+      },
+    });
+    assert.equal(result.state, "success");
+    assert.equal(result.rolesFound, 1);
+    assert.match(result.message, /^Partial scan finished/i);
+    assert.match(result.message, /cap/i);
+    assert.match(result.message, /stopped early/i);
+    assert.match(result.message, /dropped without a date/i);
+    assert.match(result.message, /lever \(stale\)/i);
+    assert.match(result.message, /rate limited/i);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("saved freelance still ignores portals.yml positives while employment keeps the fallback", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-fallback-parity-"));
+  fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [engineer]\n", "utf8");
+  try {
+    let freelanceOverlay;
+    executeJob(temp, {
+      id: "11111111-1111-4111-8111-111111111111",
+      engine: "full",
+      filters: { opportunityType: "freelance", positive: [], markets: [] },
+    }, {
+      spawnFn: (_node, _args, options) => {
+        freelanceOverlay = yaml.load(fs.readFileSync(options.env.CAREER_OPS_PORTALS, "utf8"));
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            version: "careerops.scan.receipt@1", dry_run: true, scanned: 1, skipped: 0, offers: [], errors: [], limits: [], unverified_zero: [],
+          }),
+          stderr: "",
+        };
+      },
+    });
+    assert.deepEqual(freelanceOverlay.title_filter?.positive ?? [], []);
+    assert.deepEqual(freelanceOverlay.job_boards[0].wttj.queries, []);
+
+    let employmentOverlay;
+    executeJob(temp, {
+      id: "11111111-1111-4111-8111-111111111111",
+      engine: "full",
+      filters: { positive: [], markets: [] },
+    }, {
+      spawnFn: (_node, _args, options) => {
+        employmentOverlay = yaml.load(fs.readFileSync(options.env.CAREER_OPS_PORTALS, "utf8"));
+        return { status: 0, stdout: JSON.stringify({ postingsKept: 0 }), stderr: "" };
+      },
+    });
+    assert.deepEqual(employmentOverlay.title_filter.positive, ["engineer"]);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
   }
 });
