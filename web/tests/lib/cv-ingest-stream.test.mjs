@@ -96,3 +96,37 @@ test("cvUploadError: rejects oversized and unsupported files by metadata alone",
   assert.match(cvUploadError({ name: "foto.png", size: 1000 }).message, /\.png/);
   assert.equal(cvUploadError({ name: "cv.doc", size: 1000 }).status, 415);
 });
+
+// An echoed prompt (`codex exec` repeats it) mentions every marker mid-line.
+const ECHO = 'Emit ONLY the markdown between <<cv:start>> and <<cv:end>> (own lines), then one <<cv:seed>>{"title":"x"} line; or <<cv:error>>{"reason":"unreadable"} if you can\'t read it.\n- If the source is unreadable, emit ONLY: `<<cv:error>>{"reason":"unreadable"}` and stop.\n';
+
+test("parseCvStream: markers only count on a line of their own, so an echoed prompt is ignored", () => {
+  const r = parseCvStream(`${ECHO}${FULL}`);
+  assert.equal(r.error, null);
+  assert.equal(r.complete, true);
+  assert.equal(r.markdown, BODY);
+  assert.equal(r.seed.title, "Analista");
+  assert.equal(finishCvStream(`${ECHO}${FULL}`).ok, true);
+});
+
+test("parseCvStream: an echoed prompt alone is not an error and not a CV", () => {
+  const r = parseCvStream(ECHO);
+  assert.equal(r.error, null);
+  assert.equal(r.complete, false);
+  assert.equal(r.markdown, "");
+});
+
+test("parseCvStream: partial preview still works after an echo", () => {
+  const r = parseCvStream(`${ECHO}A ler o CV…\n<<cv:start>>\n${BODY}\n- metade`);
+  assert.equal(r.complete, false);
+  assert.ok(r.markdown.startsWith("# CV"));
+  assert.ok(r.markdown.endsWith("- metade"));
+});
+
+test("finishCvStream: an unreadable pasted text is not called a file", () => {
+  const err = '<<cv:error>>{"reason":"unreadable"}\n';
+  assert.match(finishCvStream(err, "file").message, /ficheiro/);
+  const pasted = finishCvStream(err, "text").message;
+  assert.doesNotMatch(pasted, /ficheiro/);
+  assert.match(pasted, /texto/);
+});

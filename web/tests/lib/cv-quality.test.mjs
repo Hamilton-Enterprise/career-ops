@@ -49,3 +49,9 @@ test("cvReadiness: English headings, plain date ranges and thresholds are unchan
   assert.equal(cvReadiness(filler(199)).scoreable, false);
   assert.equal(cvReadiness(filler(200)).scoreable, true);
 });
+
+test("cvReadiness: dates under Línguas, Cursos or Voluntariado are not employment", () => {
+  for (const heading of ["## Línguas", "## Cursos", "## Voluntariado"]) {
+    assert.equal(cvReadiness(`${heading}\n\n- Atividade, 2016 - 2018\n\n${filler(90)}`).hasExperience, false, heading);
+  }
+});

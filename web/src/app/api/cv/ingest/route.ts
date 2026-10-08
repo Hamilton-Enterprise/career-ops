@@ -7,7 +7,8 @@ import { careerOpsRoot } from "@/lib/career-ops";
 import { CAPS } from "@/lib/worker-capabilities.mjs";
 import { scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
-import { CV_UPLOAD_MAX_BYTES, cvTextLengthError, cvUploadError, cvUploadSizeMessage } from "@/lib/cv/quality";
+import { CV_TEXT_MAX_CHARS, CV_UPLOAD_MAX_BYTES, cvTextLengthError, cvUploadError, cvUploadSizeMessage } from "@/lib/cv/quality";
+import { resolveCodeRoot } from "@/lib/core/code-root.mjs";
 
 // Deny list DERIVED, never hand-written: every one of the six advisor argvs
 // that spelled its own omitted MultiEdit, which --permission-mode acceptEdits
@@ -29,7 +30,7 @@ export const maxDuration = 300;
 // (exactly how the explore route handles a missing discover.md).
 function readCanonicalMode(): string | null {
   try {
-    return fs.readFileSync(path.join(careerOpsRoot(), "modes", "cv-ingest.md"), "utf8");
+    return fs.readFileSync(path.join(resolveCodeRoot(process.cwd(), process.env), "modes", "cv-ingest.md"), "utf8");
   } catch {
     return null;
   }
@@ -76,7 +77,10 @@ export async function POST(req: Request) {
 
   try {
     if (ctype.includes("application/json")) {
-      const body = (await req.json()) as { text?: string; cliId?: string };
+      // Room for JSON escaping of CV_TEXT_MAX_CHARS; anything past it is over the limit.
+      const raw = await readBodyLimited(req, CV_TEXT_MAX_CHARS * 8 + 4096);
+      if (!raw) return Response.json({ error: `O texto excede o limite de ${CV_TEXT_MAX_CHARS.toLocaleString("pt-PT")} caracteres. Encurta-o ou carrega o ficheiro.` }, { status: 413 });
+      const body = JSON.parse(raw.toString("utf8")) as { text?: string; cliId?: string };
       cliId = body.cliId || "";
       const text = (body.text || "").trim();
       if (!text) return Response.json({ error: "O texto do CV está vazio." }, { status: 400 });
@@ -84,13 +88,13 @@ export async function POST(req: Request) {
       if (tooLong) return Response.json({ error: tooLong }, { status: 413 });
       promptSource = TEXT_SRC(text);
     } else if (ctype.includes("multipart/form-data")) {
-      // formData() buffers the whole body, so the declared length is the only
-      // guard available before reading it.
+      // 64 KiB of room for the multipart framing around the file.
+      const limit = CV_UPLOAD_MAX_BYTES + 64 * 1024;
       const declared = Number(req.headers.get("content-length") || 0);
-      if (declared > CV_UPLOAD_MAX_BYTES + 64 * 1024) {
-        return Response.json({ error: cvUploadSizeMessage(declared) }, { status: 413 });
-      }
-      const form = await req.formData();
+      if (declared > limit) return Response.json({ error: cvUploadSizeMessage(declared) }, { status: 413 });
+      const raw = await readBodyLimited(req, limit);
+      if (!raw) return Response.json({ error: cvUploadSizeMessage(limit + 1) }, { status: 413 });
+      const form = await new Response(new Uint8Array(raw), { headers: { "content-type": ctype } }).formData();
       cliId = String(form.get("cliId") || "");
       const file = form.get("file");
       if (!(file instanceof File)) return Response.json({ error: "Não foi recebido nenhum ficheiro." }, { status: 400 });
@@ -250,8 +254,11 @@ export async function POST(req: Request) {
         }
       });
       child.stderr.on("data", (d: Buffer) => {
-        const s = d.toString();
-        if (/error|not found|denied|fatal/i.test(s)) safeEnqueue(`\n[${spec.name}] ${s.trim()}\n`);
+        // Line by line, never a marker line: a CLI echoing the prompt on stderr
+        // mentions <<cv:error>> and must not be forwarded as one.
+        for (const line of d.toString().split("\n")) {
+          if (!line.includes("<<cv:") && /error|not found|denied|fatal/i.test(line)) safeEnqueue(`\n[${spec.name}] ${line.trim()}\n`);
+        }
       });
       child.on("error", (e) => {
         safeEnqueue(`\n[error launching ${spec.name}: ${e.message}]`);
@@ -277,6 +284,24 @@ export async function POST(req: Request) {
   return new Response(stream, {
     headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" },
   });
+}
+
+/** The body, or null as soon as it passes `limit` bytes (Content-Length may be absent). */
+async function readBodyLimited(req: Request, limit: number): Promise<Buffer | null> {
+  const reader = req.body?.getReader();
+  if (!reader) return Buffer.alloc(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return Buffer.concat(chunks);
+    total += value.byteLength;
+    if (total > limit) {
+      void reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
 }
 
 function cleanupTemp(file: string) {

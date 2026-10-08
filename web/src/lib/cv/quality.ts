@@ -8,7 +8,7 @@ export type CvReadiness = { scoreable: boolean; words: number; hasExperience: bo
 const EXPERIENCE_HEADING = /^(experience|work|employment|empleo|experiencia)/;
 const SKILLS_HEADING = /^(skills|technologies|competenc|habilidad)/;
 // Sections whose dates are study or side work, never employment.
-const NON_EMPLOYMENT_HEADING = /^(education|educacao|formacao|projects?|projetos?|projectos?|certifications?|certificacoes|languages|idiomas)\b/;
+const NON_EMPLOYMENT_HEADING = /^(education|educacao|formacao|projects?|projetos?|projectos?|certifications?|certificacoes|languages|idiomas|linguas|cursos|voluntariado)\b/;
 const DATE_RANGE = /\b(20\d\d)\s*[-–—]\s*(20\d\d|present|now|actualidad|presente|atual|actual|atualmente)/i;
 
 /** Date ranges outside education/projects-style sections (and their subsections). */
@@ -71,15 +71,19 @@ export function cvUploadError(file: { name: string; size: number }): { status: n
 export type CvSeed = { title?: string; roles?: string[]; location?: string };
 export type CvIngestResult = { markdown: string; seed: CvSeed | null; error: string | null; trace: string; complete: boolean };
 
-const START = "<<cv:start>>";
-const END = "<<cv:end>>";
-const occurrences = (s: string, marker: string) => s.split(marker).length - 1;
+// Markers only count on a line of their own (the cv-envelope.mjs rule): CLIs
+// such as `codex exec` echo the prompt, which mentions every marker mid-line.
+const START_RE = /^[ \t]*<<cv:start>>[ \t]*\r?$/gm;
+const END_RE = /^[ \t]*<<cv:end>>[ \t]*\r?$/gm;
+const ERROR_RE = /^[ \t]*<<cv:error>>[ \t]*(\{[^}\n]*\})/m;
+const SEED_RE = /^[ \t]*<<cv:seed>>[ \t]*(\{[^\n]*\})/m;
+const markerLines = (s: string, re: RegExp) => [...s.matchAll(re)];
 
 /** Parse the full accumulated ingest stream text into its parts. Tolerant: a
  *  still-streaming buffer just yields partial markdown + the pre-start trace.
  *  `complete` is true only for exactly one start/end pair around a non-empty body. */
 export function parseCvStream(buf: string): CvIngestResult {
-  const errM = buf.match(/<<cv:error>>\s*(\{[^}]*\})/);
+  const errM = ERROR_RE.exec(buf);
   if (errM) {
     let reason = "unreadable";
     try {
@@ -87,20 +91,22 @@ export function parseCvStream(buf: string): CvIngestResult {
     } catch {
       /* keep default */
     }
-    return { markdown: "", seed: null, error: reason, trace: buf.split("<<cv:error>>")[0].trim(), complete: false };
+    return { markdown: "", seed: null, error: reason, trace: buf.slice(0, errM.index).trim(), complete: false };
   }
 
-  const start = buf.indexOf(START);
-  const trace = (start === -1 ? buf : buf.slice(0, start)).replace(/<<cv:[a-z]+>>.*$/s, "").trim();
-  if (start === -1) return { markdown: "", seed: null, error: null, trace, complete: false };
+  const starts = markerLines(buf, START_RE);
+  const start = starts[0];
+  const trace = (start ? buf.slice(0, start.index) : buf).replace(/(^|\n)[ \t]*<<cv:[a-z]*>?>?[^\n]*$/, "").trim();
+  if (!start) return { markdown: "", seed: null, error: null, trace, complete: false };
 
-  const afterStart = buf.slice(start + START.length);
-  const end = afterStart.indexOf(END);
-  const markdown = (end === -1 ? afterStart : afterStart.slice(0, end)).replace(/^\s*\n/, "").trimEnd();
-  const complete = end !== -1 && occurrences(buf, START) === 1 && occurrences(buf, END) === 1 && markdown.trim() !== "";
+  const bodyFrom = start.index + start[0].length;
+  const ends = markerLines(buf, END_RE);
+  const end = ends.find((m) => m.index >= bodyFrom);
+  const markdown = buf.slice(bodyFrom, end ? end.index : undefined).replace(/^\s*\n/, "").trimEnd();
+  const complete = !!end && starts.length === 1 && ends.length === 1 && markdown.trim() !== "";
 
   let seed: CvSeed | null = null;
-  const seedM = buf.match(/<<cv:seed>>\s*(\{[\s\S]*?\})/);
+  const seedM = SEED_RE.exec(buf);
   if (seedM) {
     try {
       const j = JSON.parse(seedM[1]);
@@ -120,12 +126,16 @@ export type CvIngestOutcome = { ok: true; markdown: string; seed: CvSeed | null 
 
 /** What the finished stream allows: review only a complete envelope, otherwise
  *  an explanation and no text to save. */
-export function finishCvStream(buf: string): CvIngestOutcome {
+export function finishCvStream(buf: string, source: "text" | "file" = "file"): CvIngestOutcome {
   const r = parseCvStream(buf);
   if (r.complete) return { ok: true, markdown: r.markdown, seed: r.seed };
-  if (r.error === "unreadable") return { ok: false, retry: false, message: "Não foi possível extrair texto do ficheiro. Se for uma imagem digitalizada, cola o texto." };
+  if (r.error === "unreadable") {
+    return source === "text"
+      ? { ok: false, retry: false, message: "O agente não encontrou um CV no texto colado. Confirma que colaste o conteúdo do CV e tenta de novo." }
+      : { ok: false, retry: false, message: "Não foi possível extrair texto do ficheiro. Se for uma imagem digitalizada, cola o texto." };
+  }
   if (r.error) return { ok: false, retry: true, message: "O agente não conseguiu interpretar o CV. Nada foi guardado. Tenta novamente ou cola o texto." };
-  if (occurrences(buf, START) > 1 || occurrences(buf, END) > 1) {
+  if (markerLines(buf, START_RE).length > 1 || markerLines(buf, END_RE).length > 1) {
     return { ok: false, retry: true, message: "A resposta do agente veio com marcadores repetidos e não se sabe onde acaba o CV. Nada foi guardado. Tenta novamente." };
   }
   if (r.markdown.trim()) return { ok: false, retry: true, message: "A conversão foi interrompida antes do fim e o CV ficou incompleto. Nada foi guardado. Tenta novamente." };

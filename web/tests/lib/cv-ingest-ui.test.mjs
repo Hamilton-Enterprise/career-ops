@@ -133,3 +133,30 @@ test("the upload note does not claim the content never leaves the computer", (t)
   assert.match(text(tree), /pode enviar o conteúdo ao respetivo fornecedor/);
   assert.doesNotMatch(text(tree), /processado neste computador/);
 });
+
+test("an agent error mid-stream cancels the response, so the agent is stopped", async (t) => {
+  let cancelled = false;
+  const ui = mount(t, []);
+  globalThis.fetch = async () => new Response(new ReadableStream({
+    start(c) {
+      c.enqueue(new TextEncoder().encode('A ler o CV…\n<<cv:error>>{"reason":"unreadable"}\n'));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  }));
+  await submitPaste(ui);
+  const tree = await settle(ui, "texto colado");
+  assert.doesNotMatch(text(tree), /ficheiro\./, "pasted text is not called a file");
+  for (let i = 0; i < 100 && !cancelled; i++) await delay(5);
+  assert.equal(cancelled, true, "the stream reader was left open after the error");
+});
+
+test("the provider note and the save note are at least 12px", (t) => {
+  const src = fs.readFileSync(new URL("../../src/components/cv/cv-ingest.tsx", import.meta.url), "utf8");
+  for (const phrase of ["pode enviar o conteúdo ao respetivo fornecedor", "Guardado localmente em cv.md"]) {
+    const line = src.split("\n").findIndex((l) => l.includes(phrase));
+    const tag = src.split("\n").slice(Math.max(0, line - 2), line + 1).join("\n");
+    assert.doesNotMatch(tag, /text-\[(?:[0-9]|1[01])px\]/, phrase);
+  }
+});

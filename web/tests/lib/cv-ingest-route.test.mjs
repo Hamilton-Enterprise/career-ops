@@ -16,6 +16,8 @@ import "../helpers/web-ts-alias-loader.mjs";
 const { POST } = await import("../../src/app/api/cv/ingest/route.ts");
 const { CV_UPLOAD_MAX_BYTES } = await import("../../src/lib/cv/quality.ts");
 
+const { finishCvStream } = await import("../../src/lib/cv/quality.ts");
+const ECHO = 'Emit ONLY the markdown between <<cv:start>> and <<cv:end>>; or <<cv:error>>{"reason":"unreadable"} if the source has an error.\n- If unreadable, emit ONLY: `<<cv:error>>{"reason":"unreadable"}` and stop.\n';
 const ENVELOPE = "A ler o CV…\n<<cv:start>>\n# CV -- Pessoa Exemplo\n\n## Experiência profissional\n<<cv:end>>\n<<cv:seed>>{\"title\":\"Analista\"}\n";
 
 function writeMockCli(dir, name, source) {
@@ -30,7 +32,8 @@ function fixture(t, behavior = "success") {
   const bins = path.join(root, "bin");
   const data = path.join(root, "data");
   const tmp = path.join(root, "tmp");
-  for (const dir of [bins, data, tmp]) fs.mkdirSync(dir, { recursive: true });
+  const code = path.join(root, "checkout");
+  for (const dir of [bins, data, tmp, path.join(code, "modes"), path.join(data, "modes")]) fs.mkdirSync(dir, { recursive: true });
   const recordFile = path.join(root, "invocations.jsonl");
   for (const [id, bin] of [["claude", "claude"], ["codex", "codex"]]) {
     writeMockCli(bins, bin, `
@@ -45,12 +48,15 @@ const sourceLine = prompt.trim().split("\\n").pop();
 fs.appendFileSync(${JSON.stringify(recordFile)}, JSON.stringify({ id: ${JSON.stringify(id)}, prompt, sourceLine, sourceExists: fs.existsSync(sourceLine), pid: process.pid }) + "\\n");
 const say = (text) => process.stdout.write(JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { text } } }) + "\\n");
 const behavior = ${JSON.stringify(behavior)};
-if (behavior === "success") say(${JSON.stringify(ENVELOPE)});
+const out = ${JSON.stringify(id)} === "claude" ? say : (text) => process.stdout.write(text);
+if (behavior === "success") out(${JSON.stringify(ENVELOPE)});
+else if (behavior === "echo-stdout") out(${JSON.stringify(ECHO + ENVELOPE)});
+else if (behavior === "echo-stderr") { process.stderr.write(${JSON.stringify(ECHO)}); out(${JSON.stringify(ENVELOPE)}); }
 else if (behavior === "silent-fail") process.exitCode = 7;
 else if (behavior === "hang") { say("A ler o CV…\\n<<cv:start>>\\n# CV"); setInterval(() => {}, 1000); }
 `);
   }
-  const values = { PATH: bins, CAREER_OPS_ROOT: data, CAREER_OPS_DATA_DIR: data, TMPDIR: tmp };
+  const values = { PATH: bins, CAREER_OPS_ROOT: data, CAREER_OPS_DATA_DIR: data, CAREER_OPS_CODE_ROOT: code, TMPDIR: tmp };
   const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
   Object.assign(process.env, values);
   const records = () => (fs.existsSync(recordFile) ? fs.readFileSync(recordFile, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : []);
@@ -69,7 +75,7 @@ else if (behavior === "hang") { say("A ler o CV…\\n<<cv:start>>\\n# CV"); setI
     fs.rmSync(root, { recursive: true, force: true });
   });
   const tempDirs = () => fs.readdirSync(tmp).filter((n) => n.startsWith("career-ops-cv-"));
-  return { records, tempDirs };
+  return { records, tempDirs, code, data };
 }
 
 const postText = (text, cliId = "claude") =>
@@ -182,4 +188,85 @@ test("client cancel: the agent is stopped and the temp directory is removed", as
       return true;
     }
   }, "agent still running after cancel");
+});
+
+test("an echoed prompt on stdout does not turn a valid envelope into an error", async (t) => {
+  fixture(t, "echo-stdout");
+  const res = await postText("Pessoa Exemplo, analista.", "codex");
+  assert.equal(res.status, 200);
+  const outcome = finishCvStream(await res.text(), "text");
+  assert.equal(outcome.ok, true, outcome.message);
+});
+
+test("an echoed prompt on stderr is not forwarded as an error", async (t) => {
+  fixture(t, "echo-stderr");
+  const res = await postText("Pessoa Exemplo, analista.");
+  const body = await res.text();
+  assert.equal(body.includes("<<cv:error>>{\"reason\""), false, "the echo must not reach the stream");
+  assert.equal(finishCvStream(body, "text").ok, true);
+});
+
+test("modes/cv-ingest.md comes from the code checkout, never from the data root", async (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.code, "modes", "cv-ingest.md"), "SYNTHETIC CODE MODE");
+  fs.writeFileSync(path.join(f.data, "modes", "cv-ingest.md"), "DATA ROOT DECOY");
+  await (await postText("Pessoa Exemplo, analista.")).text();
+  const { prompt } = f.records()[0];
+  assert.match(prompt, /SYNTHETIC CODE MODE/);
+  assert.doesNotMatch(prompt, /DATA ROOT DECOY/);
+});
+
+function chunkedBody(chunkBytes, maxChunks) {
+  const state = { sent: 0, cancelled: false };
+  const body = new ReadableStream({
+    pull(controller) {
+      if (state.sent >= maxChunks) return controller.close();
+      state.sent++;
+      controller.enqueue(new Uint8Array(chunkBytes).fill(0x61));
+    },
+    cancel() {
+      state.cancelled = true;
+    },
+  });
+  return { body, state };
+}
+
+test("a chunked upload without Content-Length is cut off at the limit with 413", async (t) => {
+  const f = fixture(t);
+  const { body, state } = chunkedBody(1024 * 1024, 64);
+  const res = await POST(new Request("http://localhost/api/cv/ingest", {
+    method: "POST", body, duplex: "half", headers: { "Content-Type": "multipart/form-data; boundary=synthetic" },
+  }));
+  assert.equal(res.status, 413);
+  assert.match((await res.json()).error, /MB/);
+  assert.ok(state.sent < 64, `read ${state.sent} MB instead of stopping at the limit`);
+  assert.equal(f.records().length, 0);
+  assert.deepEqual(f.tempDirs(), []);
+});
+
+test("a chunked JSON body without Content-Length is cut off with 413", async (t) => {
+  const f = fixture(t);
+  const { body, state } = chunkedBody(256 * 1024, 64);
+  const res = await POST(new Request("http://localhost/api/cv/ingest", {
+    method: "POST", body, duplex: "half", headers: { "Content-Type": "application/json" },
+  }));
+  assert.equal(res.status, 413);
+  assert.match((await res.json()).error, /24\s000/);
+  assert.ok(state.sent < 64);
+  assert.equal(f.records().length, 0);
+});
+
+test("a failed temp-file write removes the temp directory", async (t) => {
+  const f = fixture(t);
+  const original = fs.writeFileSync;
+  fs.writeFileSync = (file, ...rest) => {
+    if (String(file).includes(`${path.sep}career-ops-cv-`)) throw Object.assign(new Error("ENOSPC: synthetic"), { code: "ENOSPC" });
+    return original(file, ...rest);
+  };
+  t.after(() => { fs.writeFileSync = original; });
+  const res = await postFile("cv.pdf", "%PDF-1.4 synthetic");
+  fs.writeFileSync = original;
+  assert.ok(res.status >= 400);
+  assert.equal(f.records().length, 0);
+  assert.deepEqual(f.tempDirs(), []);
 });

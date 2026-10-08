@@ -52,7 +52,7 @@ const DEFAULT_SOURCE = 'cv.md';
 // Matched against asciiFold()ed heading text, so accents, case and a trailing
 // colon do not matter.
 const EXPERIENCE_SECTION_RE = /^(?:(?:work|professional) )?experience$|^experiencia(?: profissional)?$/;
-const NON_EMPLOYMENT_SECTION_RE = /^(?:education|projects?|skills|languages|certifications?|formacao(?: academica)?|educacao|projetos|projectos|competencias|idiomas|certificacoes)$/;
+const NON_EMPLOYMENT_SECTION_RE = /^(?:education|projects?|skills|languages|certifications?|formacao(?: academica)?|educacao|projetos|projectos|competencias|idiomas|linguas|cursos|voluntariado|certificacoes)$/;
 
 /**
  * Parse cv.md's Experience-section entries (English or Portuguese heading) from its
@@ -590,7 +590,7 @@ function runSelfTest() {
     equal(`"${heading}" is recognized as an Experience section`,
       parseCvMdExperience(`${heading}\n\n### Empresa Alfa -- Lisboa\n`).length, 1);
   }
-  for (const boundary of ['Formação', 'Formacao academica', 'Educação', 'Projetos', 'Competências', 'Idiomas', 'Certificações', 'Education', 'Projects']) {
+  for (const boundary of ['Formação', 'Formacao academica', 'Educação', 'Projetos', 'Competências', 'Idiomas', 'Línguas', 'Cursos', 'Voluntariado', 'Certificações', 'Education', 'Projects']) {
     equal(`"### ${boundary}" closes the Experience section`,
       parseCvMdExperience(`## Experiência\n\n### Empresa Alfa -- Lisboa\n\n### ${boundary}\n\n### Escola Gama -- Braga\n`).map((e) => e.company),
       ['Empresa Alfa']);

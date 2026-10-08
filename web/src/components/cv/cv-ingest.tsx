@@ -46,6 +46,7 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
   // Stream the ingest, parsing markers live.
   const runStream = useCallback(async (init: RequestInit) => {
     lastRequest.current = init;
+    const source = typeof init.body === "string" ? "text" : "file";
     setPhase("parsing");
     setTrace("A ler o CV…");
     setErr("");
@@ -82,7 +83,8 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
         buf += dec.decode(value, { stream: true });
         const parsed = parseCvStream(buf);
         if (parsed.error) {
-          const outcome = finishCvStream(buf);
+          void reader.cancel().catch(() => {}); // stops the agent and frees its temp file
+          const outcome = finishCvStream(buf, source);
           if (!outcome.ok) fail(outcome.message, outcome.retry);
           return;
         }
@@ -90,7 +92,7 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
         if (parsed.markdown) setMd(parsed.markdown);
         if (parsed.seed) setSeed(parsed.seed);
       }
-      const final = finishCvStream(buf);
+      const final = finishCvStream(buf, source);
       if (!final.ok) {
         fail(final.message, final.retry);
         return;
@@ -235,7 +237,7 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
               <Upload className="size-3.5" /> Escolher ficheiro
             </button>
             <input ref={fileRef} type="file" accept=".pdf,.md,.markdown,.txt,.docx" hidden onChange={(e) => e.target.files?.[0] && ingestFile(e.target.files[0])} />
-            <span className="inline-flex items-center gap-1 text-[11px] text-faint">
+            <span className="inline-flex items-center gap-1 text-xs text-faint">
               <Lock className="size-3" /> O ficheiro fica neste computador, mas o agente escolhido pode enviar o conteúdo ao respetivo fornecedor.
             </span>
             <button
@@ -345,7 +347,7 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
         >
           <RotateCcw className="size-3.5" /> Recomeçar
         </button>
-        <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-faint">
+        <span className="ml-auto inline-flex items-center gap-1 text-xs text-faint">
           <Lock className="size-3" /> Guardado localmente em cv.md
         </span>
       </div>

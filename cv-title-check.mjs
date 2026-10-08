@@ -87,7 +87,7 @@ const BOLD_LINE_RE = /^\*\*(.+?)\*\*\s*$/;
 // Matched against asciiFold()ed heading text, so accents, case and a trailing
 // colon do not matter.
 const EXPERIENCE_SECTION_RE = /^(?:(?:work|professional) )?experience$|^experiencia(?: profissional)?$/;
-const NON_EMPLOYMENT_SECTION_RE = /^(?:education|projects?|skills|languages|certifications?|formacao(?: academica)?|educacao|projetos|projectos|competencias|idiomas|certificacoes)$/;
+const NON_EMPLOYMENT_SECTION_RE = /^(?:education|projects?|skills|languages|certifications?|formacao(?: academica)?|educacao|projetos|projectos|competencias|idiomas|linguas|cursos|voluntariado|certificacoes)$/;
 
 export function parseCvExperience(cvText) {
   const lines = String(cvText ?? '').replace(/\r\n/g, '\n').split('\n');
@@ -500,7 +500,7 @@ function runSelfTest() {
     eq(`"${heading}" is recognized as an Experience section`,
       parseCvExperience(`${heading}\n\n### Empresa Alfa -- Lisboa\n\n**Analista**\n2021-2024\n`).length, 1);
   }
-  for (const boundary of ['Formação', 'Educação', 'Projetos', 'Competências', 'Idiomas', 'Certificações']) {
+  for (const boundary of ['Formação', 'Educação', 'Projetos', 'Competências', 'Idiomas', 'Línguas', 'Cursos', 'Voluntariado', 'Certificações']) {
     eq(`"### ${boundary}" closes the Experience section`,
       parseCvExperience(`## Experiência\n\n### ${boundary}\n\n### Escola Gama -- Braga\n\n**Curso**\n2010-2012\n`).length, 0);
   }
