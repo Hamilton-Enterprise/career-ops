@@ -1,14 +1,37 @@
 // Client-safe (no node). Deterministic "is this CV good enough to score?" signal —
 // ZERO tokens. Advisory only: it drives a green-check vs amber hint, NEVER blocks
 // saving (the minimal-CV principle: even a rough parse is enough for a first score).
+import { asciiFold } from "@/lib/core/ascii-fold.mjs";
 
 export type CvReadiness = { scoreable: boolean; words: number; hasExperience: boolean; hasSkills: boolean; hint?: string };
+
+const EXPERIENCE_HEADING = /^(experience|work|employment|empleo|experiencia)/;
+const SKILLS_HEADING = /^(skills|technologies|competenc|habilidad)/;
+// Sections whose dates are study or side work, never employment.
+const NON_EMPLOYMENT_HEADING = /^(education|educacao|formacao|projects?|projetos?|projectos?|certifications?|certificacoes|languages|idiomas)\b/;
+const DATE_RANGE = /\b(20\d\d)\s*[-–—]\s*(20\d\d|present|now|actualidad|presente|atual|actual|atualmente)/i;
+
+/** Date ranges outside education/projects-style sections (and their subsections). */
+function employmentDateRange(text: string): boolean {
+  let excludedLevel: number | null = null;
+  for (const line of text.split("\n")) {
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      const level = h[1].length;
+      if (excludedLevel === null || level <= excludedLevel) excludedLevel = NON_EMPLOYMENT_HEADING.test(asciiFold(h[2])) ? level : null;
+      continue;
+    }
+    if (excludedLevel === null && DATE_RANGE.test(line)) return true;
+  }
+  return false;
+}
 
 export function cvReadiness(md: string): CvReadiness {
   const text = (md || "").trim();
   const words = text ? text.split(/\s+/).length : 0;
-  const hasExperience = /(^|\n)#{1,3}\s*(experience|work|employment|empleo|experiencia)/i.test(text) || /\b(20\d\d)\s*[-–—]\s*(20\d\d|present|now|actualidad)/i.test(text);
-  const hasSkills = /(^|\n)#{1,3}\s*(skills|technologies|competenc|habilidad)/i.test(text);
+  const headings = [...text.matchAll(/(?:^|\n)#{1,3}\s*([^\n]*)/g)].map((m) => asciiFold(m[1]));
+  const hasExperience = headings.some((h) => EXPERIENCE_HEADING.test(h)) || employmentDateRange(text);
+  const hasSkills = headings.some((h) => SKILLS_HEADING.test(h));
   const scoreable = words >= 80 && (hasExperience || hasSkills || words >= 200);
   let hint: string | undefined;
   if (!scoreable) hint = words < 40 ? "O CV tem pouco conteúdo. Acrescenta a tua experiência para melhorar a avaliação; ainda assim, podes guardá-lo." : "Acrescenta uma ou duas experiências profissionais para melhorar a avaliação; ainda assim, podes guardá-lo.";

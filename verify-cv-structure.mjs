@@ -24,8 +24,9 @@
  * entries out of chronological order — none of which verify-cv-facts.mjs
  * is designed to catch, so all three PDFs passed that gate anyway.
  *
- * Understands `## Experience` and `## Work Experience` sections whose entry
- * headers use an em dash, double hyphen, or single hyphen between company and
+ * Understands `## Experience`, `## Work Experience`, `## Professional Experience`,
+ * `## Experiência` and `## Experiência profissional` sections (accents and case
+ * ignored) whose entry headers use an em dash, double hyphen, or single hyphen between company and
  * location. These are common conventions, not a system-wide cv.md spec, so a
  * cv.md written another way parses to zero
  * entries — with nothing to compare against, this reports UNVERIFIED (exit 0)
@@ -42,19 +43,25 @@ import { isAbsolute, join, resolve, relative, sep, dirname, basename } from 'pat
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { isMainModule } from './lib/is-main-module.mjs';
+import { asciiFold } from './lib/ascii-fold.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SOURCE = 'cv.md';
 
+// Matched against asciiFold()ed heading text, so accents, case and a trailing
+// colon do not matter.
+const EXPERIENCE_SECTION_RE = /^(?:(?:work|professional) )?experience$|^experiencia(?: profissional)?$/;
+const NON_EMPLOYMENT_SECTION_RE = /^(?:education|projects?|skills|languages|certifications?|formacao(?: academica)?|educacao|projetos|projectos|competencias|idiomas|certificacoes)$/;
+
 /**
- * Parse cv.md's `## Experience` or `## Work Experience` entries from its
+ * Parse cv.md's Experience-section entries (English or Portuguese heading) from its
  * `### Company {—|--|-} Location[ · descriptor]` headers, in file order
  * (which IS the ground-truth
  * chronological order — cv.md is user-authored, never generated).
  *
  * Scoped to the recognized Experience section only, up to the next level-2
- * heading: a `### University — City, ST`-shaped header under `## Education`
+ * heading or a `### Formação`/`### Projects`-style section heading: a `### University — City, ST`-shaped header under `## Education`
  * (or any other section) would otherwise parse as a phantom experience
  * entry, capable of triggering a false order/descriptor warning if its name
  * happens to match something in the payload.
@@ -64,18 +71,22 @@ const DEFAULT_SOURCE = 'cv.md';
  */
 export function parseCvMdExperience(cvMdText) {
   const entries = [];
-  const sectionHeadingRe = /^##\s+(?:Work\s+)?Experience\s*$/mi;
-  const sectionMatch = sectionHeadingRe.exec(cvMdText);
-  if (!sectionMatch) return entries;
-  const sectionStart = sectionMatch.index + sectionMatch[0].length;
-  const nextSectionRe = /^##\s+\S/m;
-  const rest = cvMdText.slice(sectionStart);
-  const nextSectionMatch = nextSectionRe.exec(rest);
-  const section = nextSectionMatch ? rest.slice(0, nextSectionMatch.index) : rest;
-  const headerRe = /^###\s+(.+?)\s+(?:—|--|-)\s+(.+)$/gm;
-  let match;
-  while ((match = headerRe.exec(section))) {
-    entries.push({ company: match[1].trim(), location: match[2].trim() });
+  const headerRe = /^###\s+(.+?)\s+(?:—|--|-)\s+(.+)$/;
+  let inExperience = false;
+  for (const line of String(cvMdText ?? '').split(/\r?\n/)) {
+    const h2 = line.match(/^##\s+(\S.*?)\s*$/);
+    if (h2) {
+      inExperience = EXPERIENCE_SECTION_RE.test(asciiFold(h2[1]));
+      continue;
+    }
+    if (!inExperience) continue;
+    const h3 = line.match(/^###\s+(.+?)\s*$/);
+    if (h3 && NON_EMPLOYMENT_SECTION_RE.test(asciiFold(h3[1]))) {
+      inExperience = false;
+      continue;
+    }
+    const match = line.match(headerRe);
+    if (match) entries.push({ company: match[1].trim(), location: match[2].trim() });
   }
   return entries;
 }
@@ -194,7 +205,7 @@ export function checkLocationDescriptors(payloadExperience, cvMdExperience) {
 /**
  * Run both structural checks against a tailored CV JSON payload.
  *
- * This gate understands `## Experience` and `## Work Experience` sections
+ * This gate understands English and Portuguese Experience sections
  * whose `### Company {—|--|-} Location[ · descriptor]` headers use an em dash,
  * double hyphen, or single hyphen. Those are common conventions, not a
  * system-wide cv.md spec — AGENTS.md only requires "clean markdown, standard sections."
@@ -294,7 +305,8 @@ file, invalid JSON, or a malformed payload shape (a non-object payload, or a
 non-array/non-object payload.experience) exit 1 instead: those mean the
 check itself could not run, not that it found something to review.
 
-Understands "## Experience" and "## Work Experience" sections whose company
+Understands "## Experience", "## Work Experience", "## Experiência" and
+"## Experiência profissional" sections (accents ignored) whose company
 headers use an em dash, double hyphen, or single hyphen before the location.
 A cv.md written another way parses to zero entries; the check then reports
 UNVERIFIED rather than a false "passed".`;
@@ -553,6 +565,42 @@ function runSelfTest() {
     verifyStructure({ experience: [null, ...correctOrder] }, cvMd),
     { verdict: 'unverified', orderViolations: [], descriptorViolations: [] });
 
+  // Portuguese headings, accented or not, are an Experience section; study,
+  // projects and the other standard sections close it, whatever their level.
+  const ptCvMd = [
+    '# CV -- Pessoa Exemplo',
+    '',
+    '## Experiência profissional',
+    '',
+    '### Empresa Alfa -- Lisboa · retalho',
+    '',
+    '**Analista** · 2021 – presente',
+    '',
+    '### Formação académica',
+    '',
+    '### Universidade Exemplo -- Porto',
+    '',
+    '## Projetos',
+    '',
+    '### Projeto Beta -- Remoto',
+  ].join('\n');
+  equal('accented "Experiência profissional" yields only the employment entry',
+    parseCvMdExperience(ptCvMd).map((e) => e.company), ['Empresa Alfa']);
+  for (const heading of ['## Experiencia profissional', '## Experiência', '## EXPERIÊNCIA PROFISSIONAL:']) {
+    equal(`"${heading}" is recognized as an Experience section`,
+      parseCvMdExperience(`${heading}\n\n### Empresa Alfa -- Lisboa\n`).length, 1);
+  }
+  for (const boundary of ['Formação', 'Formacao academica', 'Educação', 'Projetos', 'Competências', 'Idiomas', 'Certificações', 'Education', 'Projects']) {
+    equal(`"### ${boundary}" closes the Experience section`,
+      parseCvMdExperience(`## Experiência\n\n### Empresa Alfa -- Lisboa\n\n### ${boundary}\n\n### Escola Gama -- Braga\n`).map((e) => e.company),
+      ['Empresa Alfa']);
+  }
+  equal('a Portuguese CV produces a real structural verdict',
+    verifyStructure({ experience: [{ company: 'Empresa Alfa', location: 'Lisboa · retalho' }] }, ptCvMd).verdict, 'pass');
+  equal('a Portuguese CV with only Formação and Projetos is unverified, never pass',
+    verifyStructure({ experience: [] }, '## Formação\n\n### Universidade Exemplo -- Porto\n\n## Projetos\n\n### Projeto Beta -- Remoto\n').verdict,
+    'unverified');
+
   console.log(`verify-cv-structure self-test: ${passed} passed, ${failed} failed`);
   return failed ? 1 : 0;
 }
@@ -634,7 +682,7 @@ export function runCli(args = process.argv.slice(2)) {
   if (result.verdict === 'unverified') {
     console.warn(`⚠️  CV structure check UNVERIFIED: ${basename(targetPath)}`);
     console.warn(`Could not find supported company/location headers in ${sourcePath} — nothing was checked.`);
-    console.warn('Expected an Experience or Work Experience section with em-dash or hyphen-separated headers; review the tailored CV structure manually.');
+    console.warn('Expected an Experience, Work Experience or Experiência profissional section with em-dash or hyphen-separated headers; review the tailored CV structure manually.');
     return 0;
   }
   if (result.verdict === 'pass') {
