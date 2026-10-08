@@ -21,7 +21,7 @@ const STYLE = `
 .co-fb__chip button{display:inline-flex;opacity:.6;transition:opacity .15s}
 .co-fb__chip button:hover{opacity:1}
 .co-fb__chip button:focus-visible{outline:2px solid hsl(26 73% 51%);outline-offset:2px}
-.co-fb__chip.inc{color:hsl(26 78% 42%);background:hsl(26 73% 51% / .11);border-color:hsl(26 73% 51% / .26)}
+.co-fb__chip.inc{color:var(--brand-text);background:hsl(26 73% 51% / .11);border-color:hsl(26 73% 51% / .26)}
 html.dark .co-fb__chip.inc{color:hsl(26 86% 70%);background:hsl(26 80% 55% / .14);border-color:hsl(26 80% 55% / .28)}
 .co-fb__field{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;min-height:2.6rem;padding:.45rem .55rem;border-radius:.7rem}
 .co-fb__field input{flex:1;min-width:7rem;background:transparent;border:none;outline:none;font-size:13.5px;color:inherit}
@@ -141,7 +141,7 @@ export function FilterBuilder({
               onClick={() => set({ opportunityType: value })}
               className={cn(
                 "min-h-[44px] rounded-md px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
-                filters.opportunityType === value ? "bg-brand-soft text-brand" : "text-muted hover:text-foreground",
+                filters.opportunityType === value ? "bg-brand-soft text-brand-text" : "text-muted hover:text-foreground",
               )}
             >
               {label}
@@ -152,7 +152,7 @@ export function FilterBuilder({
 
       <div>
         <Label hint={filters.positive.length === 0 ? "vazio = todas as ofertas recentes" : undefined}>Funções a procurar</Label>
-        <KeywordField values={filters.positive} tone="inc" placeholder="apoio ao cliente, pastelaria, marketing…" onChange={(v) => set({ positive: v })} />
+        <KeywordField values={filters.positive} tone="inc" placeholder="apoio ao cliente, pastelaria, marketing…" ariaLabel="Funções a procurar" onChange={(v) => set({ positive: v })} />
         {filters.opportunityType === "freelance" && (
           <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Atalhos freelance">
             {Object.keys(FREELANCE_SHORTCUTS).map((label) => (
@@ -207,7 +207,7 @@ export function FilterBuilder({
                 onClick={() => set({ sinceDays: r.days })}
                 className={cn(
                   "min-h-[44px] min-w-[44px] rounded-md px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
-                  filters.sinceDays === r.days ? "bg-brand-soft text-brand" : "text-muted hover:text-foreground",
+                  filters.sinceDays === r.days ? "bg-brand-soft text-brand-text" : "text-muted hover:text-foreground",
                 )}
               >
                 {r.label}

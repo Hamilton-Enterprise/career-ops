@@ -362,8 +362,8 @@ function DegradedCard({
       <AlertTriangle className="mx-auto size-6 text-amber-500" />
       <p className="mt-2 text-sm font-medium text-foreground">{title}</p>
       <p className="mx-auto mt-1 max-w-md text-[13px] text-muted">{body}</p>
-      {sourceReasons.map(reason => <p key={reason} className="mx-auto mt-1 max-w-md text-[13px] text-amber-700 dark:text-amber-300">{reason}</p>)}
-      <button onClick={onRetry} className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-brand-soft px-3 py-1.5 text-sm font-medium text-brand">
+      {sourceReasons.map(reason => <p key={reason} className="mx-auto mt-1 max-w-md text-[13px] text-amber-800 dark:text-amber-300">{reason}</p>)}
+      <button onClick={onRetry} className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-brand-soft px-3 py-1.5 text-sm font-medium text-foreground dark:text-brand">
         <RotateCcw className="size-4" /> Repetir pesquisa
       </button>
     </div>

@@ -8,6 +8,8 @@ import { loadBindings, transform } from 'next/dist/build/swc/index.js';
 import * as state from '../../src/lib/explore-state.mjs';
 import * as explore from '../../src/lib/explore.ts';
 import * as exploreAi from '../../src/lib/explore-ai.ts';
+import * as marketPresets from '../../src/lib/market-presets.mjs';
+import * as freelancePresets from '../../src/lib/freelance-presets.mjs';
 import { MAX_OFFER_LIMIT } from '../../src/lib/whats-new.mjs';
 
 await loadBindings();
@@ -133,6 +135,58 @@ test('settled first-run token status has normal-text contrast without changing i
   };
   const ratio = (luminance('def0e7') + .05) / (luminance(foreground) + .05);
   assert.ok(ratio >= 4.5, `normal text contrast ${ratio.toFixed(3)}:1 must reach 4.5:1`);
+});
+
+test('expanded partial search names the populated role input and keeps every flagged node readable', async t => {
+  const filters = { ...explore.DEFAULT_FILTERS, positive:['Partial verification', 'Operador de Loja'], allow:['Lisboa'], ats:[], markets:['portugal'] };
+  context = { ...base(), filters, offers:[], phase:'degraded', partial:true, companiesScanned:1, initFilters() {}, setMode() {}, setAiIntent() {}, discover() {}, loadFresh() {},
+    sources:{ 'Auchan Portugal':{ state:'error', message:'Falha parcial sintética: fonte indisponível.' } } };
+  const placeholder = () => null;
+  const { FilterBuilder } = await load('filter-builder.tsx', {
+    '@/lib/explore':explore, '@/lib/market-presets.mjs':marketPresets, '@/lib/freelance-presets.mjs':freelancePresets,
+  });
+  const { ExplorerView } = await load('explorer-view.tsx', {
+    react:{ ...React, useEffect() {} }, 'next/link':{ default:placeholder }, '@/lib/explore':explore,
+    '@/lib/pt-pt':{ PT_PT_LOCALE:'pt-PT' }, '@/lib/core/normalize-text-key.mjs':{ normalizeTextKey:value => value },
+    './discovering-state':{ DiscoveringState:placeholder, SearchReceipt }, './filter-builder':{ FilterBuilder },
+    './ai-hunt-view':{ AiHuntView:placeholder }, './explore-mode-toggle':{ ExploreModeToggle:placeholder },
+    './ai-search-box':{ AiSearchBox:placeholder }, './results-list':{ ResultsList }, './schedule-job-action':{ ScheduleJobAction:placeholder },
+  });
+  const html = render(ExplorerView, { seed:{ filters, seededFrom:[] }, inboxSnapshot:[], appsSnapshot:[], rootExists:true });
+  await t.test('populated role input keeps the visible field name without a placeholder', () => {
+    const input = html.match(/<input[^>]*placeholder=""[^>]*>/)?.[0];
+    assert.ok(input);
+    assert.match(input, /aria-label="Funções a procurar"/);
+  });
+  const colors = { 'text-brand':'dd7627', 'text-brand-text':'a55212', 'text-foreground':'1f1c19', 'text-amber-700':'bb4d00', 'text-amber-800':'973c00',
+    'hsl(26 78% 42%)':'bf6018', 'var(--brand-text)':'a55212' };
+  const luminance = hex => {
+    const [r, g, b] = hex.match(/\w\w/g).map(value => parseInt(value,16) / 255)
+      .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+    return .2126 * r + .7152 * g + .0722 * b;
+  };
+  const retry = Array.from(html.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g), match => match[0]).find(node => node.includes('Repetir pesquisa'));
+  const candidates = [
+    ['Emprego', html.match(/<button[^>]*>Emprego<\/button>/)?.[0], 'f7ebe1'],
+    ...Array.from(html.matchAll(/<span class="co-fb__chip inc">([^<]+)/g), match => [match[1], match[0], 'f8ece3']),
+    ['7d', html.match(/<button[^>]*>7d<\/button>/)?.[0], 'f7ebe1'],
+    ['partial source reason', html.match(/<p[^>]*>Auchan Portugal: Falha parcial sintética: fonte indisponível\.<\/p>/)?.[0], 'f8eddb'],
+    ['Repetir pesquisa', retry, 'f5dfc5'],
+  ];
+  assert.equal(candidates.length, 7, 'the complete seven-node production contrast finding is represented');
+  for (const [name, node, background] of candidates) await t.test(`${name} reaches 4.5:1`, () => {
+    assert.ok(node, name);
+    const cssColor = node.includes('co-fb__chip inc') ? html.match(/\.co-fb__chip\.inc\{color:([^;]+)/)?.[1]
+      : node.match(/class="([^"]+)"/)?.[1].split(' ').find(token => token in colors);
+    const foreground = colors[cssColor];
+    assert.ok(foreground, `reviewed foreground for ${name}`);
+    const ratio = (luminance(background) + .05) / (luminance(foreground) + .05);
+    t.diagnostic(`${name}: ${ratio.toFixed(6)}:1`);
+    assert.ok(ratio >= 4.5, `${name}: ${ratio.toFixed(6)}:1 must reach 4.5:1`);
+    if (name === 'partial source reason') assert.match(node, /dark:text-amber-300/);
+    if (name === 'Repetir pesquisa') assert.match(node, /dark:text-brand\b/);
+  });
+  assert.match(html, /html\.dark \.co-fb__chip\.inc\{color:hsl\(26 86% 70%\)/, 'dark chip color is preserved');
 });
 
 test('provider persists final ranked cards and broad receipt separately for each opportunity type', async t => {
