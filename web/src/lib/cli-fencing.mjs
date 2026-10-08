@@ -34,6 +34,7 @@
  */
 
 import { verifyClaudeArgs } from "./claude-invocation.mjs";
+import path from "node:path";
 
 /** Codex sandbox policies, in the spelling `sandbox_mode` accepts. */
 const CODEX_READ_ONLY = "read-only";
@@ -121,13 +122,20 @@ function codexGlobalFencingFlags({ network }) {
  * speaks one language.
  *
  * @param {import("./worker-capabilities.mjs").Capabilities} capabilities
+ * @param {string|undefined} writableRoot Additional absolute user-data root, for writing workers only.
  * @returns {string[]}
  */
-function codexExecFencingFlags(capabilities) {
+function codexExecFencingFlags(capabilities, writableRoot) {
   const mode = codexSandboxMode(capabilities);
   const flags = ["-c", `sandbox_mode=${mode}`];
   if (mode === CODEX_WORKSPACE_WRITE && capabilities.network === "fetch") {
     flags.push("-c", "sandbox_workspace_write.network_access=true");
+  }
+  if (capabilities.writes && writableRoot !== undefined) {
+    if (typeof writableRoot !== "string" || !path.isAbsolute(writableRoot)) {
+      throw new Error("cli-fencing: the user-data writable root must be an absolute path.");
+    }
+    flags.push("-c", `sandbox_workspace_write.writable_roots=${JSON.stringify([writableRoot])}`);
   }
   return flags;
 }
@@ -272,9 +280,10 @@ function assertCodexArgvUnfenced(args) {
  *
  * @param {string[]} args
  * @param {import("./worker-capabilities.mjs").Capabilities} capabilities
+ * @param {string|undefined} writableRoot
  * @returns {string[]}
  */
-function fenceCodexArgs(args, capabilities) {
+function fenceCodexArgs(args, capabilities, writableRoot) {
   assertCodexArgvUnfenced(args);
   const exec = args.indexOf("exec");
   if (exec === -1 || exec === args.length - 1) {
@@ -287,7 +296,7 @@ function fenceCodexArgs(args, capabilities) {
     ...args.slice(0, exec),
     ...codexGlobalFencingFlags(capabilities),
     "exec",
-    ...codexExecFencingFlags(capabilities),
+    ...codexExecFencingFlags(capabilities, writableRoot),
     ...args.slice(exec + 1),
   ];
 }
@@ -375,7 +384,7 @@ function verifyGeminiArgs(args, capabilities) {
  * but are not certification: global hooks and plan-policy overrides can escape
  * their mode flags, so fencingReport never grades either runtime as full.
  *
- * @type {Record<string, (args: string[], capabilities: import("./worker-capabilities.mjs").Capabilities) => string[]>}
+ * @type {Record<string, (args: string[], capabilities: import("./worker-capabilities.mjs").Capabilities, writableRoot?: string) => string[]>}
  */
 const FENCERS = Object.freeze({
   claude: verifyClaudeArgs,
@@ -469,10 +478,10 @@ export function isFencingNotice(label) {
  * verified mechanism for those runtimes, and inventing one would be worse than
  * reporting the gap, which fencingReport does.
  *
- * @param {{cliId: string, args: string[], capabilities: import("./worker-capabilities.mjs").Capabilities}} invocation
+ * @param {{cliId: string, args: string[], capabilities: import("./worker-capabilities.mjs").Capabilities, writableRoot?: string}} invocation
  * @returns {{args: string[]}}
  */
-export function fenceArgs({ cliId, args, capabilities }) {
+export function fenceArgs({ cliId, args, capabilities, writableRoot }) {
   // Object.hasOwn, exactly as fencingReport does. A bare `FENCERS[cliId]` also
   // resolves inherited Object.prototype members, so a cliId of "toString" or
   // "constructor" yields a truthy function that would then be CALLED as a fencer
@@ -480,5 +489,5 @@ export function fenceArgs({ cliId, args, capabilities }) {
   // Not reachable while routes resolve through resolveCli; nevertheless both
   // entry points must agree that inherited members are not argv adapters.
   if (!Object.hasOwn(FENCERS, cliId)) return { args };
-  return { args: FENCERS[cliId](args, capabilities) };
+  return { args: FENCERS[cliId](args, capabilities, writableRoot) };
 }

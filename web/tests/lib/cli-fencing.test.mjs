@@ -179,6 +179,20 @@ test("a persisting worker gets workspace-write plus the network hatch", () => {
   assert.equal(configValue(args, "sandbox_workspace_write.network_access"), "true");
 });
 
+test("Codex explicitly authorizes a split data root only for a write-capable worker", () => {
+  const writableRoot = '/tmp/career data/quoted"root';
+  const { args } = fenceArgs({ cliId: "codex", args: codexArgv(), capabilities: CAPS.workspaceWrite, writableRoot });
+  assert.deepEqual(JSON.parse(configValue(args, "sandbox_workspace_write.writable_roots")), [writableRoot]);
+  for (const capabilities of [CAPS.localReadOnly, CAPS.networkReadOnly, CAPS.webSearchOnly]) {
+    const readOnly = fenceArgs({ cliId: "codex", args: codexArgv(), capabilities, writableRoot });
+    assert.equal(configValue(readOnly.args, "sandbox_workspace_write.writable_roots"), null);
+  }
+});
+
+test("Codex refuses a relative data write grant rather than changing its base", () => {
+  assert.throws(() => fenceArgs({ cliId: "codex", args: codexArgv(), capabilities: CAPS.workspaceWrite, writableRoot: "../user-data" }), /absolute/);
+});
+
 test("no capability ever yields an unsandboxed run", () => {
   // Given every capability record that exists
   for (const [name, caps] of Object.entries(CAPS)) {

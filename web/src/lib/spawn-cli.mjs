@@ -42,7 +42,7 @@ import { prepareCliLaunch } from "./cli-launch.mjs";
  * @param {string} binPath
  * @param {string[]} args
  * @param {import("node:child_process").SpawnOptionsWithoutStdio} options
- * @param {{cliId: string, capabilities: import("./worker-capabilities.mjs").Capabilities}} fencing
+ * @param {{cliId: string, capabilities: import("./worker-capabilities.mjs").Capabilities, writableRoot?: string}} fencing
  */
 export function spawnHeadlessCli(binPath, args, options, fencing) {
   // Fail fast rather than spawn unfenced. Omitting `fencing` used to spread
