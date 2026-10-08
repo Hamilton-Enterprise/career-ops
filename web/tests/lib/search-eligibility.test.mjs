@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import '../helpers/web-ts-alias-loader.mjs';
 
 const { runDiscovery } = await import('@/lib/core/scan');
@@ -10,17 +11,20 @@ const base = { opportunityType: 'employment', positive: [], negative: [], allow:
 
 function scannerFixture(t, jobs) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'search-eligibility-'));
-  const previous = { CAREER_OPS_ROOT: process.env.CAREER_OPS_ROOT, CAREER_OPS_CODE_ROOT: process.env.CAREER_OPS_CODE_ROOT };
+  const previous = { CAREER_OPS_ROOT: process.env.CAREER_OPS_ROOT, CAREER_OPS_CODE_ROOT: process.env.CAREER_OPS_CODE_ROOT, NODE_OPTIONS: process.env.NODE_OPTIONS };
   Object.assign(process.env, { CAREER_OPS_ROOT: root, CAREER_OPS_CODE_ROOT: root });
   fs.mkdirSync(path.join(root, 'data/cache/ats-companies'), { recursive: true });
   fs.writeFileSync(path.join(root, 'data/cache/ats-companies/greenhouse.json'), '["acme"]');
   const scanner = new URL('../../../scan-ats-full.mjs', import.meta.url);
-  fs.writeFileSync(path.join(root, 'scan-ats-full.mjs'), `// --json capHit
+  const preload = path.join(root, 'provider-fixture.mjs');
+  fs.writeFileSync(preload, `
     import greenhouse from ${JSON.stringify(new URL('../../../providers/greenhouse.mjs', import.meta.url).href)};
     greenhouse.fetch = async () => ${JSON.stringify(jobs)}.map(job => ({ company:'Acme', location:'London, UK', postedAt:Date.now(), ...job }));
-    globalThis.fetch = () => { throw new Error('Network forbidden in fixture'); };
-    process.argv[1] = ${JSON.stringify(scanner.pathname)};
-    await import(${JSON.stringify(scanner.href)});`);
+    globalThis.fetch = () => { throw new Error('Network forbidden in fixture'); };`);
+  // Keep the real scanner as the entry; its canonical isMainModule guard
+  // handles this symlink while --import installs the provider fixture first.
+  fs.symlinkSync(fileURLToPath(scanner), path.join(root, 'scan-ats-full.mjs'));
+  process.env.NODE_OPTIONS = [previous.NODE_OPTIONS, '--import', JSON.stringify(pathToFileURL(preload).href)].filter(Boolean).join(' ');
   t.after(() => {
     for (const [key, value] of Object.entries(previous)) value === undefined ? delete process.env[key] : process.env[key] = value;
     fs.rmSync(root, { recursive: true, force: true });
