@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import '../helpers/web-ts-alias-loader.mjs';
 
 const { runDiscovery } = await import('@/lib/core/scan');
+const { seedExploreFilters } = await import('@/lib/core/portals');
 const base = { opportunityType: 'employment', positive: [], negative: [], allow: [], block: [], blockHard: [], alwaysAllow: [], sinceDays: 7, ats: ['greenhouse'], markets: [], limitPerAts: 150 };
 
 function scannerFixture(t, jobs) {
@@ -29,7 +30,29 @@ function scannerFixture(t, jobs) {
     for (const [key, value] of Object.entries(previous)) value === undefined ? delete process.env[key] : process.env[key] = value;
     fs.rmSync(root, { recursive: true, force: true });
   });
+  return root;
 }
+
+test('actual seeded scanner/core preserves canonical title operators in precise and broad eligibility', async t => {
+  const cases = [
+    { query:'word:agent', titles:['AI Agent Engineer', 'Agentic Engineer', 'Reagents Engineer'], expected:['AI Agent Engineer'] },
+    { query:'stem:agent', titles:['Agentic Engineer', 'AI Agent Engineer', 'Reagents Engineer'], expected:['Agentic Engineer', 'AI Agent Engineer'] },
+    { query:'Python + SQL', titles:['Python Developer with SQL', 'SQL and Python Engineer', 'Python Developer', 'SQL Analyst'], expected:['Python Developer with SQL', 'SQL and Python Engineer'] },
+  ];
+  for (const phase of ['precise', 'broad']) for (const { query, titles, expected } of cases) await t.test(`${query}: ${phase}`, async t => {
+    const postedAt = Date.now() - (phase === 'broad' ? 10 : 0) * 86_400_000;
+    const root = scannerFixture(t, titles.map((title, index) => ({ title, postedAt, url:`https://acme.test/jobs/${index}` })));
+    fs.writeFileSync(path.join(root, 'portals.yml'), `title_filter:\n  positive: [${JSON.stringify(query)}]\n`);
+    const seeded = seedExploreFilters();
+    assert.deepEqual(seeded.filters.positive, [query], 'the real portal seed preserves explicit operator syntax');
+    const events = [];
+    const offers = await runDiscovery({ ...base, positive:seeded.filters.positive }, event => events.push(event));
+    assert.deepEqual(offers.map(offer => offer.title).sort(), [...expected].sort());
+    assert.deepEqual(events.filter(event => event.kind === 'offer').map(event => event.offer.title).sort(), [...expected].sort());
+    assert.deepEqual(events.filter(event => event.kind === 'phaseStart').map(event => event.phase), phase === 'broad' ? ['precise', 'broad'] : ['precise']);
+    assert.equal(events.findLast(event => event.kind === 'summary').status, 'ok');
+  });
+});
 
 test('actual ATS scanner/core rejects Presales Assistant and retains boundary-matched requested roles', async t => {
   scannerFixture(t, ['Presales Assistant', 'Sales Assistant'].map((title, index) => ({ title, url: `https://acme.test/jobs/${index}` })));

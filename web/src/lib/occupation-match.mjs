@@ -1,6 +1,7 @@
 import { cleanChips } from "./clean-chips.mjs";
 import { normalizeTextKey } from "./core/normalize-text-key.mjs";
 import { OCCUPATION_CONCEPTS } from "./occupation-concepts.mjs";
+import { AND_SEPARATOR, STEM_PREFIX, WORD_PREFIX, buildTitleFilter } from "../../../title-keywords.mjs";
 
 // Same accent folding and Unicode word semantics as market-presets.mjs.
 function normalized(value) {
@@ -75,12 +76,18 @@ export function matchOccupationTitle(title, occupations) {
   return null;
 }
 
-/** Effective terms already encode precise/broad intent; unknown and ambiguous
- * queries keep their boundary-aware literal fallback.
+/** Effective terms already encode precise/broad intent; explicit operators use
+ * the scanner's canonical semantics, while literals keep word boundaries.
  * @param {string} title @param {string[]} terms */
 export function matchesOccupationTerms(title, terms) {
   if (!terms.length) return true;
   const evidence = matchOccupationTitle(title, resolveOccupations(terms).resolved);
   if (evidence && terms.some(term => normalized(term) === normalized(evidence.alias))) return true;
-  return terms.some(term => containsPhrase(normalized(title), term));
+  return terms.some(term => {
+    const keyword = term.trim().toLowerCase();
+    if (keyword.startsWith(WORD_PREFIX) || keyword.startsWith(STEM_PREFIX) || AND_SEPARATOR.test(keyword)) {
+      return buildTitleFilter({ positive: [term] })(title);
+    }
+    return containsPhrase(normalized(title), term);
+  });
 }
