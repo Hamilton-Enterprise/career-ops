@@ -127,6 +127,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   const [filters, setFiltersState] = useState<ExploreFilters>(() => structuredClone(DEFAULT_FILTERS));
   const snapshotsRef = useRef<OpportunitySnapshots>(createOpportunitySnapshots(DEFAULT_FILTERS));
   const touched = useRef(false);
+  const resultsRestored = useRef(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [offers, setOffers] = useState<DiscoveredOffer[]>([]);
   const [sources, setSources] = useState<Record<string, SourceState>>({});
@@ -189,6 +190,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       snap = null;
     }
     restoreResults(snap);
+    resultsRestored.current = true;
     return snap;
   }, [restoreResults]);
 
@@ -641,7 +643,8 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   // search is already running. Done in an effect (not a useState initializer) to avoid
   // an SSR hydration mismatch.
   useEffect(() => {
-    if (runningRef.current) return;
+    // The child's initFilters can restore first; its explicit URL mode/intent win.
+    if (runningRef.current || resultsRestored.current) return;
     restoreResultsFor(filtersRef.current.opportunityType);
   }, [restoreResultsFor]);
 

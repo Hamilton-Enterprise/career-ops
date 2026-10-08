@@ -160,3 +160,61 @@ test('provider persists final ranked cards and broad receipt separately for each
   assert.equal(sp.get('intent'), 'Find Flutter');
   assert.equal(renderProvider().offers[0].verification, 'unconfirmed');
 });
+
+test('child URL initialization survives the parent mount hydration with and without a saved snapshot', async t => {
+  const stored = new Map();
+  for (const [name, value] of Object.entries({
+    window: { location: { search: '?mode=ai&opportunity=freelance&q=Flutter&intent=Find%20Flutter' } },
+    localStorage: { getItem: () => null },
+    sessionStorage: { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value) },
+  })) {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+    Object.defineProperty(globalThis, name, { configurable: true, value });
+    t.after(() => descriptor ? Object.defineProperty(globalThis, name, descriptor) : delete globalThis[name]);
+  }
+  let owner, cursor, ctx;
+  const slots = { parent: [], child: [] }, effects = { parent: [], child: [] };
+  const hooks = { ...React, useState(initial) {
+    const bucket = slots[owner], index = cursor++;
+    if (!(index in bucket)) bucket[index] = typeof initial === 'function' ? initial() : initial;
+    return [bucket[index], next => { bucket[index] = typeof next === 'function' ? next(bucket[index]) : next; }];
+  }, useRef(initial) {
+    const bucket = slots[owner], index = cursor++;
+    if (!(index in bucket)) bucket[index] = { current: initial };
+    return bucket[index];
+  }, useContext: () => ctx, useCallback: fn => fn, useMemo: fn => fn(), useEffect: fn => effects[owner].push(fn) };
+  const provider = await load('explore-provider.tsx', {
+    react: hooks, 'next/navigation': { useRouter: () => ({ refresh() {} }) }, '@/lib/explore': explore,
+    '@/lib/explore-ai': exploreAi, '@/lib/whats-new.mjs': {}, '@/lib/explore-error.mjs': {},
+  });
+  const placeholder = () => null;
+  const { ExplorerView } = await load('explorer-view.tsx', {
+    react: hooks, 'next/link': { default: placeholder }, '@/lib/explore': explore, './explore-provider': provider,
+    '@/lib/pt-pt': { PT_PT_LOCALE: 'pt-PT' }, '@/lib/core/normalize-text-key.mjs': { normalizeTextKey: value => value },
+    './discovering-state': { DiscoveringState: placeholder, SearchReceipt: placeholder }, './filter-builder': { FilterBuilder: placeholder },
+    './ai-hunt-view': { AiHuntView: placeholder }, './explore-mode-toggle': { ExploreModeToggle: placeholder },
+    './ai-search-box': { AiSearchBox: placeholder }, './results-list': { ResultsList: placeholder }, './schedule-job-action': { ScheduleJobAction: placeholder },
+  });
+  const renderParent = () => { owner = 'parent'; cursor = 0; effects.parent.length = 0; ctx = provider.ExploreProvider({ children: null }).props.value; };
+  for (const saved of [false, true]) {
+    slots.parent.length = slots.child.length = effects.child.length = 0;
+    stored.clear();
+    if (saved) stored.set('career-ops:explore-results:freelance', JSON.stringify({
+      v: 1, mode: 'scan', phase: 'results', offers: [offer], sort: 'company', searchPhase: 'broad',
+      sources: { wttj: { state: 'ok', matches: 1 } }, aiIntent: 'Saved intent',
+    }));
+    renderParent();
+    owner = 'child'; cursor = 0;
+    ExplorerView({ seed: { filters: explore.DEFAULT_FILTERS, seededFrom: [] }, inboxSnapshot: [], appsSnapshot: [], rootExists: true });
+    // React commits passive effects from the mounted child before its parent.
+    effects.child.forEach(effect => effect());
+    effects.parent.forEach(effect => effect());
+    renderParent();
+    assert.equal(ctx.mode, 'ai', `explicit URL mode wins (saved snapshot: ${saved})`);
+    assert.equal(ctx.aiIntent, 'Find Flutter');
+    assert.equal(ctx.filters.opportunityType, 'freelance');
+    assert.deepEqual(ctx.filters.positive, ['Flutter']);
+    assert.equal(ctx.offers.length, saved ? 1 : 0);
+    assert.equal(ctx.sort, saved ? 'company' : 'match');
+  }
+});
