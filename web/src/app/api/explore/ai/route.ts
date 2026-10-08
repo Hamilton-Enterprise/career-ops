@@ -1,4 +1,5 @@
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
+import { removeCliWorkDir, terminateCliRun } from "@/lib/cli-launch.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +7,7 @@ import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from
 import { readMemory } from "@/lib/career-ops";
 import { assembleDedupContext } from "@/lib/core/discover";
 import { CAPS } from "@/lib/worker-capabilities.mjs";
-import { scopeFrom } from "@/lib/claude-invocation.mjs";
+import { CLAUDE_READ_ONLY_ISOLATION, scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
 import { codexFencingSupported } from "@/lib/cli-fencing-probe.mjs";
 import { canon, makeAiStreamParser } from "@/lib/explore-ai";
@@ -118,14 +119,7 @@ export async function POST(req: Request) {
         "--include-partial-messages",
         "--permission-mode",
         "acceptEdits",
-        // --strict-mcp-config with no --mcp-config loads ZERO MCP servers, so the
-        // tool lists here describe everything this agent can reach. Required for a
-        // non-writing worker: without it a user MCP server could supply a write tool
-        // the capability record forbids, and cli-fencing refuses to certify that (#2507).
-        "--strict-mcp-config",
-        // Per-session settings override user/project hooks without replacing HOME.
-        "--settings",
-        '{"disableAllHooks":true}',
+        ...CLAUDE_READ_ONLY_ISOLATION,
         "--allowedTools",
         ADVISOR_SCOPE.allowed,
         "--disallowedTools",
@@ -145,18 +139,22 @@ export async function POST(req: Request) {
         ]
       : spec.args(prompt);
 
-  // POSIX process groups let cancellation/timeout terminate descendants too.
+  // POSIX process groups let cancellation/timeout terminate descendants too
+  // (Windows ends the tree with taskkill instead; see terminateCliRun).
   const useProcessGroup = process.platform !== "win32";
 
   // Declared BEFORE the spawn: fencing can refuse the argv, and the temporary
   // workspace already exists by then. Without this the refusal path would leak
   // one directory per rejected request.
+  // Idempotent while a removal is done or retrying; a failed one may be retried
+  // by a later caller (the timeout's bounded fallback, then `close`).
+  let childCwdRemoval = false;
   const cleanupChildCwd = () => {
-    try {
-      fs.rmSync(childCwd, { recursive: true, force: true });
-    } catch {
-      /* best-effort temporary-directory cleanup */
-    }
+    if (childCwdRemoval) return;
+    childCwdRemoval = true;
+    void removeCliWorkDir(childCwd).then((removed) => {
+      if (!removed) childCwdRemoval = false;
+    });
   };
 
   // Proposer-not-writer, as the Claude branch above spells it: Read + WebFetch +
@@ -188,62 +186,29 @@ export async function POST(req: Request) {
   // controller and throw an uncaught "Controller is already closed" (see #1155).
   let closed = false;
   let killer: ReturnType<typeof setTimeout> | undefined;
-  let forceKill: ReturnType<typeof setTimeout> | undefined;
-
-  const isChildAlive = () => {
-    if (!useProcessGroup) return child.exitCode === null && child.signalCode === null;
-    if (!child.pid) return false;
-
-    try {
-      process.kill(-child.pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  };
 
   const clearTerminationTimers = () => {
     if (killer) {
       clearTimeout(killer);
       killer = undefined;
     }
-
-    // If the group leader exited but a descendant ignored SIGTERM, retain the
-    // SIGKILL fallback until the remaining process group is gone.
-    if (forceKill && !isChildAlive()) {
-      clearTimeout(forceKill);
-      forceKill = undefined;
-    }
   };
 
-  const signalChild = (signal: NodeJS.Signals): boolean => {
-    if (useProcessGroup && child.pid) {
-      try {
-        process.kill(-child.pid, signal);
-        return true;
-      } catch {
-        /* group may already be gone; fall back to the direct child */
-      }
-    }
-
-    try {
-      return child.kill(signal);
-    } catch {
-      return false;
-    }
-  };
-
+  // The work directory is removed on the child's `close`, not here: until the
+  // tree is gone it may still write into it, and on Windows a live process
+  // holding it as cwd makes the removal fail outright. terminateCliRun bounds
+  // that wait; past the bound the directory goes anyway.
   const terminateChild = () => {
-    const termSent = signalChild("SIGTERM");
-
-    if (!termSent || forceKill) return;
-
-    forceKill = setTimeout(() => {
-      signalChild("SIGKILL");
-      forceKill = undefined;
-    }, 5_000);
-
-    forceKill.unref?.();
+    terminateCliRun(child, {
+      onCloseTimeout: () => {
+        console.error("[AI search worker did not close after termination]", {
+          cliId,
+          exitCode: child.exitCode ?? "running",
+          signal: child.signalCode ?? "none",
+        });
+        cleanupChildCwd();
+      },
+    });
   };
 
   const stream = new ReadableStream<Uint8Array>({
@@ -255,7 +220,6 @@ export async function POST(req: Request) {
       let codexStderr = "";
       killer = setTimeout(() => {
         terminateChild();
-        cleanupChildCwd();
         terminal(usable ? "partial" : "error", `${spec.name}: a pesquisa excedeu o tempo limite.`);
         safeClose();
       }, 480_000);
@@ -419,7 +383,6 @@ export async function POST(req: Request) {
       }
 
       terminateChild();
-      cleanupChildCwd();
     },
   });
 

@@ -1,3 +1,4 @@
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -60,4 +61,220 @@ export function prepareCliLaunch(binPath, args, platform = process.platform) {
   }
 
   return unresolved();
+}
+
+/**
+ * Terminate a CLI run together with every process it started.
+ *
+ * POSIX: the child must have been spawned `detached`, so it leads its own
+ * process group and `kill(-pid)` reaches its descendants. Windows has neither
+ * process groups nor signals, and `child.kill()` ends only the direct child —
+ * descendants survive holding its stdio and working directory. There the tree
+ * is ended with `taskkill /T /F`, spawned without a shell from System32 so a
+ * `taskkill` earlier on PATH cannot stand in for it. taskkill failing because
+ * the tree is already gone is the expected outcome, not an error.
+ *
+ * @param {{ pid?: number, exitCode: number | null, signalCode: string | null, kill: (signal?: NodeJS.Signals) => boolean }} child
+ * @param {NodeJS.Signals} signal Ignored on Windows, where termination is always forced.
+ * @param {TreeDeps} [deps]
+ * @returns {boolean} Whether a termination was dispatched.
+ *
+ * @typedef {{ platform?: string, spawnProcess?: typeof spawn, kill?: (pid: number, signal: NodeJS.Signals | 0) => unknown, systemRoot?: string }} TreeDeps
+ */
+export function terminateCliTree(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    spawnProcess = spawn,
+    kill = (pid, sig) => process.kill(pid, sig),
+    systemRoot = process.env.SystemRoot || "C:\\Windows",
+  } = {},
+) {
+  const directKill = () => {
+    try {
+      return child.kill(signal);
+    } catch {
+      return false;
+    }
+  };
+
+  if (platform === "win32") {
+    // An exited child's PID may already belong to an unrelated process.
+    if (!child.pid || child.exitCode !== null || child.signalCode !== null) return false;
+    try {
+      const taskkillExe = path.win32.join(systemRoot, "System32", "taskkill.exe");
+      const taskkill = spawnProcess(taskkillExe, ["/PID", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      taskkill.on("error", directKill);
+      return true;
+    } catch {
+      return directKill();
+    }
+  }
+
+  if (child.pid) {
+    try {
+      kill(-child.pid, signal);
+      return true;
+    } catch {
+      /* group may already be gone; fall back to the direct child */
+    }
+  }
+  return directKill();
+}
+
+const terminating = new WeakSet();
+
+/**
+ * Terminate a CLI run's tree and make the child's `close` arrive within a bound.
+ *
+ * `close` waits for every holder of the child's stdio, and that includes a
+ * descendant that escaped the tree kill (POSIX `setsid`, or a Windows grandchild
+ * orphaned before taskkill walked the tree): it would never fire, and whatever
+ * the caller releases on `close` would leak. So once the run's own tree has
+ * exited, our ends of its pipes are destroyed — a run being terminated has no
+ * output left to deliver — which lets `close` fire. SIGTERM first; SIGKILL and
+ * the same stdio release after `forceAfterMs`; if `close` still has not arrived
+ * `closeWithinMs` later, `onCloseTimeout` runs once so the caller can release
+ * without it. Repeat calls for the same child, or a child that already closed,
+ * are no-ops.
+ *
+ * @param {import("node:child_process").ChildProcess} child Spawned `detached` on POSIX.
+ * @param {TreeDeps & { forceAfterMs?: number, closeWithinMs?: number, onCloseTimeout?: () => void }} [options]
+ */
+export function terminateCliRun(child, { forceAfterMs = 5_000, closeWithinMs = 2_000, onCloseTimeout = () => {}, ...treeDeps } = {}) {
+  const exited = () => child.exitCode !== null || child.signalCode !== null;
+  const stdio = [child.stdout, child.stderr].filter((s) => s !== null && s !== undefined);
+  // Node destroys every stdio stream before it emits the child's `close`.
+  if (terminating.has(child) || (exited() && stdio.every((s) => s.destroyed))) return;
+  terminating.add(child);
+
+  const platform = treeDeps.platform ?? process.platform;
+  const kill = treeDeps.kill ?? ((pid, sig) => process.kill(pid, sig));
+  const treeAlive = () => {
+    if (platform === "win32" || !child.pid) return !exited();
+    try {
+      kill(-child.pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const releaseStdio = () => {
+    for (const s of stdio) s.destroy();
+  };
+
+  let closed = false;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let closeDeadline;
+  const forceKill = setTimeout(() => {
+    terminateCliTree(child, "SIGKILL", treeDeps);
+    releaseStdio();
+    if (closed) return;
+    closeDeadline = setTimeout(() => {
+      if (!closed) onCloseTimeout();
+    }, closeWithinMs);
+    closeDeadline.unref?.();
+  }, forceAfterMs);
+  forceKill.unref?.();
+
+  child.once("close", () => {
+    closed = true;
+    if (closeDeadline) clearTimeout(closeDeadline);
+    // A group member that ignored SIGTERM keeps the SIGKILL fallback armed.
+    if (!treeAlive()) clearTimeout(forceKill);
+  });
+  const onExit = () => {
+    if (!treeAlive()) releaseStdio();
+  };
+  if (exited()) onExit();
+  else child.once("exit", onExit);
+
+  terminateCliTree(child, "SIGTERM", treeDeps);
+}
+
+/** @type {Map<import("node:child_process").ChildProcess, { processGroup: boolean }>} */
+const activeChildren = new Map();
+let exitReaperInstalled = false;
+
+/**
+ * Remember a running CLI child until it closes, so a server exit cannot leave
+ * it running. A detached worker survives its parent and would go on writing
+ * user data with nobody left to stop it or release what it holds.
+ *
+ * Only `exit` is hooked. The server's own SIGINT/SIGTERM handling decides how
+ * it exits (Next.js and web/server.mjs both end through process.exit), and a
+ * signal listener here would change that behaviour or swallow the signal.
+ *
+ * @param {import("node:child_process").ChildProcess} child
+ * @param {{ processGroup: boolean }} options `processGroup`: spawned `detached` on POSIX.
+ */
+export function trackCliChild(child, { processGroup }) {
+  if (!child.pid) return;
+  activeChildren.set(child, { processGroup });
+  child.once("close", () => activeChildren.delete(child));
+  if (!exitReaperInstalled) {
+    exitReaperInstalled = true;
+    process.once("exit", () => killActiveCliChildren());
+  }
+}
+
+/**
+ * SIGKILL every tracked CLI tree. Synchronous, because it runs inside `exit`;
+ * best effort, because the process is going away either way.
+ *
+ * @param {TreeDeps & { spawnSyncProcess?: typeof spawnSync }} [deps]
+ */
+export function killActiveCliChildren({
+  platform = process.platform,
+  kill = (pid, sig) => process.kill(pid, sig),
+  spawnSyncProcess = spawnSync,
+  systemRoot = process.env.SystemRoot || "C:\\Windows",
+} = {}) {
+  for (const [child, { processGroup }] of activeChildren) {
+    const pid = /** @type {number} */ (child.pid);
+    try {
+      if (platform === "win32") {
+        // An exited child's PID may already belong to an unrelated process.
+        if (child.exitCode !== null || child.signalCode !== null) continue;
+        spawnSyncProcess(path.win32.join(systemRoot, "System32", "taskkill.exe"), ["/PID", String(pid), "/T", "/F"], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+      } else {
+        kill(processGroup ? -pid : pid, "SIGKILL");
+      }
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+/**
+ * Remove a run's temporary work directory.
+ *
+ * Synchronous on the common path. On Windows a handle that a just-killed
+ * process (or an antivirus scan) has not released yet fails the removal with
+ * EBUSY/EPERM for a moment; those alone are retried, asynchronously with
+ * Node's linear backoff, so the request thread never sleeps.
+ *
+ * @param {string} dir
+ * @param {{ rmSync?: typeof fs.rmSync, rm?: typeof fs.promises.rm }} [deps]
+ * @returns {Promise<boolean>} Whether the directory is gone.
+ */
+export function removeCliWorkDir(dir, { rmSync = fs.rmSync, rm = fs.promises.rm } = {}) {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+    return Promise.resolve(true);
+  } catch (e) {
+    const code = /** @type {NodeJS.ErrnoException} */ (e)?.code;
+    if (code !== "EBUSY" && code !== "EPERM") return Promise.resolve(false);
+    return rm(dir, { recursive: true, force: true, maxRetries: 4, retryDelay: 100 }).then(
+      () => true,
+      () => false,
+    );
+  }
 }

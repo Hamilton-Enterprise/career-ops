@@ -6,9 +6,12 @@
  * run can release the tracker-delete guard. The returned function can be called
  * earlier on cancellation, or later after PDF rendering and marking complete.
  *
+ * Its `workerGone()` stands in for a `close` that terminateCliRun gave up
+ * waiting for, so a stuck descendant cannot hold the guard forever.
+ *
  * @param {{ once: (event: string, listener: () => void) => unknown }} child
  * @param {() => void} release
- * @returns {() => void}
+ * @returns {(() => void) & { workerGone: () => void }}
  */
 export function createRunFinalizer(child, release) {
   let workerClosed = false;
@@ -22,13 +25,17 @@ export function createRunFinalizer(child, release) {
     }
   };
 
-  child.once("close", () => {
+  const workerGone = () => {
     workerClosed = true;
     releaseIfFinished();
-  });
-
-  return () => {
-    runFinished = true;
-    releaseIfFinished();
   };
+  child.once("close", workerGone);
+
+  return Object.assign(
+    () => {
+      runFinished = true;
+      releaseIfFinished();
+    },
+    { workerGone },
+  );
 }

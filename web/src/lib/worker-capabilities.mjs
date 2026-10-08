@@ -60,6 +60,20 @@ export const CAPS = Object.freeze({
 });
 
 /**
+ * The records of the AI routes that are not /api/run kinds, keyed by the action
+ * id agent-availability.mjs shows the picker. A route spawning one of these
+ * reads its record from here, so the picker and the spawn cannot disagree;
+ * tests/lib/agent-availability.test.mjs checks the routes that still spell a
+ * CAPS record inline (AI search, CV import) against this table.
+ */
+export const ACTION_CAPABILITIES = Object.freeze({
+  "ai-search": CAPS.webSearchOnly,
+  assistant: CAPS.networkReadOnly,
+  "cv-ingest": CAPS.localReadOnly,
+  apply: CAPS.localReadOnly,
+});
+
+/**
  * Every kind /api/run dispatches. Exported so guards iterate this rather than a
  * hand-written list — a list silently stops gating whatever kind is added next.
  * Unknown kinds still resolve (least-capable, see capabilitiesFor); this is the

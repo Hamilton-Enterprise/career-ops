@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { careerOpsRoot, rootScript } from "@/lib/career-ops";
 import { writeTempPortals, cleanupTempPortals, loadProfileTargets, readScanTimeoutMs } from "@/lib/core/portals";
 import { buildMarketPlan } from "@/lib/market-presets.mjs";
-import { parseMarketReceipt, type MarketRun } from "./market-merge.mjs";
+import { onlyKnownLimits, parseMarketReceipt, type MarketRun } from "./market-merge.mjs";
 import type { ExploreFilters, ScanEvent, SearchPlan } from "@/lib/explore";
 
 export type { MarketRun } from "./market-merge.mjs";
@@ -13,7 +13,8 @@ export async function runMarketDiscovery(filters: ExploreFilters, onEvent: (e: S
   const plan = buildMarketPlan(filters.markets, filters.positive.length || filters.opportunityType === "freelance" ? filters.positive : loadProfileTargets(), filters.opportunityType, searchPlan);
   const complete = (run: MarketRun) => {
     for (const source of run.sources) {
-      if (source.state === "ok") {
+      // A known budget is not a failure; the summary still shows it as partial.
+      if (source.state === "ok" || onlyKnownLimits(source)) {
         const provider = plan.jobBoards.find(b => b.name === source.source)?.provider;
         onEvent({ kind: "sourceDone", source: source.source, count: run.offers.filter(o =>
           o.sources?.includes(source.source) || (provider && o.sources?.includes(`${provider}-api`))).length });

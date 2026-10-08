@@ -35,7 +35,33 @@ const REMOTE_BOARDS = [
   ["We Work Remotely", "weworkremotely"],
 ];
 
-/** @typedef {{ name: string, provider: string, enabled: boolean, careers_url?: string, api?: string, lang?: string, wttj?: { queries: string[], filters: string } }} MarketBoard */
+/** @typedef {{ name: string, provider: string, enabled: boolean, careers_url?: string, api?: string, lang?: string, wttj?: { queries: string[], filters: string, max_hits?: number, timeout_ms?: number } }} MarketBoard */
+
+// WTTJ runs one sequential Algolia request per query inside the scan timeout;
+// title matching still uses every term.
+export const WTTJ_QUERY_LIMIT = 12;
+// Hits read per query on the country-filtered board: 3 pages of 100, with a 5 s
+// Algolia timeout. Worst case against the 230 s default scan deadline: ~10 s
+// waiting for a slot as the 11th source (scan.mjs CONCURRENCY = 10) + 10 s
+// /api/env + 12 queries x 3 pages x 5 s = ~200 s, ~30 s margin.
+export const WTTJ_MAX_HITS = 300;
+export const WTTJ_TIMEOUT_MS = 5_000;
+
+/** @typedef {{ source: string, reason: "missing-search-terms" } | { source: "wttj", reason: "query-limit", omitted: string[] }} SkippedSource */
+
+/** Terms arrive in buildSearchPlan order (originals, spelling variants, additions),
+ *  so the first distinct queries are the user's own words.
+ *  @param {unknown} terms @returns {{ queries: string[], omitted: string[] }} */
+function wttjQueries(terms) {
+  const seen = new Set();
+  const distinct = cleanChips(terms).filter(term => {
+    const key = normalized(term).replace(/([\p{L}]+)(?:\/a|\(a\))/gu, "$1");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { queries: distinct.slice(0, WTTJ_QUERY_LIMIT), omitted: distinct.slice(WTTJ_QUERY_LIMIT) };
+}
 
 /** The caller supplies positive terms, or profile terms when positives are empty.
  *  This pure planner never invents a search query or reads the user's files.
@@ -43,7 +69,9 @@ const REMOTE_BOARDS = [
  *  @param {{ occupationIds?: string[], locationResolution?: import('./location-concepts.mjs').LocationResolution }} [searchPlan] */
 export function buildMarketPlan(selected, terms, opportunityType = "employment", searchPlan = {}) {
   const markets = cleanMarkets(selected);
-  const queries = cleanChips(terms);
+  const { queries, omitted } = wttjQueries(terms);
+  /** @type {SkippedSource[]} */
+  const queryLimit = omitted.length ? [{ source: "wttj", reason: "query-limit", omitted }] : [];
   const type = opportunityType === "freelance" ? "freelance" : "employment";
   if (type === "freelance") {
     const countries = new Set();
@@ -62,13 +90,13 @@ export function buildMarketPlan(selected, terms, opportunityType = "employment",
       markets,
       jobBoards: [{ name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: { queries, filters } }],
       locationPolicy: { markets, strict: markets.length > 0, locationResolution: searchPlan.locationResolution },
-      skippedSources: [],
+      skippedSources: queryLimit,
     };
   }
   /** @type {Map<string, MarketBoard>} */
   const boards = new Map();
   const wttjCountries = new Set();
-  /** @type {{ source: string, reason: string }[]} */
+  /** @type {SkippedSource[]} */
   const skippedSources = [];
   /** @param {MarketBoard} board */
   const add = (board) => boards.set(`${board.provider}:${board.careers_url || board.api ? new URL(board.careers_url || board.api).hostname : board.lang ?? ""}`, board);
@@ -91,10 +119,12 @@ export function buildMarketPlan(selected, terms, opportunityType = "employment",
     }
   }
   if (wttjCountries.size) {
-    if (queries.length) add({ name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: {
-      queries, filters: [...wttjCountries].map((code) => `offices.country_code:${code}`).join(" OR "),
-    } });
-    else skippedSources.push({ source: "wttj", reason: "missing-search-terms" });
+    if (queries.length) {
+      add({ name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: {
+        queries, filters: [...wttjCountries].map((code) => `offices.country_code:${code}`).join(" OR "), max_hits: WTTJ_MAX_HITS, timeout_ms: WTTJ_TIMEOUT_MS,
+      } });
+      skippedSources.push(...queryLimit);
+    } else skippedSources.push({ source: "wttj", reason: "missing-search-terms" });
   }
   return { opportunityType: type, markets, jobBoards: [...boards.values()], locationPolicy: { markets, strict: markets.length > 0, locationResolution: searchPlan.locationResolution }, skippedSources };
 }

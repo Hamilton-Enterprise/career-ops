@@ -357,6 +357,27 @@ const SECTION_ALIASES = new Map([
   ['conocimientos técnicos', 'skills'],
   ['herramientas e idiomas', 'skills'],
   ['intereses', 'interests'],
+  // Portuguese (pt-PT, pre- and post-AO90 spellings) — the same failure again for
+  // a CV rendered with language.output pt-PT. Entries shared with Spanish once
+  // folded (competencias, experiencia, premios, perfil) are not repeated.
+  ['resumo', 'summary'],
+  ['resumo profissional', 'summary'],
+  ['perfil profissional', 'summary'],
+  ['competências-chave', 'competencies'],
+  ['competências principais', 'competencies'],
+  ['experiência profissional', 'experience'],
+  ['percurso profissional', 'experience'],
+  ['projetos', 'projects'],
+  ['projectos', 'projects'],
+  ['projetos destacados', 'projects'],
+  ['formação', 'education'],
+  ['formação académica', 'education'],
+  ['educação', 'education'],
+  ['certificações', 'certifications'],
+  ['prémios e distinções', 'awards'],
+  ['competências técnicas', 'skills'],
+  ['aptidões', 'skills'],
+  ['interesses', 'interests'],
   // Chinese — the same failure the Polish block above fixes, for the two Chinese
   // markets this repo ships modes for: Traditional (modes/zh-TW) and Simplified
   // (modes/zh), rendered through templates/cv-template.zh-minimal.html. Both

@@ -5,7 +5,7 @@ import { Check, X, Loader2, AlertTriangle } from "lucide-react";
 import type { Job } from "@/components/jobs/job-store";
 import { jobErrorHint } from "@/lib/job-error-hint.mjs";
 import { cn } from "@/lib/cn";
-import { isFencingNotice } from "@/lib/cli-fencing.mjs";
+import { isFencingNotice } from "@/lib/fencing-notice.mjs";
 
 // Humanize raw agent tool names into what the user actually cares about, so a
 // multi-minute evaluation reads as progress instead of a cryptic tool dump (#8).

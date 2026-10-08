@@ -150,7 +150,10 @@ export type ScanEvent =
       unreachable: number;
       matches: number;
       status?: "ok" | "partial" | "failed";
-      sources?: { source: string; state: "ok" | "partial" | "error" | "skipped"; message?: string }[];
+      // `limits` marks a partial whose only shortfalls are known, configured budgets.
+      sources?: { source: string; state: "ok" | "partial" | "error" | "skipped"; message?: string; limits?: ("query-limit" | "hit-budget")[] }[];
+      // Set only when known limits are the run's sole shortfall.
+      knownLimitsOnly?: true;
       missingLocation?: number;
       // Authoritative degraded-vs-empty signals from the scanner's --json mode (#1199).
       // Absent on older local checkouts (the legacy human-stdout parse can't supply them).

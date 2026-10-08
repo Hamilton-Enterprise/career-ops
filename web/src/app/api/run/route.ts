@@ -9,6 +9,7 @@ import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from
 import { localISODate } from "@/lib/followups";
 import { accumulateTokens, hasNewCompletedReport, isFatalGenericStderr, killMsForKind, timeoutMessage } from "@/lib/run-cli-support.mjs";
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
+import { terminateCliRun } from "@/lib/cli-launch.mjs";
 import { careerOpsRoot, readMemory, findReportFile, readInbox, readScanDates, readLanguageConfig } from "@/lib/career-ops";
 import { resolvePdfPaths, type PdfPaths } from "@/lib/pdf-paths.mjs";
 import { renderAndMarkPdf, writeCvHtml, pdfRunOutcome } from "@/lib/pdf-render.mjs";
@@ -189,7 +190,9 @@ export async function POST(req: Request) {
     child = spawnHeadlessCli(
       binPath,
       args,
-      { cwd: codeRoot, env: workerEnv },
+      // Its own process group on POSIX, so termination reaches descendants
+      // (Windows ends the tree with taskkill; see terminateCliRun).
+      { cwd: codeRoot, env: workerEnv, detached: process.platform !== "win32" },
       { cliId, capabilities, writableRoot: capabilities.writes ? dataRoot : undefined },
     );
   } catch (e) {
@@ -232,6 +235,22 @@ export async function POST(req: Request) {
   const finishRun = createRunFinalizer(child, () => {
     if (writeToken !== null) releaseTrackerWrite(writeToken);
   });
+  // Bounded: a descendant that escaped the tree kill and holds stdio would keep
+  // `close`, and with it the guard, waiting forever.
+  const terminateWorker = (onStuck?: () => void) => {
+    terminateCliRun(child, {
+      onCloseTimeout: () => {
+        console.error("[Run worker did not close after termination]", {
+          kind,
+          cliId,
+          exitCode: child.exitCode ?? "running",
+          signal: child.signalCode ?? "none",
+        });
+        onStuck?.();
+        finishRun.workerGone();
+      },
+    });
+  };
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       let buf = "";
@@ -284,7 +303,10 @@ export async function POST(req: Request) {
       let killedByTimeout = false;
       killer = setTimeout(() => {
         killedByTimeout = true;
-        try { child.kill("SIGTERM"); } catch { /* ignore */ }
+        terminateWorker(() => {
+          send({ type: "error", msg: timeoutMessage(killMs, kind) });
+          close();
+        });
       }, killMs);
       const send = (obj: unknown) => {
         if (closed) return;
@@ -568,7 +590,7 @@ export async function POST(req: Request) {
       closed = true;
       if (heartbeat) clearInterval(heartbeat);
       if (killer) clearTimeout(killer);
-      try { child.kill("SIGTERM"); } catch { /* ignore */ }
+      terminateWorker();
       if (pdfRenderPromise) {
         // Render/mark keeps running after this client disconnects — wait for
         // it to settle before releasing the guard, so a concurrent tracker
