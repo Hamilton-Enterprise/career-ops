@@ -11,7 +11,16 @@
 //   2. A path that would escape output/ is rejected — not silently rewritten.
 import { resolve, join, relative, isAbsolute } from 'path';
 import { pass, fail, ROOT } from './helpers.mjs';
-import { safeOutputPath } from '../generate-cover-letter.mjs';
+// This read-only path fixture binds the intended workspace before module load.
+const priorRoot = process.env.CAREER_OPS_ROOT;
+let safeOutputPath;
+try {
+  process.env.CAREER_OPS_ROOT = ROOT;
+  ({ safeOutputPath } = await import('../generate-cover-letter.mjs?fixture=output-path'));
+} finally {
+  if (priorRoot === undefined) delete process.env.CAREER_OPS_ROOT;
+  else process.env.CAREER_OPS_ROOT = priorRoot;
+}
 
 console.log('\nCover letter --out preserves output/ subdirectories (#2940)');
 

@@ -864,6 +864,7 @@ test('every recursive walker over this checkout consults the shared predicate', 
     ['plugin-audit.mjs:walk', 'audits a plugin tree, which is not this repository’s source'],
     ['test-all.mjs:walkMjs', 'deny-list security scan over plugins/; a marked dir must not be able to opt out'],
     ['tests/doctor-read-only.test.mjs:snapshot', 'snapshots an isolated temporary data fixture; every created file must be visible to the no-write assertion'],
+    ['tests/test-all-data-safety.test.mjs:snapshot', 'inventories an isolated synthetic marker target; skipping any directory would hide new files from the no-write assertion'],
   ]);
 
   const walkers = findRecursiveWalkers(

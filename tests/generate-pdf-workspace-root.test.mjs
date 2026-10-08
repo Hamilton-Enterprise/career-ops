@@ -12,12 +12,14 @@ import { pass, fail, ROOT } from './helpers.mjs';
 console.log('\ngenerate-pdf-workspace-root.test.mjs — the containment root is read at use time (#3162)');
 
 const original = process.env.CAREER_OPS_TRACKER;
+const originalRoot = process.env.CAREER_OPS_ROOT;
 const foreign = mkdtempSync(join(tmpdir(), 'cops-foreign-'));
 mkdirSync(join(foreign, 'output'), { recursive: true });
 writeFileSync(join(foreign, 'applications.md'), '# Applications Tracker\n');
 
 let failures = 0;
 try {
+  process.env.CAREER_OPS_ROOT = ROOT;
   // Poison the environment the way a sibling fixture does, THEN import.
   process.env.CAREER_OPS_TRACKER = join(foreign, 'applications.md');
   const mod = await import('../generate-pdf.mjs');
@@ -40,6 +42,8 @@ try {
     failures++;
   }
 } finally {
+  if (originalRoot === undefined) delete process.env.CAREER_OPS_ROOT;
+  else process.env.CAREER_OPS_ROOT = originalRoot;
   if (original === undefined) delete process.env.CAREER_OPS_TRACKER;
   else process.env.CAREER_OPS_TRACKER = original;
 }
