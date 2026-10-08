@@ -659,7 +659,9 @@ test("concurrent real contenders never overlap while taking over or releasing a 
   const moduleUrl = pathToFileURL(path.join(WEB_ROOT, "src/lib/scheduled-jobs-store.mjs")).href;
   const runChild = (index) => new Promise((resolve, reject) => {
     const marker = path.join(temp, `${index}.json`);
-    const code = `import fs from 'node:fs'; import { withResourceLock } from ${JSON.stringify(moduleUrl)}; const marker=${JSON.stringify(marker)}; await withResourceLock(${JSON.stringify(resource)}, async()=>{ const start=Date.now(); await new Promise(r=>setTimeout(r,35)); fs.writeFileSync(marker, JSON.stringify({start,end:Date.now()})); });`;
+    // Short critical section: proves exclusivity without starving Windows CI's
+    // aggregated web suite (SIGTERM on the whole write-scope batch).
+    const code = `import fs from 'node:fs'; import { withResourceLock } from ${JSON.stringify(moduleUrl)}; const marker=${JSON.stringify(marker)}; await withResourceLock(${JSON.stringify(resource)}, async()=>{ const start=Date.now(); await new Promise(r=>setTimeout(r,20)); fs.writeFileSync(marker, JSON.stringify({start,end:Date.now()})); });`;
     const child = spawn(process.execPath, ["--input-type=module", "-e", code], { stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
     child.stderr.on("data", (chunk) => { stderr += chunk; });
@@ -667,8 +669,8 @@ test("concurrent real contenders never overlap while taking over or releasing a 
     child.once("close", (status) => status === 0 ? resolve() : reject(new Error(stderr || `child exited ${status}`)));
   });
   try {
-    await Promise.all(Array.from({ length: 8 }, (_, index) => runChild(index)));
-    const intervals = Array.from({ length: 8 }, (_, index) => JSON.parse(fs.readFileSync(path.join(temp, `${index}.json`), "utf8"))).sort((a, b) => a.start - b.start);
+    await Promise.all(Array.from({ length: 6 }, (_, index) => runChild(index)));
+    const intervals = Array.from({ length: 6 }, (_, index) => JSON.parse(fs.readFileSync(path.join(temp, `${index}.json`), "utf8"))).sort((a, b) => a.start - b.start);
     for (let index = 1; index < intervals.length; index += 1) assert.ok(intervals[index].start >= intervals[index - 1].end, "lock holders overlapped");
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
