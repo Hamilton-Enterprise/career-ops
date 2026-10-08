@@ -119,11 +119,16 @@ export type DiscoveredOffer = {
 
 /** The two discovery surfaces: free deterministic Scan vs token-spending AI search. */
 export type ExploreMode = "scan" | "ai";
+export type SearchPhase = "precise" | "broad";
+export type SearchExpansion = import("./search-plan.mjs").SearchExpansion;
+export type SearchPlan = import("./search-plan.mjs").SearchPlan;
 
 /** Stream event grammar (NDJSON). `kind` discriminates. Discovery is FREE — the
  *  terminal `done` always carries cost {tokens:0, usd:0}. */
 export type ScanEvent =
   | { kind: "start"; ats: string[]; sinceDays: number; limit: number; free: true }
+  | { kind: "phaseStart"; phase: SearchPhase; sinceDays: number; free: true }
+  | ({ kind: "expansion" } & SearchExpansion)
   | { kind: "atsStart"; ats: string; companies: number }
   | { kind: "progress"; ats: string; scanned: number; total: number; matches: number }
   | { kind: "atsDone"; ats: string; unreachable: number }

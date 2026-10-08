@@ -44,7 +44,8 @@ export async function POST(req: NextRequest) {
       send({ kind: "start", ats, sinceDays: filters.sinceDays, limit: filters.limitPerAts, free: true } satisfies ScanEvent);
       let offers: DiscoveredOffer[] = [];
       try {
-        offers = await runDiscovery(filters, (e: ScanEvent) => send(e));
+        // Phase and expansion events share the stream; only this route closes it.
+        offers = await runDiscovery(filters, (e: ScanEvent) => { if (e.kind !== "done") send(e); });
       } catch (err) {
         send({ kind: "error", message: err instanceof Error ? err.message : "Não foi possível procurar ofertas." } satisfies ScanEvent);
       }

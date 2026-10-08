@@ -37,8 +37,9 @@ const REMOTE_BOARDS = [
 
 /** The caller supplies positive terms, or profile terms when positives are empty.
  *  This pure planner never invents a search query or reads the user's files.
- *  @param {unknown} selected @param {unknown} terms @param {unknown} opportunityType */
-export function buildMarketPlan(selected, terms, opportunityType = "employment") {
+ *  @param {unknown} selected @param {unknown} terms @param {unknown} opportunityType
+ *  @param {{ occupationIds?: string[], locationResolution?: import('./location-concepts.mjs').LocationResolution }} [searchPlan] */
+export function buildMarketPlan(selected, terms, opportunityType = "employment", searchPlan = {}) {
   const markets = cleanMarkets(selected);
   const queries = cleanChips(terms);
   const type = opportunityType === "freelance" ? "freelance" : "employment";
@@ -58,7 +59,7 @@ export function buildMarketPlan(selected, terms, opportunityType = "employment")
       opportunityType: type,
       markets,
       jobBoards: [{ name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: { queries, filters } }],
-      locationPolicy: { markets, strict: markets.length > 0 },
+      locationPolicy: { markets, strict: markets.length > 0, locationResolution: searchPlan.locationResolution },
       skippedSources: [],
     };
   }
@@ -92,7 +93,7 @@ export function buildMarketPlan(selected, terms, opportunityType = "employment")
     } });
     else skippedSources.push({ source: "wttj", reason: "missing-search-terms" });
   }
-  return { opportunityType: type, markets, jobBoards: [...boards.values()], locationPolicy: { markets, strict: markets.length > 0 }, skippedSources };
+  return { opportunityType: type, markets, jobBoards: [...boards.values()], locationPolicy: { markets, strict: markets.length > 0, locationResolution: searchPlan.locationResolution }, skippedSources };
 }
 
 function normalized(value) {
@@ -144,24 +145,31 @@ function locationParts(location) {
     .trim()).filter(Boolean);
 }
 
-function countryLocation(location, market) {
+function countryLocation(location, market, resolution) {
   const target = MARKET_LOCATIONS[market];
   if (!target) return false;
+  const resolved = resolution?.locations.filter(item => item.market === market) ?? [];
+  const names = [...target.names, ...resolved.filter(item => item.scope === "country").flatMap(item => item.aliases).map(normalized)];
+  const resolvedCities = resolved.filter(item => item.scope === "city").flatMap(item => [...item.aliases, ...item.metroAliases]).map(normalized);
+  const cities = [...target.cities, ...resolvedCities];
   const targetCodes = new Set((COUNTRY_CODES[market] ?? []).map(code => code.toLowerCase()));
   return locationGroups(location).some(group => {
     const normalizedGroup = normalized(group);
     const parts = locationParts(group);
-    const matchedTargets = target.names.filter(name => containsWord(normalizedGroup, [name]));
+    // ponytail: unknown qualifiers fail closed; add observed neighborhood/postcode forms to the catalog when needed.
+    if (parts.some(part => resolvedCities.includes(part)) &&
+        parts.some(part => !cities.includes(part) && !names.includes(part))) return false;
+    const matchedTargets = names.filter(name => containsWord(normalizedGroup, [name]));
     const targetCountry = matchedTargets.length > 0;
     const foreignCountry = OTHER_COUNTRIES
       .map(normalized)
-      .filter(name => !target.names.includes(name) && !ISO_COUNTRY_CODES.has(name))
+      .filter(name => !names.includes(name) && !ISO_COUNTRY_CODES.has(name))
       .some(name => {
         if (matchedTargets.some(targetName => targetName.includes(name))) return false;
         return parts.includes(name) || containsWord(normalizedGroup, [name]);
       }) || parts.some(part => ISO_COUNTRY_CODES.has(part) && !targetCodes.has(part));
     if (foreignCountry) return false;
-    return targetCountry || parts.some(part => target.cities.includes(part));
+    return targetCountry || parts.some(part => cities.includes(part));
   });
 }
 
@@ -195,12 +203,13 @@ export function classifyMarketLocation(offer, plan) {
     return { accepted: false, reason: "missing-location" };
   }
   // A bare normalized city is usable; a city in an unrelated country is not.
-  const portugal = countryLocation(location, "portugal");
-  const spain = countryLocation(location, "spain");
-  const unitedKingdom = countryLocation(location, "united-kingdom");
-  const switzerland = countryLocation(location, "switzerland");
-  const luxembourg = countryLocation(location, "luxembourg");
-  const netherlands = countryLocation(location, "netherlands");
+  const resolution = plan.locationPolicy.locationResolution;
+  const portugal = countryLocation(location, "portugal", resolution);
+  const spain = countryLocation(location, "spain", resolution);
+  const unitedKingdom = countryLocation(location, "united-kingdom", resolution);
+  const switzerland = countryLocation(location, "switzerland", resolution);
+  const luxembourg = countryLocation(location, "luxembourg", resolution);
+  const netherlands = countryLocation(location, "netherlands", resolution);
   // ISO codes retain case: English "at" is not the country code AT.
   const europe = portugal || spain || containsWord(location, EUROPE) || containsWord(rawLocation, EUROPE_CODES);
   for (const market of plan.markets) {

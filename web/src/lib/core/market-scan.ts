@@ -4,12 +4,13 @@ import { careerOpsRoot, rootScript } from "@/lib/career-ops";
 import { writeTempPortals, cleanupTempPortals, loadProfileTargets, readScanTimeoutMs } from "@/lib/core/portals";
 import { buildMarketPlan } from "@/lib/market-presets.mjs";
 import { parseMarketReceipt, type MarketRun } from "./market-merge.mjs";
-import type { ExploreFilters, ScanEvent } from "@/lib/explore";
+import type { ExploreFilters, ScanEvent, SearchPlan } from "@/lib/explore";
 
 export type { MarketRun } from "./market-merge.mjs";
 
-export async function runMarketDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) => void): Promise<MarketRun> {
-  const plan = buildMarketPlan(filters.markets, filters.positive.length || filters.opportunityType === "freelance" ? filters.positive : loadProfileTargets(), filters.opportunityType);
+export async function runMarketDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) => void, searchPlan?: SearchPlan): Promise<MarketRun> {
+  filters = searchPlan?.effectiveFilters ?? filters;
+  const plan = buildMarketPlan(filters.markets, filters.positive.length || filters.opportunityType === "freelance" ? filters.positive : loadProfileTargets(), filters.opportunityType, searchPlan);
   const complete = (run: MarketRun) => {
     for (const source of run.sources) {
       if (source.state === "ok") {
@@ -43,7 +44,20 @@ export async function runMarketDiscovery(filters: ExploreFilters, onEvent: (e: S
       const finish = (code: number | null) => {
         clearTimeout(killer);
         if (hardKiller) clearTimeout(hardKiller);
-        resolve(parseMarketReceipt(output, code, plan, timedOut));
+        const result = parseMarketReceipt(output, code, plan, timedOut);
+        let unverifiedZero: unknown;
+        try { unverifiedZero = JSON.parse(output).unverified_zero; } catch { /* invalid receipt already failed */ }
+        // An HTTP-unconfirmed zero is not proof of absence. Older receipts
+        // without this field also cannot authorize automatic broadening.
+        if (result.valid && (!Array.isArray(unverifiedZero) || unverifiedZero.length > 0)) {
+          for (const source of result.sources) if (source.state === "ok" &&
+              (!Array.isArray(unverifiedZero) || unverifiedZero.includes(source.source))) {
+            source.state = "partial";
+            source.message = "A fonte não confirmou um zero saudável.";
+          }
+          result.status = "partial";
+        }
+        resolve(result);
       };
       child.stdout.on("data", (data: Buffer) => { output += data.toString(); });
       child.stderr.on("data", () => {}); // Drain progress; authoritative states come from the receipt.

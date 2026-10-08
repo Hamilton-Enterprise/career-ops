@@ -4,11 +4,12 @@ import { careerOpsRoot, rootScript } from "@/lib/career-ops";
 import { writeTempPortals, cleanupTempPortals, loadProfileTargets, readScanTimeoutMs } from "@/lib/core/portals";
 import { titleFit } from "@/lib/title-fit.mjs";
 import { scanTimeoutMessage } from "./scan-timeout.mjs";
-import { ATS_LABEL, ATS_SOURCES, type AtsSource, type DiscoveredOffer, type ExploreFilters, type FitBand, type ScanEvent } from "@/lib/explore";
+import { ATS_LABEL, ATS_SOURCES, type AtsSource, type DiscoveredOffer, type ExploreFilters, type FitBand, type ScanEvent, type SearchPlan } from "@/lib/explore";
 import { mergeScanResults, timedOutMessage } from "./scan-merge.mjs";
 import { runMarketDiscovery } from "@/lib/core/market-scan";
 import { mergeDiscoveredOffers } from "./market-merge.mjs";
 import { buildMarketPlan, classifyMarketLocation } from "@/lib/market-presets.mjs";
+import { buildSearchPlan } from "@/lib/search-plan.mjs";
 
 export type { DiscoveredOffer, ScanEvent, AtsSource } from "@/lib/explore";
 export { ATS_SOURCES } from "@/lib/explore";
@@ -398,7 +399,14 @@ async function runAtsDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) 
     // finished: its offers and counts are kept, and it is still named as incomplete.
     const stopped = runs.map((r) => r.timedOut || r.json?.stoppedEarly === true);
     const timedOut = ats.filter((_, i) => stopped[i]);
-    const incomplete = ats.filter((_, i) => !runs[i].json || stopped[i] || runs[i].failed);
+    const incomplete = ats.filter((source, i) => {
+      const result = runs[i].json;
+      const hasHealthProof = result && typeof result.capHit === "boolean" &&
+        Number.isFinite(result.companiesAvailable) && Number.isFinite(result.companiesScanned) &&
+        Number.isFinite(result.unreachableBoards) && Number.isFinite(result.postingsDroppedNoDate) &&
+        ["ok", "stale", "empty"].includes(result.datasetStatus?.[source] ?? "");
+      return !hasHealthProof || stopped[i] || runs[i].failed;
+    });
 
     if (finished.length === 0) {
       const failed = runs.find((r) => r.failed)?.failed;
@@ -426,9 +434,10 @@ async function runAtsDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) 
   }
 }
 
-export async function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) => void): Promise<DiscoveredOffer[]> {
+async function runDiscoveryPass(searchPlan: SearchPlan, onEvent: (e: ScanEvent) => void): Promise<DiscoveredOffer[]> {
+  const filters = searchPlan.effectiveFilters;
   const ats = filters.opportunityType === "freelance" ? [] : filters.ats.filter(a => ATS_SOURCES.includes(a));
-  const plan = buildMarketPlan(filters.markets, [], filters.opportunityType);
+  const plan = buildMarketPlan(filters.markets, filters.positive, filters.opportunityType, searchPlan);
   type Summary = Extract<ScanEvent, { kind: "summary" }>;
   let atsSummary: Summary | undefined;
   const atsErrors: string[] = [];
@@ -452,7 +461,7 @@ export async function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEve
   // Both selected paths start before either is awaited. A single selected path
   // runs alone, so an unavailable sibling scanner cannot affect that search.
   const atsPromise = ats.length ? discoverAts() : null;
-  const marketPromise = (filters.opportunityType === "freelance" || filters.markets.length) ? runMarketDiscovery(filters, onEvent).catch(error => ({
+  const marketPromise = (filters.opportunityType === "freelance" || filters.markets.length) ? runMarketDiscovery(filters, onEvent, searchPlan).catch(error => ({
     offers: [] as DiscoveredOffer[], valid: false, status: "failed" as const, missingLocation: 0, scanned: 0,
     sources: plan.jobBoards.map(board => ({ source: board.name, state: "error" as const, message: error instanceof Error ? error.message : NO_OUTPUT })),
   })) : null;
@@ -483,5 +492,49 @@ export async function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEve
     matches: offers.length, status, sources, missingLocation,
     ...(sources.some(s => s.state !== "ok") ? { incomplete: sources.filter(s => s.state !== "ok").map(s => s.source) } : {}),
   });
+  return offers;
+}
+
+type Summary = Extract<ScanEvent, { kind: "summary" }>;
+
+function healthyZero(summary: Summary | undefined, filters: ExploreFilters): boolean {
+  if (!summary || summary.status !== "ok" || summary.matches !== 0 ||
+      !summary.sources?.length || summary.sources.some(source => source.state !== "ok") ||
+      summary.incomplete?.length || summary.unreachable !== 0 || (summary.missingLocation ?? 0) > 0 ||
+      !Number.isFinite(summary.companiesScanned) || summary.companiesScanned <= 0 ||
+      summary.capHit === true || (summary.postingsDroppedNoDate ?? 0) > 0 ||
+      Object.values(summary.datasetStatus ?? {}).some(state => state !== "ok")) return false;
+  const ats = filters.opportunityType === "freelance" ? [] : filters.ats.filter(source => ATS_SOURCES.includes(source));
+  // Legacy stdout and incomplete JSON cannot certify an empty ATS universe.
+  return !ats.length || (summary.capHit === false && summary.postingsDroppedNoDate === 0 &&
+    Number.isFinite(summary.companiesAvailable) &&
+    ats.every(source => summary.datasetStatus?.[source] === "ok" && summary.sources?.some(state => state.source === source && state.state === "ok")));
+}
+
+export async function runDiscovery(
+  filters: ExploreFilters,
+  onEvent: (e: ScanEvent) => void,
+  runPass: typeof runDiscoveryPass = runDiscoveryPass,
+): Promise<DiscoveredOffer[]> {
+  let summary: Summary | undefined;
+  let sawError = false;
+  const emit = (event: ScanEvent) => {
+    if (event.kind === "summary") summary = event;
+    else {
+      if (event.kind === "error" || event.kind === "sourceError") sawError = true;
+      onEvent(event);
+    }
+  };
+  const precise = buildSearchPlan(filters, "precise");
+  onEvent({ kind: "phaseStart", phase: "precise", sinceDays: precise.effectiveFilters.sinceDays, free: true });
+  let offers = await runPass(precise, emit);
+  if (!offers.length && !sawError && healthyZero(summary, precise.effectiveFilters)) {
+    const broad = buildSearchPlan(filters, "broad");
+    onEvent({ kind: "expansion", ...broad.expansion });
+    onEvent({ kind: "phaseStart", phase: "broad", sinceDays: broad.effectiveFilters.sinceDays, free: true });
+    summary = undefined;
+    offers = await runPass(broad, emit);
+  }
+  if (summary) onEvent(summary);
   return offers;
 }

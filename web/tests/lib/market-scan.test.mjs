@@ -5,11 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import * as yaml from "js-yaml";
 import "../helpers/web-ts-alias-loader.mjs";
+import { buildSearchPlan } from "../../src/lib/search-plan.mjs";
 
 const { runMarketDiscovery } = await import("@/lib/core/market-scan");
 const { runDiscovery } = await import("@/lib/core/scan");
 const filters = { positive: [], negative: [], allow: [], block: [], alwaysAllow: [], blockHard: [], ats: [], markets: ["portugal"], sinceDays: 7, limitPerAts: 50 };
-const receipt = { version: "careerops.scan.receipt@1", scanned: 1, skipped: 0, offers: [{ company: "Acme", title: "Engineer", location: "Portugal", source: "landingjobs-api", url: "https://acme.com/42", postedAt: "2026-10-05" }], errors: [], dry_run: true };
+const receipt = { version: "careerops.scan.receipt@1", scanned: 1, skipped: 0, offers: [{ company: "Acme", title: "Engineer", location: "Portugal", source: "landingjobs-api", url: "https://acme.com/42", postedAt: "2026-10-05" }], errors: [], unverified_zero: [], dry_run: true };
 
 async function sandbox(t, script, profile = "") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "market-test-"));
@@ -219,7 +220,7 @@ test("skipped market receipt is failed alone and partial beside a valid ATS resu
   assert.deepEqual(events.find(e => e.kind === "summary").incomplete, ["Landing.jobs", "wttj"]);
   assert.equal(events.find(e => e.kind === "summary").sources[0].state, "skipped");
   assert.equal(events.filter(e => e.kind === "sourceDone").length, 0);
-  fs.writeFileSync(path.join(root, "scan-ats-full.mjs"), "// --json capHit\nconsole.log(JSON.stringify({companiesScanned:1,offers:[]}));");
+  fs.writeFileSync(path.join(root, "scan-ats-full.mjs"), "// --json capHit\nconsole.log(JSON.stringify({companiesScanned:1,companiesAvailable:1,capHit:false,unreachableBoards:0,postingsDroppedNoDate:0,datasetStatus:{greenhouse:'ok'},offers:[]}));");
   const joined = [];
   assert.deepEqual(await runDiscovery({ ...filters, ats: ["greenhouse"] }, e => joined.push(e)), []);
   assert.equal(joined.find(e => e.kind === "summary").status, "partial");
@@ -253,5 +254,69 @@ test("final market scope keeps worldwide remote offers and their merged ATS orig
     const offers = await runDiscovery({ ...filters, ats, markets: ["remote"] }, () => {});
     assert.equal(offers.length, 1);
     assert.deepEqual(offers[0].sources, ats.length ? ["greenhouse-full", "remotive-api"] : ["remotive-api"]);
+  }
+});
+
+test("unverified market zeros and omitted zero-health proof stay partial and never broaden", async t => {
+  const root = await sandbox(t, null);
+  for (const unverified of [["Landing.jobs"], undefined]) {
+    const payload = { ...receipt, offers: [], unverified_zero: unverified };
+    fs.writeFileSync(path.join(root, "scan.mjs"), `console.log(${JSON.stringify(JSON.stringify(payload))});`);
+    const events = [];
+    await runDiscovery({ ...filters, positive: ["designer"] }, event => events.push(event));
+    assert.equal(events.find(event => event.kind === "summary").status, "partial");
+    assert.equal(events.filter(event => event.kind === "phaseStart").length, 1);
+    assert.equal(events.some(event => event.kind === "expansion"), false);
+  }
+});
+
+test("ATS aggregate cannot hide missing health proof in one child", async t => {
+  const root = await sandbox(t, null);
+  fs.writeFileSync(path.join(root, "scan-ats-full.mjs"), `// --json capHit
+    const source = process.argv[process.argv.indexOf('--ats') + 1];
+    const result = { companiesScanned:1, companiesAvailable:1, capHit:false, unreachableBoards:0, postingsDroppedNoDate:0, datasetStatus:{[source]:'ok'}, offers:[] };
+    if(source === 'lever') delete result.postingsDroppedNoDate;
+    console.log(JSON.stringify(result));`);
+  const events = [];
+  await runDiscovery({ ...filters, ats: ["greenhouse", "lever"], markets: [] }, event => events.push(event));
+  assert.equal(events.find(event => event.kind === "summary").status, "partial");
+  assert.deepEqual(events.find(event => event.kind === "summary").incomplete, ["lever"]);
+  assert.equal(events.filter(event => event.kind === "phaseStart").length, 1);
+});
+
+test("healthy synthetic scanners run in parallel in both phases and route closes once without AI", async t => {
+  const emptyReceipt = { ...receipt, scanned: 2, offers: [] };
+  const root = await sandbox(t, `import fs from 'node:fs'; const phase = process.argv[process.argv.indexOf('--since') + 1];
+    fs.appendFileSync('market-phases', phase + '\\n'); fs.writeFileSync('market-started-' + phase, 'yes');
+    const timer = setInterval(() => { if(fs.existsSync('ats-started-' + phase)) { clearInterval(timer); console.log(${JSON.stringify(JSON.stringify(emptyReceipt))}); } },10);`, "scan:\n  timeout_seconds: 1\n");
+  fs.writeFileSync(path.join(root, "scan-ats-full.mjs"), `// --json capHit
+    import fs from 'node:fs'; const phase = process.argv[process.argv.indexOf('--since') + 1];
+    fs.appendFileSync('ats-phases', phase + '\\n'); fs.writeFileSync('ats-started-' + phase, 'yes');
+    const timer = setInterval(() => { if(fs.existsSync('market-started-' + phase)) { clearInterval(timer); console.log(JSON.stringify({companiesAvailable:1,companiesScanned:1,capHit:false,datasetStatus:{greenhouse:'ok'},postingsDroppedNoDate:0,unreachableBoards:0,offers:[]})); } },10);`);
+  const { POST } = await import("@/app/api/explore/route");
+  const response = await POST(new Request("http://localhost/api/explore", { method: "POST", body: JSON.stringify({ ...filters, positive: ["designer"], ats: ["greenhouse"] }) }));
+  const events = (await response.text()).trim().split("\n").map(JSON.parse);
+  assert.equal(fs.readFileSync(path.join(root, "ats-phases"), "utf8"), "7\n30\n");
+  assert.equal(fs.readFileSync(path.join(root, "market-phases"), "utf8"), "7\n30\n");
+  assert.equal(events.filter(event => event.kind === "done").length, 1);
+  assert.equal(events.filter(event => event.kind === "summary").length, 1);
+  assert.deepEqual(events.filter(event => event.kind === "phaseStart").map(event => event.phase), ["precise", "broad"]);
+  assert.deepEqual(events.at(-1).cost, { tokens: 0, usd: 0 });
+  assert.deepEqual(events.at(-1).offers, []);
+});
+
+test("the optional search plan feeds identical geography into ephemeral config and market receipts", async t => {
+  const cities = ["Lisboa", "Lisbon", "Lisbonne", "Amadora", "Sintra", "Oeiras", "Cascais", "Lisbonne, Angola", "Amadora, Spain"];
+  const payload = { ...receipt, offers: cities.map((location, index) => ({ ...receipt.offers[0], location, url: `https://acme.com/${index}` })) };
+  const root = await sandbox(t, `import fs from 'node:fs'; fs.writeFileSync('portals-copy', fs.readFileSync(process.env.CAREER_OPS_PORTALS)); console.log(${JSON.stringify(JSON.stringify(payload))});`);
+  const input = { ...filters, opportunityType: "employment", positive: ["Operador de Loja"], allow: ["Lisboa"] };
+  for (const phase of ["precise", "broad"]) {
+    const plan = buildSearchPlan(input, phase);
+    const run = await runMarketDiscovery(input, () => {}, plan);
+    const config = yaml.load(fs.readFileSync(path.join(root, "portals-copy"), "utf8"));
+    assert.equal(config.location_filter.allow.includes("Lisbonne"), true);
+    assert.equal(config.location_filter.allow.includes("Amadora"), phase === "broad");
+    assert.deepEqual(run.offers.map(offer => offer.location), phase === "precise" ? ["Lisboa", "Lisbon", "Lisbonne"] : cities.slice(0, 7));
+    assert.equal(config.title_filter.positive.includes("Retail Assistant"), phase === "broad");
   }
 });

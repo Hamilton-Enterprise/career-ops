@@ -2,8 +2,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as marketPresets from "../../src/lib/market-presets.mjs";
 import { mergeDiscoveredOffers } from "../../src/lib/core/market-merge.mjs";
+import { resolveLocationInputs } from "../../src/lib/location-concepts.mjs";
 
 const { cleanMarkets, encodeMarkets, decodeMarkets, buildMarketPlan, classifyMarketLocation } = marketPresets;
+
+test("resolved city aliases and explicit metro terms reject even unknown foreign qualifiers", () => {
+  for (const phase of ["precise", "broad"]) {
+    const plan = buildMarketPlan(["portugal"], [], "employment", { locationResolution: resolveLocationInputs("Lisboa", phase), occupationIds: ["retail-assistant"] });
+    for (const city of ["Lisbonne", "Lissabon"]) assert.equal(classifyMarketLocation({ location: city }, plan).accepted, true);
+    for (const city of ["Amadora", "Oeiras", "Sintra", "Cascais"]) assert.equal(classifyMarketLocation({ location: city }, plan).accepted, phase === "broad");
+    for (const location of ["Lisbonne, Angola", "Lissabon, ZA", "Amadora, Argentina", "Sintra, XX"]) assert.equal(classifyMarketLocation({ location }, plan).accepted, false, location);
+  }
+});
 
 test("market codec defaults empty and drops unknown and duplicate selections", () => {
   assert.deepEqual(cleanMarkets(undefined), []);
