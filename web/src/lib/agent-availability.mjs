@@ -10,7 +10,7 @@
  * the client reads the result from /api/clis.
  */
 
-import { CAPS, capabilitiesFor } from "./worker-capabilities.mjs";
+import { ACTION_CAPABILITIES, capabilitiesFor } from "./worker-capabilities.mjs";
 import { fenceArgs, fencingReport, isCliAllowedForCapabilities } from "./cli-fencing.mjs";
 import { claudeCliArgs } from "./claude-invocation.mjs";
 
@@ -29,10 +29,10 @@ export const AGENT_ACTIONS = Object.freeze([
   { id: "pdf", label: "Gerar CV", capabilities: capabilitiesFor("pdf"), run: true },
   { id: "research", label: "Pesquisar empresa", capabilities: capabilitiesFor("research"), run: true },
   { id: "fix-portal", label: "Corrigir portal", capabilities: capabilitiesFor("fix-portal"), run: true },
-  { id: "ai-search", label: "Pesquisa assistida", capabilities: CAPS.webSearchOnly, requiresFullFencing: true },
-  { id: "assistant", label: "Assistente", capabilities: CAPS.networkReadOnly },
-  { id: "cv-ingest", label: "Importar CV", capabilities: CAPS.localReadOnly },
-  { id: "apply", label: "Preencher candidatura", capabilities: CAPS.localReadOnly },
+  { id: "ai-search", label: "Pesquisa assistida", capabilities: ACTION_CAPABILITIES["ai-search"], requiresFullFencing: true },
+  { id: "assistant", label: "Assistente", capabilities: ACTION_CAPABILITIES.assistant },
+  { id: "cv-ingest", label: "Importar CV", capabilities: ACTION_CAPABILITIES["cv-ingest"] },
+  { id: "apply", label: "Preencher candidatura", capabilities: ACTION_CAPABILITIES.apply },
 ].map((a) => Object.freeze(a)));
 
 /**

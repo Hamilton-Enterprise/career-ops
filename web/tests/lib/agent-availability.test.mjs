@@ -9,7 +9,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { AGENT_ACTIONS, agentActionsFor } from "../../src/lib/agent-availability.mjs";
-import { CAPS, KNOWN_KINDS, capabilitiesFor } from "../../src/lib/worker-capabilities.mjs";
+import fs from "node:fs";
+import { ACTION_CAPABILITIES, CAPS, KNOWN_KINDS, capabilitiesFor } from "../../src/lib/worker-capabilities.mjs";
 import { fenceArgs, fencingReport, isCliAllowedForCapabilities } from "../../src/lib/cli-fencing.mjs";
 import { claudeCliArgs } from "../../src/lib/claude-invocation.mjs";
 import { actionBlockReason } from "../../src/lib/cli-pick.mjs";
@@ -28,10 +29,40 @@ test("every /api/run kind is an action, with the record the route uses", () => {
     assert.ok(action, `${kind} must be offered to the picker`);
     assert.equal(action.capabilities, capabilitiesFor(kind), `${kind} uses capabilitiesFor(kind)`);
   }
-  // And the routes that declare their record inline are listed with the same one.
-  const inline = { "ai-search": CAPS.webSearchOnly, assistant: CAPS.networkReadOnly, "cv-ingest": CAPS.localReadOnly, apply: CAPS.localReadOnly };
-  for (const [id, caps] of Object.entries(inline)) {
+  // And every other action reads the shared table the routes spawn with.
+  for (const [id, caps] of Object.entries(ACTION_CAPABILITIES)) {
     assert.equal(AGENT_ACTIONS.find((a) => a.id === id)?.capabilities, caps, `${id} capabilities`);
+  }
+});
+
+test("every spawning route declares the same record the picker shows", () => {
+  // Given the files that spawn or grade each non-/api/run action. Most read
+  // ACTION_CAPABILITIES; AI search and CV import still spell a CAPS record inline
+  // (their routes belong to other tasks), so each `capabilities:` expression is
+  // resolved against both tables and must land on the action's record.
+  const files = {
+    "ai-search": ["src/app/api/explore/ai/route.ts"],
+    assistant: ["src/app/api/assistant/route.ts"],
+    "cv-ingest": ["src/app/api/cv/ingest/route.ts"],
+    apply: ["src/lib/apply/planner.ts", "src/lib/apply/agent-interpret.ts", "src/lib/apply/session.ts"],
+  };
+  assert.deepEqual(Object.keys(files).sort(), Object.keys(ACTION_CAPABILITIES).sort(), "every shared action has its routes listed");
+  const resolve = (expr) => {
+    const caps = expr.match(/^CAPS\.(\w+)$/);
+    if (caps) return CAPS[caps[1]];
+    const shared = expr.match(/^ACTION_CAPABILITIES(?:\.([\w]+)|\["([\w-]+)"\])$/);
+    return shared ? ACTION_CAPABILITIES[shared[1] ?? shared[2]] : undefined;
+  };
+  for (const [id, paths] of Object.entries(files)) {
+    for (const rel of paths) {
+      const src = fs.readFileSync(new URL(`../../${rel}`, import.meta.url), "utf8");
+      const declared = [...src.matchAll(/capabilities:\s*([\w.\["\]-]+)/g)].map((m) => m[1]);
+      assert.ok(declared.length > 0, `${rel} declares a capability record`);
+      for (const expr of declared) {
+        // Then no route spawns under a record other than the one the picker reports.
+        assert.equal(resolve(expr), ACTION_CAPABILITIES[id], `${rel}: ${expr} must be ${id}'s record`);
+      }
+    }
   }
 });
 

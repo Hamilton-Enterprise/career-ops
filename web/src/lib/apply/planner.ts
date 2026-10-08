@@ -1,5 +1,5 @@
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
-import { CAPS } from "@/lib/worker-capabilities.mjs";
+import { ACTION_CAPABILITIES } from "@/lib/worker-capabilities.mjs";
 import { CLAUDE_READ_ONLY_ISOLATION, scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
 import type { CliSpec } from "@/lib/clis";
@@ -75,7 +75,7 @@ export function runPlanner(opts: {
   // log() is the caller's non-fatal channel; it surfaces in the collapsed
   // "Pre-fill diagnostics" drawer, which is where the other planner facts go
   // (#2507).
-  const fencing = fencingReport({ cliId: spec.id, cliName: spec.name, capabilities: CAPS.localReadOnly });
+  const fencing = fencingReport({ cliId: spec.id, cliName: spec.name, capabilities: ACTION_CAPABILITIES.apply });
   if (fencing.notice) log(`⚠️ ${fencing.notice}`);
   // Scale the timeout with form size (big forms = more drafting). Cap < maxDuration.
   const killMs = Math.min(300_000, 150_000 + fieldCount * 6_000);
@@ -96,7 +96,7 @@ export function runPlanner(opts: {
         // spec.id, not the caller's cliId: same value once resolveCli has
         // accepted it, but typed as the canonical id rather than the caller's
         // optional string.
-        { cliId: spec.id, capabilities: CAPS.localReadOnly },
+        { cliId: spec.id, capabilities: ACTION_CAPABILITIES.apply },
       );
     } catch (e) {
       // Fencing refuses an argv that contradicts the capability record. Resolve

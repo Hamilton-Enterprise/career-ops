@@ -3,7 +3,7 @@ import type { Frame } from "playwright-core";
 import { resolveCli } from "@/lib/clis";
 import { careerOpsRoot } from "@/lib/career-ops";
 import type { ApplyField } from "./extract";
-import { CAPS } from "../worker-capabilities.mjs";
+import { ACTION_CAPABILITIES } from "../worker-capabilities.mjs";
 import { CLAUDE_READ_ONLY_ISOLATION, scopeFrom } from "../claude-invocation.mjs";
 
 // Deny list DERIVED, never hand-written: every one of the six advisor argvs
@@ -99,7 +99,7 @@ function runPlanner(binPath: string, cliId: string, argsFor: (p: string) => stri
       binPath,
       args,
       { cwd: careerOpsRoot(), env: process.env },
-      { cliId, capabilities: CAPS.localReadOnly },
+      { cliId, capabilities: ACTION_CAPABILITIES.apply },
     );
     let buf = "";
     child.stdout.on("data", (d: Buffer) => (buf += d.toString()));

@@ -292,7 +292,7 @@ export function verifyClaudeArgs(args, capabilities) {
   if (!capabilities.writes && !disablesAllHooks(args)) {
     throw new Error(
       "cli-fencing: claude argv for a non-writing worker must pass exactly one inline --settings " +
-        'whose JSON sets "disableAllHooks": true, otherwise a user or project hook could run a ' +
+        'whose JSON is exactly {"disableAllHooks":true}, otherwise a user or project hook could run a ' +
         "shell command the capability record forbids. Spread CLAUDE_READ_ONLY_ISOLATION into the argv.",
     );
   }
@@ -303,8 +303,9 @@ export function verifyClaudeArgs(args, capabilities) {
  * Does this argv carry exactly one inline `--settings` that disables all hooks?
  *
  * Exactly one, because a second override could re-enable them and which one
- * wins is the CLI's business, not something to certify. Inline JSON only: a
- * settings FILE path cannot be inspected from the argv, so it does not count.
+ * wins is the CLI's business, not something to certify. Inline JSON only, and
+ * exactly `{"disableAllHooks":true}`: a settings FILE path cannot be inspected
+ * from the argv, and a merged object would carry settings nobody reviewed.
  *
  * @param {string[]} args
  * @returns {boolean}
@@ -316,9 +317,19 @@ function disablesAllHooks(args) {
     else if (arg.startsWith("--settings=")) values.push(arg.slice("--settings=".length));
   });
   if (values.length !== 1) return false;
+  let settings;
   try {
-    return JSON.parse(values[0])?.disableAllHooks === true;
+    settings = JSON.parse(values[0]);
   } catch {
     return false;
   }
+  // Exactly this object. Any other key (apiKeyHelper, env, permissions, hooks…)
+  // is a setting the fencer has not reviewed and could reopen what this closes.
+  return (
+    settings !== null &&
+    typeof settings === "object" &&
+    !Array.isArray(settings) &&
+    Object.keys(settings).length === 1 &&
+    settings.disableAllHooks === true
+  );
 }

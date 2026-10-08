@@ -2,7 +2,7 @@ import { buildConversationContext } from "@/lib/assistant-history.mjs";
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
 import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from "@/lib/clis";
 import { careerOpsRoot, readMemory, doctorState } from "@/lib/career-ops";
-import { CAPS } from "@/lib/worker-capabilities.mjs";
+import { ACTION_CAPABILITIES } from "@/lib/worker-capabilities.mjs";
 import { CLAUDE_READ_ONLY_ISOLATION, scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
 
@@ -137,7 +137,7 @@ export async function POST(req: Request) {
       binPath,
       args,
       { cwd: careerOpsRoot(), env: process.env },
-      { cliId, capabilities: CAPS.networkReadOnly },
+      { cliId, capabilities: ACTION_CAPABILITIES.assistant },
     );
   } catch (e) {
     // Fencing refuses an argv that contradicts the capability record. Report it
@@ -191,7 +191,7 @@ export async function POST(req: Request) {
       // runs with its default access, and that must be visible rather than
       // inferred from which CLI happens to be selected (#2507). This stream is
       // plain text, so the notice is a leading line rather than an event.
-      const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: CAPS.networkReadOnly });
+      const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: ACTION_CAPABILITIES.assistant });
       if (fencing.notice) safeEnqueue(`⚠️ ${fencing.notice}
 
 `);

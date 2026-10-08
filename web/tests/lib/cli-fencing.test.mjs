@@ -680,6 +680,13 @@ test("a non-writing claude argv that leaves hooks enabled is refused", () => {
     "a settings file nobody can inspect": [...base, "--settings", "settings.json"],
     "a later override that re-enables hooks": [...base, "--settings", '{"disableAllHooks":true}', "--settings", "{}"],
     "the equals form without the key": [...base, "--settings={}"],
+    // Any other key can reopen what the override closes, so only the exact object passes.
+    "an extra model key": [...base, "--settings", '{"model":"sonnet","disableAllHooks":true}'],
+    "a credential helper": [...base, "--settings", '{"disableAllHooks":true,"apiKeyHelper":"sh -c x"}'],
+    "hooks beside the switch": [...base, "--settings", '{"disableAllHooks":true,"hooks":{}}'],
+    "environment overrides": [...base, "--settings", '{"disableAllHooks":true,"env":{"A":"1"}}'],
+    "permission overrides": [...base, "--settings", '{"disableAllHooks":true,"permissions":{"allow":["Bash"]}}'],
+    "a non-object value": [...base, "--settings", "[true]"],
   };
   // When each is presented for a non-writing worker
   // Then it is refused, with the same kind of message as the MCP refusal.
@@ -691,12 +698,11 @@ test("a non-writing claude argv that leaves hooks enabled is refused", () => {
     );
   }
 
-  // And an inline override that disables hooks passes, in either spelling and
-  // alongside other keys a caller may have merged into the same object.
+  // And the exact override passes, in either spelling and with any spacing.
   for (const extra of [
     ["--settings", '{"disableAllHooks":true}'],
     ['--settings={"disableAllHooks":true}'],
-    ["--settings", '{"model":"sonnet","disableAllHooks":true}'],
+    ["--settings", '{ "disableAllHooks": true }'],
   ]) {
     const args = [...base, ...extra];
     assert.deepEqual(fenceArgs({ cliId: "claude", args, capabilities: CAPS.localReadOnly }).args, args);
@@ -722,4 +728,23 @@ test("a prototype-inherited cliId is not mistaken for a fencer", () => {
     assert.deepEqual(out, args, `${cliId} must not resolve to a fencer`);
     assert.equal(fencingReport({ cliId, cliName: cliId, capabilities: CAPS.localReadOnly }).level, "none");
   }
+});
+
+test("client components reach the notice predicate without pulling node: modules", async () => {
+  // Given cli-fencing.mjs imports node:path, which a client bundle cannot load
+  // (next dev --webpack 500'd every page through worker-card.tsx).
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const src = new URL("../../src/", import.meta.url).pathname;
+  const files = fs.readdirSync(src, { recursive: true }).filter((f) => /\.(tsx?|mjs)$/.test(f));
+  const client = files.filter((f) => /^\s*["']use client["']/.test(fs.readFileSync(path.join(src, f), "utf8")));
+  assert.ok(client.length > 0);
+  for (const f of client) {
+    // Then no "use client" file imports the fencer directly...
+    assert.doesNotMatch(fs.readFileSync(path.join(src, f), "utf8"), /cli-fencing\.mjs["']/, `${f} imports cli-fencing.mjs`);
+  }
+  // ...and the module it uses instead has no node: import of its own.
+  assert.doesNotMatch(fs.readFileSync(path.join(src, "lib/fencing-notice.mjs"), "utf8"), /from\s+["']node:/);
+  const { isFencingNotice: fromNotice } = await import("../../src/lib/fencing-notice.mjs");
+  assert.equal(fromNotice, isFencingNotice, "cli-fencing re-exports the same predicate");
 });
