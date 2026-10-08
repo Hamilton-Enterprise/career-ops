@@ -93,7 +93,8 @@ for (const kind of ["evaluate", "pdf", "fix-portal"]) {
     assert.equal(record.cwd, f.code);
     assert.equal(record.dataRoot, f.data);
     const prompt = record.args[record.args.indexOf("-p") + 1];
-    assert.ok(prompt.includes(f.data), "worker must resolve all user-layer reads and writes under data root");
+    const promptDataRoot = prompt.match(/The user data root is (.+?): resolve cv\.md/)?.[1];
+    assert.equal(JSON.parse(promptDataRoot ?? "null"), f.data, "worker must resolve all user-layer reads and writes under data root");
     if (kind === "evaluate") {
       assert.ok(prompt.includes("modes/de/angebot.md"));
       assert.ok(prompt.includes("modes/zh/_shared.md"));
