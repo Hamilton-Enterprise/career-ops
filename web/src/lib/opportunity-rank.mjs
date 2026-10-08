@@ -17,9 +17,9 @@ export function rankOpportunity(offer, plan, observedAt) {
   const literals = [...plan.occupations.map(item => item.input), ...plan.effectiveFilters.positive.filter(term => !resolveOccupations([term]).resolved.length)];
   const literal = literals.find(term => contains(offer.title, term));
   const original = plan.occupations.find(item => item.input === literal);
-  const occupation = original ? { occupationId: original.id, input: original.input, alias: original.input, language: original.language, kind: /** @type {'literal'} */ ("literal") } : matchOccupationTitle(offer.title, plan.occupations);
+  const occupation = original ? { occupationId: original.id, input: original.input, alias: original.input, language: original.language, kind: /** @type {'literal'} */ ("literal") } : literal ? undefined : matchOccupationTitle(offer.title, plan.occupations);
   const role = occupation?.kind === "literal" || literal ? 60 : occupation ? 50 : 0;
-  const reasons = [role === 60 ? `Função pedida: «${occupation?.input ?? literal}».` : occupation ?
+  const reasons = [role === 60 ? `Função pedida: «${literal ?? occupation?.input}».` : occupation ?
     `Função equivalente: «${occupation.alias}» corresponde a «${occupation.input}».` : "Sem correspondência profissional com a pesquisa."];
 
   let location = 0, geography;
@@ -31,7 +31,7 @@ export function rankOpportunity(offer, plan, observedAt) {
     const score = same ? place.scope === "city" ? 25 : 10 : metro ? 20 : 0;
     if (score <= location) continue;
     location = score;
-    geography = { scope: metro ? "metro" : place.scope, input: place.input, matched: same ?? metro };
+    geography = { scope: same ? place.scope : "metro", input: place.input, matched: same ?? metro };
   }
   for (const input of plan.locationResolution.unresolved) if (contains(offer.location, input) && location < 25) {
     location = 25;

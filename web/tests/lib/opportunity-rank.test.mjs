@@ -78,6 +78,36 @@ test("unmatched occupations cannot inherit fit and unknown user phrases remain l
   assert.equal(rankOpportunity({ ...offer, title: "Assistente de loja de roupa" }, retailInput, now).components.role, 60);
 });
 
+test("a winning unresolved literal cannot borrow losing alias evidence or its reason", () => {
+  for (const positive of [["Operador de Loja", "Quantum gardener"], ["Quantum gardener", "Operador de Loja"]]) {
+    const plan = buildSearchPlan({ ...filters, positive }, "broad");
+    const literal = rankOpportunity({ ...offer, title: "Retail Assistant - Quantum gardener" }, plan, now);
+    assert.equal(literal.total, 100);
+    assert.deepEqual(literal.components, { role: 60, location: 25, freshness: 10, evidence: 5 });
+    assert.equal(literal.occupation, undefined);
+    assert.equal(literal.reasons[0], "Função pedida: «Quantum gardener».");
+    const alias = rankOpportunity({ ...offer, title: "Retail Assistant" }, plan, now);
+    assert.equal(alias.total, 90);
+    assert.equal(alias.components.role, 50);
+    assert.deepEqual(alias.occupation, { occupationId: "retail-assistant", input: "Operador de Loja", alias: "Retail Assistant", language: "en", kind: "alias" });
+    assert.equal(alias.reasons[0], "Função equivalente: «Retail Assistant» corresponde a «Operador de Loja».");
+  }
+});
+
+test("city evidence follows its winning 25-point branch when a metro token also occurs", () => {
+  const plan = buildSearchPlan(filters, "broad");
+  const city = rankOpportunity({ ...offer, location: "Lisboa, Amadora, Portugal" }, plan, now);
+  assert.equal(city.total, 100);
+  assert.deepEqual(city.components, { role: 60, location: 25, freshness: 10, evidence: 5 });
+  assert.deepEqual(city.geography, { scope: "city", input: "Lisboa", matched: "Lisboa" });
+  assert.equal(city.reasons[1], "Localização: mesma cidade (Lisboa).");
+  const metro = rankOpportunity({ ...offer, location: "Amadora, Portugal" }, plan, now);
+  assert.equal(metro.total, 95);
+  assert.equal(metro.components.location, 20);
+  assert.deepEqual(metro.geography, { scope: "metro", input: "Lisboa", matched: "Amadora" });
+  assert.equal(metro.reasons[1], "Localização: Área Metropolitana de Lisboa (Amadora).");
+});
+
 test("ranking is pure and deterministic: total, publication date, company, then URL", () => {
   const offers = [
     { ...offer, url: "https://acme.example/jobs/2", company: "Beta" },
