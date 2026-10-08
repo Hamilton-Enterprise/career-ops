@@ -72,7 +72,7 @@ test("missing scanner and malformed output produce failed source states", async 
 });
 
 test("timeout preserves a flushed receipt as partial and cleans ephemeral config", async t => {
-  const root = await sandbox(t, `import fs from 'node:fs'; fs.writeFileSync('temp-path', process.env.CAREER_OPS_PORTALS); process.on('SIGTERM', () => { console.log(${JSON.stringify(JSON.stringify(receipt))}); process.exit(2); }); setInterval(() => {}, 1000);`, "scan:\n  timeout_seconds: 1\n");
+  const root = await sandbox(t, `import fs from 'node:fs'; fs.writeFileSync('temp-path', process.env.CAREER_OPS_PORTALS); console.log(${JSON.stringify(JSON.stringify(receipt))}); setInterval(() => {}, 1000);`, "scan:\n  timeout_seconds: 1\n");
   const events = [];
   const run = await runMarketDiscovery(filters, e => events.push(e));
   assert.equal(run.status, "partial");
