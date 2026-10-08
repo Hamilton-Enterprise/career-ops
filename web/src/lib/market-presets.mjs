@@ -198,11 +198,10 @@ export function inferMarketsFromLocations(selected, locations) {
  *  @param {ReturnType<typeof buildMarketPlan>} plan
  *  @returns {{ accepted: boolean, reason?: "missing-location" | "outside-market", remote?: true, eligibility?: "unknown" }} */
 export function classifyMarketLocation(offer, plan) {
-  if (!plan.locationPolicy.strict) return { accepted: true };
   const rawLocation = typeof offer.location === "string" ? offer.location.trim() : "";
   const location = normalized(rawLocation);
   if (!location || /^(n\/?a|unknown|not specified|not indicated|unspecified|[-—])$/.test(location)) {
-    return { accepted: false, reason: "missing-location" };
+    return plan.locationPolicy.strict ? { accepted: false, reason: "missing-location" } : { accepted: true };
   }
   // A bare normalized city is usable; a city in an unrelated country is not.
   const resolution = plan.locationPolicy.locationResolution;
@@ -216,6 +215,7 @@ export function classifyMarketLocation(offer, plan) {
       return { accepted: false, reason: "outside-market" };
     }
   }
+  if (!plan.locationPolicy.strict) return { accepted: true };
   const portugal = countryLocation(location, "portugal", resolution);
   const spain = countryLocation(location, "spain", resolution);
   const unitedKingdom = countryLocation(location, "united-kingdom", resolution);

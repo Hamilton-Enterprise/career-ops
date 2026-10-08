@@ -217,7 +217,7 @@ test("the existing explorer page passes the employment seed when opening a freel
   assert.equal(calls.length, 2, 'assisted URL initializes the active opportunity type before intent');
   assert.equal(calls[1][0].opportunityType, 'freelance');
   assert.deepEqual(calls[1][0].positive, ['Flutter']);
-  assert.deepEqual(aiCalls, [['mode', 'ai'], ['intent', 'Find Flutter']]);
+  assert.deepEqual(aiCalls, [['mode', 'scan'], ['intent', ''], ['mode', 'ai'], ['intent', 'Find Flutter']]);
 });
 
 test("freelance filters expose the explicit mode selector and editable shortcuts", async () => {

@@ -256,7 +256,7 @@ export async function POST(req: Request) {
       killer = setTimeout(() => {
         terminateChild();
         cleanupChildCwd();
-        safeEnqueue(`\n[${spec.name}: a pesquisa excedeu o tempo limite]\n`);
+        terminal(usable ? "partial" : "error", `${spec.name}: a pesquisa excedeu o tempo limite.`);
         safeClose();
       }, 480_000);
       const safeClose = () => {
@@ -279,6 +279,9 @@ export async function POST(req: Request) {
           closed = true; // controller already closed underneath us — stop, never crash
           return false;
         }
+      };
+      const terminal = (status: "success" | "partial" | "error", message?: string) => {
+        safeEnqueue(`\n<<search-result:${JSON.stringify({ status, ...(message ? { message } : {}) })}>>\n`);
       };
       const emit = (s: string) => {
         if (!safeEnqueue(s)) return;
@@ -330,7 +333,7 @@ export async function POST(req: Request) {
         // Drain every CLI's stderr without forwarding prompt/secret-bearing text.
       });
       child.on("error", () => {
-        safeEnqueue(`\n[Não foi possível iniciar ${spec.name}.]\n`);
+        terminal("error", `Não foi possível iniciar ${spec.name}.`);
         cleanupChildCwd();
         safeClose();
       });
@@ -395,6 +398,7 @@ export async function POST(req: Request) {
           }
 
           cleanupChildCwd();
+          terminal(code === 0 ? "success" : usable ? "partial" : "error", code === 0 ? undefined : `${spec.name} terminou com o código ${code ?? "desconhecido"}.`);
           safeClose();
           return;
         }
@@ -402,6 +406,7 @@ export async function POST(req: Request) {
         if (code !== 0 && !usable) safeEnqueue(`\n[${spec.name} terminou com o código ${code ?? "desconhecido"}]\n`);
         else if (!emitted) safeEnqueue("_(o agente não devolveu conteúdo; confirma se tem sessão iniciada)_");
         cleanupChildCwd();
+        terminal(code === 0 ? "success" : usable ? "partial" : "error", code === 0 ? undefined : `${spec.name} terminou com o código ${code ?? "desconhecido"}.`);
         safeClose();
       });
     },

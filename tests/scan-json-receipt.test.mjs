@@ -316,3 +316,43 @@ test('a receipt larger than the pipe buffer drains completely', () => {
   assert.equal(receipt.added_urls.length, 20000);
   assert.ok(Buffer.byteLength(result.stdout) > 65536);
 });
+
+test('main Workday max_pages cap propagates provider truncation through receipt and stops the search ladder', async t => {
+  if (!existsSync(join(ROOT, 'web', 'src'))) return t.skip('web/ not present');
+  await import('../web/tests/helpers/web-ts-alias-loader.mjs');
+  const { runDiscovery } = await import('../web/src/lib/core/scan.ts');
+  const { parseMarketReceipt } = await import('../web/src/lib/core/market-merge.mjs');
+  const board = { name: 'Auchan Portugal', provider: 'workday', enabled: true, max_pages: 1, careers_url: 'https://auchanportugal.wd3.myworkdayjobs.com/auchan-retail' };
+  const root = workspace(`job_boards:\n  - ${JSON.stringify(board)}\n`);
+  try {
+    const bootstrap = `
+      import workday from ${JSON.stringify(new URL('../providers/workday.mjs', import.meta.url).href)};
+      const fetchWorkday = workday.fetch;
+      workday.fetch = async (entry, ctx) => {
+        const jobs = await fetchWorkday(entry, { ...ctx, fetchJson:async () => ({ total:40, jobPostings:Array.from({length:20}, (_,i) => ({ title:'Sales Assistant', externalPath:'/job/Lisboa/Sales_JR'+i, locationsText:'Lisboa, Portugal', postedOn:'Publicado hoje' })) }) });
+        if (jobs.workdayTruncated !== 'structural') throw new Error('main cap did not mark structural truncation');
+        return jobs;
+      };
+      globalThis.fetch = () => { throw new Error('Network forbidden in fixture'); };
+      process.argv = [process.execPath, ${JSON.stringify(SCAN)}, '--dry-run', '--json'];
+      await import(${JSON.stringify(new URL('../scan.mjs', import.meta.url).href)});`;
+    const result = runJson(root, bootstrap);
+    const receipt = JSON.parse(result.stdout);
+    assert.equal(receipt.offers.length, 20, result.stderr);
+    assert.equal(result.status, 2, result.stderr);
+    assert.deepEqual(receipt.errors, [{ company: board.name, error: 'workday: incomplete pagination (structural)' }]);
+    const plan = { opportunityType:'employment', markets:['portugal'], jobBoards:[board], skippedSources:[], locationPolicy:{markets:['portugal'], strict:true} };
+    const run = parseMarketReceipt(result.stdout, result.status, plan);
+    assert.equal(run.status, 'partial');
+    assert.equal(run.sources[0].state, 'error');
+    assert.equal(run.offers.length, 20);
+    // Even if every recovered offer is filtered out, this cannot certify zero.
+    const phases = [];
+    await runDiscovery({ opportunityType:'employment', positive:['Quantum Mechanic'], negative:[], allow:[], block:[], blockHard:[], alwaysAllow:[], sinceDays:7, ats:[], markets:['portugal'], limitPerAts:150 }, () => {}, async (search, emit) => {
+      phases.push(search.phase);
+      emit({ kind:'summary', companiesScanned:run.scanned, unreachable:0, matches:0, status:run.status, sources:run.sources });
+      return [];
+    });
+    assert.deepEqual(phases, ['precise']);
+  } finally { rmSync(root, { recursive:true, force:true }); }
+});

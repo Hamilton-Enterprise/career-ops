@@ -3,10 +3,55 @@ import { test } from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { registerHooks } from "node:module";
+import { createRequire, registerHooks } from "node:module";
+import * as React from "react";
+import { loadBindings, transform } from "next/dist/build/swc/index.js";
 import { setTimeout as delay } from "node:timers/promises";
 import "../helpers/web-ts-alias-loader.mjs";
 import { makeAiStreamParser } from "../../src/lib/explore-ai.ts";
+import * as exploreAi from "../../src/lib/explore-ai.ts";
+import * as explore from "../../src/lib/explore.ts";
+import * as exploreState from "../../src/lib/explore-state.mjs";
+import * as exploreError from "../../src/lib/explore-error.mjs";
+
+await loadBindings();
+const require = createRequire(import.meta.url);
+const { code: providerCode } = await transform(fs.readFileSync(new URL('../../src/components/explore/explore-provider.tsx', import.meta.url), 'utf8'), {
+  filename:'explore-provider.tsx', jsc:{parser:{syntax:'typescript',tsx:true},transform:{react:{runtime:'automatic'}}}, module:{type:'commonjs'},
+});
+
+async function providerOutcome(t, text) {
+  const slots = [];
+  let cursor = 0;
+  const hooks = { ...React, useState(initial) {
+    const index = cursor++;
+    if (!(index in slots)) slots[index] = typeof initial === 'function' ? initial() : initial;
+    return [slots[index], next => { slots[index] = typeof next === 'function' ? next(slots[index]) : next; }];
+  }, useRef(initial) {
+    const index = cursor++;
+    if (!(index in slots)) slots[index] = {current:initial};
+    return slots[index];
+  }, useCallback:fn => fn, useMemo:fn => fn(), useEffect() {} };
+  for (const [name, value] of Object.entries({
+    sessionStorage:{getItem:() => null}, localStorage:{getItem:() => '{"cliId":"claude"}'},
+    window:{history:{replaceState() {}},setTimeout:fn => fn()},
+    fetch:async url => url === '/api/explore/ai/known' ? Response.json({urls:[]}) : new Response(text),
+  })) {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+    Object.defineProperty(globalThis, name, {configurable:true,value});
+    t.after(() => descriptor ? Object.defineProperty(globalThis,name,descriptor) : delete globalThis[name]);
+  }
+  const module = {exports:{}};
+  new Function('require','module','exports',providerCode)(id => ({
+    react:hooks, 'next/navigation':{useRouter:() => ({refresh() {}})}, '@/lib/explore':explore,
+    '@/lib/explore-ai':exploreAi, '@/lib/explore-state.mjs':exploreState, '@/lib/explore-error.mjs':exploreError,
+    '@/lib/whats-new.mjs':{},
+  }[id] ?? require(id)),module,module.exports);
+  const render = () => { cursor = 0; return module.exports.ExploreProvider({children:null}).props.value; };
+  render().setAiIntent('Synthetic public search');
+  await render().discoverAI();
+  return render();
+}
 
 // The existing alias loader handles @/. The route also imports ./prompt without
 // an extension, which Next resolves but Node's ESM loader does not.
@@ -62,7 +107,9 @@ const behavior = ${JSON.stringify(behavior)};
 if (behavior === "ignore-term") process.on("SIGTERM", () => {});
 fs.appendFileSync(${JSON.stringify(recordFile)}, JSON.stringify({ id: ${JSON.stringify(id)}, args, cwd: process.cwd(), pid: process.pid, resultDir, home: process.env.HOME }) + "\\n");
 process.stderr.write("fatal SECRET_FROM_STDERR query=PRIVATE_PROMPT\\n");
-if (behavior === "hang" || behavior === "ignore-term") {
+if (behavior === "empty") {
+  process.exitCode = 0;
+} else if (behavior === "hang" || behavior === "ignore-term") {
   setInterval(() => {}, 1000);
 } else if (behavior === "failure" || behavior === "whitespace-failure") {
   if (behavior === "whitespace-failure") process.stdout.write("   ");
@@ -156,6 +203,7 @@ for (const { id, name } of agents) {
     const parsed = makeAiStreamParser().feed(text);
     assert.equal(parsed.filter((chunk) => chunk.kind === "offer").length, 1);
     assert.equal(parsed.find((chunk) => chunk.kind === "offer").offer.url, offer.url);
+    assert.equal(parsed.find(chunk => chunk.kind === 'terminal')?.status, 'success');
     assertPreserved(f);
   });
 
@@ -170,6 +218,9 @@ for (const { id, name } of agents) {
     assert.doesNotMatch(text, /SECRET_FROM_STDERR|PRIVATE_PROMPT/);
     assert.equal(fs.existsSync(f.records()[0].cwd), false);
     assertPreserved(f);
+    const outcome = await providerOutcome(t, text);
+    assert.equal(outcome.phase, 'failed');
+    assert.match(outcome.error, /(?:code|código) 7/);
   });
 
   test(`${id}: stream cancellation terminates the child and removes its directory`, async (t) => {
@@ -199,6 +250,9 @@ for (const { id, name } of agents) {
     assert.doesNotMatch(text, /SECRET_FROM_STDERR|PRIVATE_PROMPT/);
     assert.equal(fs.existsSync(f.records()[0].cwd), false, "timeout must remove cwd");
     assertPreserved(f);
+    const outcome = await providerOutcome(t, text);
+    assert.equal(outcome.phase, 'failed');
+    assert.match(outcome.error, /tempo limite/);
   });
 
   test(`${id}: spawn error removes the temporary directory and exposes no raw error`, async (t) => {
@@ -222,6 +276,9 @@ for (const { id, name } of agents) {
     assert.doesNotMatch(text, /PRIVATE_INTERPRETER|SECRET_FROM_STDERR|PRIVATE_PROMPT/);
     assert.ok(cwd && !fs.existsSync(cwd), "spawn error must clean the invocation directory");
     assertPreserved(f);
+    const outcome = await providerOutcome(t, text);
+    assert.equal(outcome.phase, 'failed');
+    assert.match(outcome.error, /iniciar/);
   });
 }
 
@@ -232,11 +289,28 @@ for (const { id } of agents) {
     assert.match(text, /(?:code|código) 7/);
   });
 
-  test(`${id}: a usable result survives a non-zero exit without a duplicate diagnostic`, async (t) => {
+  test(`${id}: a usable result survives a non-zero exit with a structured partial receipt`, async (t) => {
     fixture(t, "success-nonzero");
     const text = await (await invoke(id)).text();
     assert.match(text, /<<offer:/);
-    assert.doesNotMatch(text, /(?:code|código) 7|SECRET_FROM_STDERR/);
+    const parsed = makeAiStreamParser().feed(text);
+    assert.equal(parsed.find(chunk => chunk.kind === 'terminal')?.status, 'partial');
+    assert.doesNotMatch(parsed.filter(chunk => chunk.kind === 'narration').map(chunk => chunk.text).join(''), /(?:code|código) 7|SECRET_FROM_STDERR/);
+    const outcome = await providerOutcome(t, text);
+    assert.equal(outcome.phase, 'results');
+    assert.equal(outcome.offers.length, 1);
+    assert.equal(outcome.partial, true);
+    assert.match(outcome.error, /(?:code|código) 7/);
+  });
+
+  test(`${id}: successful zero remains empty with a structured success receipt`, async t => {
+    fixture(t, 'empty');
+    const text = await (await invoke(id)).text();
+    const parsed = makeAiStreamParser().feed(text);
+    assert.equal(parsed.find(chunk => chunk.kind === 'terminal')?.status, 'success');
+    const outcome = await providerOutcome(t, text);
+    assert.equal(outcome.phase, 'empty-loose');
+    assert.equal(outcome.error, '');
   });
 }
 

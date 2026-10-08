@@ -74,3 +74,13 @@ export function matchOccupationTitle(title, occupations) {
   }
   return null;
 }
+
+/** Effective terms already encode precise/broad intent; unknown and ambiguous
+ * queries keep their boundary-aware literal fallback.
+ * @param {string} title @param {string[]} terms */
+export function matchesOccupationTerms(title, terms) {
+  if (!terms.length) return true;
+  const evidence = matchOccupationTitle(title, resolveOccupations(terms).resolved);
+  if (evidence && terms.some(term => normalized(term) === normalized(evidence.alias))) return true;
+  return terms.some(term => containsPhrase(normalized(title), term));
+}

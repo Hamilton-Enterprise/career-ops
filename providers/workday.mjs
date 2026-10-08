@@ -1144,6 +1144,9 @@ export default {
     // stopReason to 'cap'), so it is the one place that opts out.
     const syntheticEntries = ctx?.syntheticEntries === true;
     if (stopReason === STOP_REASON.CAP && !root.clamped) {
+      // A main-query cap with unread postings is the same fixed bound as a
+      // capped split. Keep recovered offers, but never certify full coverage.
+      if (total === null || jobs.length < total) jobs.workdayTruncated = WORKDAY_TRUNCATED_REASON.STRUCTURAL;
       const jobsSummary = `${jobs.length}${total !== null ? ` of ${total}` : ''} jobs`;
       if (!syntheticEntries) {
         console.error(`⚠️  workday: ${entry.name} truncated at max_pages=${maxPages} (${jobsSummary}) — raise max_pages on this entry for more`);

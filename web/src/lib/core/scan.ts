@@ -11,6 +11,7 @@ import { mergeDiscoveredOffers, sourceBackedFields } from "./market-merge.mjs";
 import { buildMarketPlan, classifyMarketLocation } from "@/lib/market-presets.mjs";
 import { buildSearchPlan } from "@/lib/search-plan.mjs";
 import { rankOpportunities } from "@/lib/opportunity-rank.mjs";
+import { matchesOccupationTerms } from "@/lib/occupation-match.mjs";
 
 export type { DiscoveredOffer, ScanEvent, AtsSource } from "@/lib/explore";
 export { ATS_SOURCES } from "@/lib/explore";
@@ -457,7 +458,7 @@ async function runDiscoveryPass(searchPlan: SearchPlan, onEvent: (e: ScanEvent) 
       return await runAtsDiscovery({ ...filters, ats }, event => {
         if (event.kind === "summary") atsSummary = event;
         else if (event.kind === "error") atsErrors.push(event.message);
-        else if (event.kind !== "offer" || classifyMarketLocation(event.offer, plan).accepted) onEvent(event);
+        else if (event.kind !== "offer" || (classifyMarketLocation(event.offer, plan).accepted && matchesOccupationTerms(event.offer.title, filters.positive))) onEvent(event);
       });
     } catch (error) {
       atsErrors.push(error instanceof Error ? error.message : NO_OUTPUT);
@@ -467,7 +468,9 @@ async function runDiscoveryPass(searchPlan: SearchPlan, onEvent: (e: ScanEvent) 
   // Both selected paths start before either is awaited. A single selected path
   // runs alone, so an unavailable sibling scanner cannot affect that search.
   const atsPromise = ats.length ? discoverAts() : null;
-  const marketPromise = (filters.opportunityType === "freelance" || filters.markets.length) ? runMarketDiscovery(filters, onEvent, searchPlan).catch(error => ({
+  const marketPromise = (filters.opportunityType === "freelance" || filters.markets.length) ? runMarketDiscovery(filters, event => {
+    if (event.kind !== "offer" || matchesOccupationTerms(event.offer.title, filters.positive)) onEvent(event);
+  }, searchPlan).catch(error => ({
     offers: [] as DiscoveredOffer[], valid: false, status: "failed" as const, missingLocation: 0, scanned: 0,
     sources: plan.jobBoards.map(board => ({ source: board.name, state: "error" as const, message: error instanceof Error ? error.message : NO_OUTPUT })),
   })) : null;
@@ -477,7 +480,7 @@ async function runDiscoveryPass(searchPlan: SearchPlan, onEvent: (e: ScanEvent) 
   const eligible = mergeDiscoveredOffers(atsOffers, marketRun?.offers ?? []).filter(offer => {
     const classification = classifyMarketLocation(offer, plan);
     if (classification.reason === "missing-location") missingLocation++;
-    return classification.accepted;
+    return classification.accepted && matchesOccupationTerms(offer.title, filters.positive);
   });
   const offers = rankOpportunities(eligible.map(offer => ({ ...offer, observedAt })), searchPlan, observedAt);
   const atsValid = Boolean(atsSummary) || atsOffers.length > 0;

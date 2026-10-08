@@ -42,10 +42,11 @@ test("sparse live ATS then richer final JSON fills fields before all-source elig
   });
   const live = { ...offer, title: "Operador de Loja", location: "", source: "greenhouse-full", ats: "greenhouse", observedAt: "2026-10-08T12:00:00.000Z" };
   const final = { ...live, location: "Lisbon, Portugal", postedAt: "2026-10-08", contractType: "Permanent", hours: "40 h/semana", applicationDeadline: "2026-11-01", vacancyCount: 3, salary: { min: 24000, currency: "EUR" }, availabilityEvidence: "feed-seen", sources: ["greenhouse-full", "Employer"] };
-  const market = { ...offer, title: "Retail Assistant", url: "https://acme.example/market", location: "Lisboa", postedAt: "2026-10-08" };
+  const market = { ...offer, title: "Retail Assistant", url: "https://acme.example/market", location: "Lisboa", postedAt: "" };
   fs.writeFileSync(path.join(root, "scan-ats-full.mjs"), `// --json capHit\nconsole.error(${JSON.stringify(JSON.stringify({ kind: "offer", ...live }))}); console.log(${JSON.stringify(JSON.stringify({ offers: [final], companiesAvailable: 1, companiesScanned: 1, capHit: false, datasetStatus: { greenhouse: "ok" }, unreachableBoards: 0, postingsDroppedNoDate: 0 }))});`);
   fs.writeFileSync(path.join(root, "scan.mjs"), `console.log(${JSON.stringify(receipt([market, { ...market, url: "https://acme.example/outside", location: "Madrid, Spain" }]))});`);
-  const filters = { opportunityType: "employment", positive: ["Operador de Loja"], negative: [], allow: ["Lisboa"], block: [], blockHard: [], alwaysAllow: [], sinceDays: 7, ats: ["greenhouse"], markets: ["portugal"], limitPerAts: 150 };
+  // Both terms are explicitly requested so both sources are precise-eligible.
+  const filters = { opportunityType: "employment", positive: ["Operador de Loja", "Retail Assistant"], negative: [], allow: ["Lisboa"], block: [], blockHard: [], alwaysAllow: [], sinceDays: 7, ats: ["greenhouse"], markets: ["portugal"], limitPerAts: 150 };
   const events = [];
   const offers = await runDiscovery(filters, event => events.push(event));
   assert.equal(offers.length, 2);
@@ -55,7 +56,7 @@ test("sparse live ATS then richer final JSON fills fields before all-source elig
   assert.equal(offers[0].postedAt, "2026-10-08");
   assert.deepEqual(offers[0].sources, ["greenhouse-full", "Employer"]);
   assert.equal(offers[0].match.components.role, 60);
-  assert.equal(offers[1].match.components.role, 50);
+  assert.equal(offers[1].match.components.role, 60);
   assert.equal(offers[0].observedAt, offers[1].observedAt);
   assert.equal(events.find(event => event.kind === "summary").matches, 2);
   assert.ok(!offers.some(result => result.url.endsWith("outside")));

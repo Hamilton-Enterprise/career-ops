@@ -525,6 +525,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   // AI search — orchestrate modes/web-search.md via the user's CLI, streamed.
   const discoverAI = useCallback(async () => {
     if (runningRef.current) return;
+    const opportunityType = filtersRef.current.opportunityType;
     const intent = aiIntentRef.current.trim();
     if (!intent) return;
     let cliId: string | null = null;
@@ -544,6 +545,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setAiTrace([]);
     setAiCost({ searches: 0, candidates: 0, fetches: 0 });
     setError("");
+    setPartial(false);
     setScannerMissing(false);
     setStatus("A iniciar a pesquisa na web pública…");
     rewriteUrl(filtersRef.current, { mode: "ai", aiIntent: intent });
@@ -559,15 +561,20 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
 
     const acc: DiscoveredOffer[] = [];
     let sawError = "";
+    let terminalSeen = false;
     let sawScannerMissing = false; // the structured 400 (capability absent from this checkout), not a runtime error
     const handle = (chunks: AiTraceChunk[]) => {
       for (const ch of chunks) {
         if (ch.kind === "offer") {
-          acc.push(ch.offer);
-          setOffers((o) => [...o, ch.offer]);
+          const offer = { ...ch.offer, opportunityType };
+          acc.push(offer);
+          setOffers((o) => [...o, offer]);
           setMatchCount(acc.length);
           setAiCost((c) => ({ ...c, candidates: acc.length }));
           setPhase("hunting");
+        } else if (ch.kind === "terminal") {
+          terminalSeen = true;
+          sawError = ch.status === "success" ? "" : ch.message || "A pesquisa assistida não terminou normalmente.";
         } else {
           setAiTrace((t) => [...t, ch]);
           if (ch.kind === "narration") {
@@ -611,12 +618,17 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
           handle(parser.feed(dec.decode(value, { stream: true })));
         }
         handle(parser.flush());
+        if (!terminalSeen) sawError = "A pesquisa assistida terminou sem confirmar os resultados.";
       }
     } catch (e) {
       sawError = e instanceof Error ? e.message : "Erro durante a receção dos resultados.";
     }
 
     runningRef.current = false;
+    if (sawError) {
+      setError(sawError);
+      setPartial(acc.length > 0);
+    }
     if (acc.length > 0) {
       setMatchCount(acc.length);
       setPhase("revealing");

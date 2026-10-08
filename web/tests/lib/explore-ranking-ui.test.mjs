@@ -108,7 +108,7 @@ test('healthy zero keeps its receipt in the completed explorer layout', async ()
 });
 
 test('provider persists final ranked cards and broad receipt separately for each opportunity type', async t => {
-  const slots = [], effects = [], stored = new Map(), requested = [], urls = [];
+  const slots = [], effects = [], stored = new Map(), requested = [], urls = [], pipelinePayloads = [];
   let cursor = 0;
   const restore = (name, value) => {
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
@@ -117,11 +117,15 @@ test('provider persists final ranked cards and broad receipt separately for each
   };
   restore('sessionStorage', { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key) });
   restore('localStorage', { getItem: () => JSON.stringify({ cliId: 'codex' }) });
-  restore('window', { history: { replaceState: (_a, _b, url) => urls.push(url) }, setTimeout: fn => fn() });
+  restore('window', { history: { replaceState: (_a, _b, url) => urls.push(url) }, setTimeout: fn => fn(), dispatchEvent() {} });
   const expansion = { phase: 'broad', changes: ['Janela de pesquisa: 7 → 30 dias.'], originalSinceDays: 7, effectiveSinceDays: 30, termsAdded: [], locationsAdded: [] };
   restore('fetch', async (url, options) => {
     if (url === '/api/explore/ai/known') return new Response(JSON.stringify({ urls: [] }));
     if (url === '/api/explore/ai') return new Response(`<<offer:${JSON.stringify({ ...offer, why: 'Public role.' })}>>`);
+    if (url === '/api/explore/add') {
+      pipelinePayloads.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ added:1 }));
+    }
     requested.push([url, JSON.parse(options.body).opportunityType]);
     const events = [
       { kind: 'phaseStart', phase: 'precise', sinceDays: 7, free: true },
@@ -179,6 +183,17 @@ test('provider persists final ranked cards and broad receipt separately for each
   assert.equal(sp.get('mode'), 'ai');
   assert.equal(sp.get('intent'), 'Find Flutter');
   assert.equal(renderProvider().offers[0].verification, 'unconfirmed');
+  ctx = renderProvider();
+  assert.equal(ctx.offers[0].opportunityType, 'freelance', 'assisted parser results retain the active type');
+  context = ctx;
+  const html = render(DiscoveryCard, { offer:ctx.offers[0], inPipeline:false });
+  assert.match(html, /Guardar oportunidade/);
+  assert.doesNotMatch(html, />Avaliar /);
+  effects.at(-1)();
+  const saved = JSON.parse(stored.get('career-ops:explore-results:freelance'));
+  assert.equal(saved.offers[0].opportunityType, 'freelance');
+  await ctx.addToPipeline(ctx.offers);
+  assert.equal(pipelinePayloads[0].offers[0].opportunityType, 'freelance');
 });
 
 test('child URL initialization survives the parent mount hydration with and without a saved snapshot', async t => {
@@ -271,4 +286,23 @@ test('child URL initialization survives the parent mount hydration with and with
     assert.doesNotMatch(html, /Pesquisar na web|Snapshot assistido sintético|<textarea/);
     assert.match(html, /Não foram encontradas ofertas/);
   });
+  for (const search of ['?mode=scan', '?q=Sales%20Assistant&ats=greenhouse&markets=', '']) {
+    await t.test(`direct URL intent wins after hydration while plain navigation may restore AI: ${search || 'plain'}`, () => {
+      slots.parent.length = slots.child.length = effects.child.length = 0;
+      stored.clear();
+      window.location.search = search;
+      stored.set('career-ops:explore-results:employment', JSON.stringify({
+        v:1, mode:'ai', phase:'results', offers:[offer], aiIntent:'Saved assisted intent',
+      }));
+      renderParent();
+      owner = 'child'; cursor = 0;
+      ExplorerView({ seed:{ filters:explore.DEFAULT_FILTERS, seededFrom:[] }, inboxSnapshot:[], appsSnapshot:[], rootExists:true });
+      effects.child.forEach(effect => effect());
+      effects.parent.forEach(effect => effect());
+      renderParent();
+      assert.equal(ctx.mode, search ? 'scan' : 'ai');
+      assert.equal(ctx.aiIntent, search ? '' : 'Saved assisted intent');
+      assert.equal(ctx.offers.length, 1, 'hydrated results survive explicit surface selection');
+    });
+  }
 });
