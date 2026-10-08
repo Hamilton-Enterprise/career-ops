@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildSearchPlan } from "../../src/lib/search-plan.mjs";
+import { readFileSync } from "node:fs";
+import * as yaml from "js-yaml";
 import { buildMarketPlan, classifyMarketLocation } from "../../src/lib/market-presets.mjs";
+import { FREELANCE_SHORTCUTS } from "../../src/lib/freelance-presets.mjs";
+import { OCCUPATION_CONCEPTS } from "../../src/lib/occupation-concepts.mjs";
 
 const filters = { opportunityType: "employment", positive: ["Operador de Loja"], negative: ["manager"], allow: ["Lisboa"], block: ["Porto"], blockHard: ["USA"], alwaysAllow: [], sinceDays: 7, ats: ["workday"], markets: ["portugal"], limitPerAts: 150 };
 
@@ -53,11 +57,60 @@ test("unknown terms remain literal; unchanged broad plans have an empty receipt"
   assert.deepEqual(plan.occupationIds, []);
 });
 
-test("positive expansion is capped at 12 with originals first and exclusions intact", () => {
-  const plan = buildSearchPlan({ ...filters, positive: ["Ajudante de Farmácia", "Sales Assistant", "Operador de Loja"], markets: ["europe"] }, "broad");
+test("only automatic additions are capped at 12, with originals first and exclusions intact", () => {
+  const input = { ...filters, positive: ["Ajudante de Farmácia", "Sales Assistant", "Operador de Loja"], markets: ["europe"] };
+  const precise = buildSearchPlan(input, "precise");
+  const plan = buildSearchPlan(input, "broad");
   assert.deepEqual(plan.effectiveFilters.positive.slice(0, 3), ["Ajudante de Farmácia", "Sales Assistant", "Operador de Loja"]);
-  assert.equal(plan.effectiveFilters.positive.length, 12);
+  assert.deepEqual(plan.effectiveFilters.positive.slice(0, precise.effectiveFilters.positive.length), precise.effectiveFilters.positive);
+  assert.equal(plan.expansion.termsAdded.length, 12);
+  assert.equal(plan.effectiveFilters.positive.length, precise.effectiveFilters.positive.length + 12);
+  assert.ok(plan.expansion.termsOmitted.length > 0);
+  assert.ok(plan.expansion.changes.includes(`Traduções não incluídas por limite: ${plan.expansion.termsOmitted.join(", ")}.`));
   assert.deepEqual(plan.effectiveFilters.negative, ["manager"]);
+});
+
+const PRESERVED_FIELDS = ["opportunityType", "negative", "block", "blockHard", "alwaysAllow", "markets"];
+
+test("all 18 freelance shortcut terms survive both phases", () => {
+  const positive = [...new Set(Object.values(FREELANCE_SHORTCUTS).flat())];
+  assert.equal(positive.length, 18);
+  const input = { ...filters, opportunityType: "freelance", positive, allow: [], markets: ["remote"] };
+  const original = structuredClone(input);
+  for (const phase of ["precise", "broad"]) {
+    const plan = buildSearchPlan(input, phase);
+    const missing = positive.filter(term => !plan.effectiveFilters.positive.includes(term));
+    assert.deepEqual(missing, [], phase);
+    for (const field of PRESERVED_FIELDS) assert.deepEqual(plan.effectiveFilters[field], original[field], `${phase} ${field}`);
+  }
+  assert.deepEqual(input, original);
+});
+
+test("all 37 template title_filter positives survive both phases", () => {
+  const template = yaml.load(readFileSync(new URL("../../../templates/portals.example.yml", import.meta.url), "utf8"));
+  const positive = template.title_filter.positive;
+  assert.equal(positive.length, 37);
+  const input = { ...filters, positive, markets: ["europe"] };
+  for (const phase of ["precise", "broad"]) {
+    const plan = buildSearchPlan(input, phase);
+    assert.deepEqual(positive.filter(term => !plan.effectiveFilters.positive.includes(term)), [], phase);
+    for (const field of PRESERVED_FIELDS) assert.deepEqual(plan.effectiveFilters[field], input[field], `${phase} ${field}`);
+  }
+});
+
+test("broad additions cover every resolved occupation and report what the limit left out", () => {
+  const input = { ...filters, positive: ["Técnico de Farmácia", "Assistente de Vendas", "Operador de Loja"], markets: ["spain", "netherlands"] };
+  const plan = buildSearchPlan(input, "broad");
+  for (const id of ["pharmacy-assistant", "sales-assistant", "retail-assistant"]) {
+    const aliases = Object.values(OCCUPATION_CONCEPTS.find(concept => concept.id === id).aliases).flat();
+    assert.ok(plan.expansion.termsAdded.some(term => aliases.includes(term)), id);
+  }
+  assert.ok(plan.expansion.termsAdded.length <= 12);
+  assert.ok(plan.expansion.termsOmitted.length > 0);
+  assert.ok(!plan.expansion.termsOmitted.some(term => plan.effectiveFilters.positive.includes(term)));
+  assert.ok(plan.expansion.changes.some(change => change.startsWith("Traduções não incluídas por limite: ")));
+  for (const field of PRESERVED_FIELDS) assert.deepEqual(plan.effectiveFilters[field], input[field], field);
+  assert.deepEqual(buildSearchPlan(input, "precise").expansion.termsOmitted, []);
 });
 
 test("market classifier uses the same phase-aware geography as the temporary allow list", () => {
