@@ -12,9 +12,23 @@ identifier=io.career-ops.local
 [[ "$destination" == /* && "$destination" == *.app && ! -L "$destination" ]] || {
     printf '%s\n' 'O destino deve ser um caminho absoluto terminado em .app, sem ligação simbólica.' >&2; exit 2;
 }
-[[ "$previous_dir" == /* && "$previous_dir" != */.Trash && "$previous_dir" != */.Trash/* ]] || {
-    printf '%s\n' 'A pasta da versão anterior deve ser um caminho absoluto fora do Lixo.' >&2; exit 2;
+# The previous-version folder may not exist yet: resolve its deepest existing
+# ancestor so a symlink cannot smuggle it into a Trash folder.
+resolve_path() {
+    local path="$1" rest=""
+    while [[ ! -d "$path" ]]; do rest="/$(basename "$path")$rest"; path="$(dirname "$path")"; done
+    printf '%s%s' "$(cd "$path" && pwd -P)" "$rest"
 }
+trash_or_relative() {
+    case "$1" in
+        */../*|*/..|*/.Trash|*/.Trash/*|*/.Trashes|*/.Trashes/*) return 0 ;;
+        /*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+if trash_or_relative "$previous_dir" || trash_or_relative "$(resolve_path "$previous_dir")"; then
+    printf '%s\n' 'A pasta da versão anterior deve ser um caminho absoluto fora do Lixo.' >&2; exit 2
+fi
 
 bundle_identifier() { /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$1/Contents/Info.plist" 2>/dev/null; }
 verify_bundle() {
@@ -39,16 +53,23 @@ name="$(basename "$destination")"
 mkdir -p "$parent"
 staging="$parent/.$name.staging.$$"
 held="$parent/.$name.previous.$$"
+lock="$parent/.$name.install.lock"
+locked=false
 promoted=false
 cleanup() {
     if ! "$promoted"; then
         if [[ -e "$held" && ! -e "$destination" ]]; then /bin/mv -- "$held" "$destination"; fi
         rm -rf -- "$staging"
     fi
+    if "$locked"; then rmdir -- "$lock"; fi
 }
 trap cleanup EXIT
 
-[[ ! -e "$staging" && ! -e "$held" ]] || { printf '%s\n' 'Já existe uma instalação a decorrer para este destino.' >&2; exit 1; }
+mkdir -- "$lock" 2>/dev/null || {
+    printf 'Já está a decorrer outra instalação para este destino. Se não estiver, apague a pasta %s e tente de novo.\n' "$lock" >&2
+    exit 1
+}
+locked=true
 cp -R "$bundle" "$staging"
 verify_bundle "$staging" || {
     printf '%s\n' 'A nova versão não passou na verificação (assinatura, Info.plist, executável ou identificador). A aplicação instalada ficou como estava.' >&2
@@ -64,16 +85,24 @@ if [[ "${CAREER_OPS_INSTALL_FAIL_PROMOTE:-}" == 1 ]] || ! rename "$staging" "$de
     fi
     exit 1
 fi
-if ! verify_bundle "$destination"; then
-    rename "$destination" "$staging" || true
-    printf 'A versão instalada não passou na verificação final. A versão anterior foi reposta em %s.\n' "$destination" >&2
+if [[ "${CAREER_OPS_INSTALL_FAIL_FINAL_CHECK:-}" == 1 ]] || ! verify_bundle "$destination"; then
+    if ! rename "$destination" "$staging"; then
+        printf 'A versão instalada não passou na verificação final e não foi possível retirá-la de %s.\n' "$destination" >&2
+    elif [[ ! -e "$held" ]]; then
+        printf 'A versão instalada não passou na verificação final e foi retirada. Não havia versão anterior, por isso não ficou nenhuma aplicação em %s.\n' "$destination" >&2
+    elif rename "$held" "$destination"; then
+        printf 'A versão instalada não passou na verificação final e foi retirada. A versão anterior foi reposta em %s.\n' "$destination" >&2
+    else
+        printf 'A versão instalada não passou na verificação final e foi retirada. A versão anterior continua em %s.\n' "$held" >&2
+    fi
     exit 1
 fi
 promoted=true
 printf 'Aplicação instalada: %s\n' "$destination"
 
 [[ -e "$held" ]] || exit 0
-previous="$previous_dir/$name"
+# Without the .app extension the kept copy is not a bundle LaunchServices can open.
+previous="$previous_dir/$name.previous"
 incoming="$previous_dir/.$name.incoming.$$"
 outgoing="$previous_dir/.$name.outgoing.$$"
 if mkdir -p "$previous_dir" && rename "$held" "$incoming" \
@@ -81,6 +110,8 @@ if mkdir -p "$previous_dir" && rename "$held" "$incoming" \
     && rename "$incoming" "$previous"; then
     rm -rf -- "$outgoing"
     printf 'Versão anterior guardada em: %s\n' "$previous"
+    printf 'Para repor a versão anterior: mv %q %q && mv %q %q\n' \
+        "$destination" "$previous_dir/$name.rejected.$(date +%Y%m%d%H%M%S)" "$previous" "$destination"
 else
     [[ -e "$previous" || ! -e "$outgoing" ]] || /bin/mv -- "$outgoing" "$previous"
     kept="$held"

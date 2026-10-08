@@ -32,13 +32,17 @@ scenario() {
 
 scenario success
 make_app "$destination" old
-make_app "$previous/Career Ops.app" older
+make_app "$previous/Career Ops.app.previous" older
 "$installer" "$case_dir/new/Career Ops.app" "$destination" "$previous" > "$case_dir/out" 2>&1
 check "sucesso: nova versão instalada" "$(marker "$destination")" new
-check "sucesso: versão anterior guardada" "$(marker "$previous/Career Ops.app")" old
+check "sucesso: versão anterior guardada" "$(marker "$previous/Career Ops.app.previous")" old
 check "sucesso: só uma versão anterior" "$(find "$previous" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" 1
 check "sucesso: sem restos junto ao destino" "$(leftovers "$apps")" 0
 check "sucesso: destino assinado" "$(codesign --verify --deep --strict "$destination" 2>&1 && echo valid)" valid
+check "sucesso: anterior guardada sem extensão .app" "$(find "$previous" -name '*.app' | wc -l | tr -d ' ')" 0
+restore="$(sed -n 's/^Para repor a versão anterior: //p' "$case_dir/out")"
+eval "$restore"
+check "sucesso: comando de reposição repõe a anterior" "$(marker "$destination")" old
 
 scenario first-install
 "$installer" "$case_dir/new/Career Ops.app" "$destination" "$previous" > "$case_dir/out" 2>&1
@@ -47,12 +51,12 @@ check "primeira instalação: sem anterior" "$(find "$previous" -mindepth 1 | wc
 
 scenario corrupt
 make_app "$destination" old
-make_app "$previous/Career Ops.app" older
+make_app "$previous/Career Ops.app.previous" older
 printf 'tampered\n' >> "$case_dir/new/Career Ops.app/Contents/Resources/marker.txt"
 status=0; "$installer" "$case_dir/new/Career Ops.app" "$destination" "$previous" > "$case_dir/out" 2>&1 || status=$?
 check "cópia corrompida: falha" "$status" 1
 check "cópia corrompida: destino intacto" "$(marker "$destination")" old
-check "cópia corrompida: anterior intacta" "$(marker "$previous/Career Ops.app")" older
+check "cópia corrompida: anterior intacta" "$(marker "$previous/Career Ops.app.previous")" older
 check "cópia corrompida: staging removido" "$(leftovers "$apps")" 0
 check "cópia corrompida: erro em português" "$(grep -c 'ficou como estava' "$case_dir/out")" 1
 
@@ -67,13 +71,60 @@ check "identificador errado: staging removido" "$(leftovers "$apps")" 0
 
 scenario promotion-failure
 make_app "$destination" old
-make_app "$previous/Career Ops.app" older
+make_app "$previous/Career Ops.app.previous" older
 status=0; CAREER_OPS_INSTALL_FAIL_PROMOTE=1 "$installer" "$case_dir/new/Career Ops.app" "$destination" "$previous" > "$case_dir/out" 2>&1 || status=$?
 check "promoção falhada: falha" "$status" 1
 check "promoção falhada: anterior reposta no destino" "$(marker "$destination")" old
-check "promoção falhada: anterior guardada intacta" "$(marker "$previous/Career Ops.app")" older
+check "promoção falhada: anterior guardada intacta" "$(marker "$previous/Career Ops.app.previous")" older
 check "promoção falhada: sem restos" "$(leftovers "$apps")" 0
 check "promoção falhada: erro em português" "$(grep -c 'versão anterior foi reposta' "$case_dir/out")" 1
+
+scenario final-check-failure
+make_app "$destination" old
+make_app "$previous/Career Ops.app.previous" older
+status=0; CAREER_OPS_INSTALL_FAIL_FINAL_CHECK=1 "$installer" "$case_dir/new/Career Ops.app" "$destination" "$previous" > "$case_dir/out" 2>&1 || status=$?
+check "verificação final falhada: falha" "$status" 1
+check "verificação final falhada: anterior reposta" "$(marker "$destination")" old
+check "verificação final falhada: anterior guardada intacta" "$(marker "$previous/Career Ops.app.previous")" older
+check "verificação final falhada: sem restos" "$(leftovers "$apps")" 0
+check "verificação final falhada: mensagem exata" "$(grep -c 'A versão anterior foi reposta' "$case_dir/out")" 1
+
+scenario final-check-first-install
+status=0; CAREER_OPS_INSTALL_FAIL_FINAL_CHECK=1 "$installer" "$case_dir/new/Career Ops.app" "$destination" "$previous" > "$case_dir/out" 2>&1 || status=$?
+check "verificação final na primeira instalação: falha" "$status" 1
+check "verificação final na primeira instalação: nada instalado" "$([[ -e "$destination" ]] && echo present || echo absent)" absent
+check "verificação final na primeira instalação: sem restos" "$(leftovers "$apps")" 0
+check "verificação final na primeira instalação: não promete reposição" "$(grep -c 'Não havia versão anterior' "$case_dir/out")" 1
+
+scenario previous-not-saved
+make_app "$destination" old
+printf 'file\n' > "$case_dir/blocker"
+status=0; "$installer" "$case_dir/new/Career Ops.app" "$destination" "$case_dir/blocker/prev" > "$case_dir/out" 2>&1 || status=$?
+kept="$(sed -n 's/.*Continua disponível em: //p' "$case_dir/out")"
+check "anterior por guardar: instalação conclui" "$status" 0
+check "anterior por guardar: nova versão instalada" "$(marker "$destination")" new
+check "anterior por guardar: anterior continua disponível" "$(marker "$kept")" old
+check "anterior por guardar: caminho indicado não é .app" "$([[ "$kept" == *.app ]] && echo app || echo plain)" plain
+
+scenario concurrent
+make_app "$destination" old
+mkdir "$apps/.Career Ops.app.install.lock"
+status=0; "$installer" "$case_dir/new/Career Ops.app" "$destination" "$previous" > "$case_dir/out" 2>&1 || status=$?
+check "instalação concorrente: recusada" "$status" 1
+check "instalação concorrente: destino intacto" "$(marker "$destination")" old
+check "instalação concorrente: trinco alheio preservado" "$([[ -d "$apps/.Career Ops.app.install.lock" ]] && echo kept || echo removed)" kept
+check "instalação concorrente: mensagem em português" "$(grep -c 'outra instalação' "$case_dir/out")" 1
+
+scenario trash-through-symlink
+make_app "$destination" old
+mkdir -p "$case_dir/vol/.Trashes/501" "$case_dir/home/.Trash"
+ln -s "$case_dir/home/.Trash" "$case_dir/looks-safe"
+for target in "$case_dir/looks-safe/prev" "$case_dir/vol/.Trashes/501/prev"; do
+    status=0; "$installer" "$case_dir/new/Career Ops.app" "$destination" "$target" > "$case_dir/out" 2>&1 || status=$?
+    check "lixo ($(basename "$(dirname "$target")")): recusado" "$status" 2
+done
+check "lixo: destino intacto" "$(marker "$destination")" old
+check "lixo: nada criado no lixo" "$(find "$case_dir/home/.Trash" "$case_dir/vol/.Trashes" -mindepth 1 | wc -l | tr -d ' ')" 1
 
 scenario foreign-destination
 mkdir -p "$destination/Contents"
