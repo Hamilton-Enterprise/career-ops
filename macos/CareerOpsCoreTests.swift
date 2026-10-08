@@ -94,11 +94,91 @@ struct CareerOpsCoreTests {
         try files.createSymbolicLink(atPath: danglingLink.path, withDestinationPath: root.appendingPathComponent("missing.pdf").path)
         assert(availableDownloadDestination(danglingLink) == nil)
         try testWebPreferences(root: root, node: node)
+        try testRuntimeArtifact(root: root, node: node)
 #if CAREER_OPS_UI_TESTS
         testJavaScriptDialogs()
         testPreferenceBridgeInWebKit()
 #endif
         print("CareerOpsCore: all assertions passed")
+    }
+
+    private static func testRuntimeArtifact(root: URL, node: URL) throws {
+        let files = FileManager.default
+        let sha = String(repeating: "a", count: 40)
+        let checkout = root.appendingPathComponent("checkout")
+        let dataRoot = root.appendingPathComponent("runtime data")
+        let runtime = root.appendingPathComponent("artifacts/runtime/\(sha)")
+        for dir in [checkout, dataRoot, runtime] {
+            try files.createDirectory(at: dir.appendingPathComponent("web/.next"), withIntermediateDirectories: true)
+            try Data().write(to: dir.appendingPathComponent("web/server.mjs"))
+            try Data("build".utf8).write(to: dir.appendingPathComponent("web/.next/BUILD_ID"))
+        }
+        let identity = runtime.appendingPathComponent("web/.next/career-ops-identity.json")
+        func writeIdentity(_ value: String) throws {
+            try Data(#"{"CAREER_OPS_BUILD_SHA":"\#(value)","CAREER_OPS_BUILD_VERSION":"1.35.0"}"#.utf8).write(to: identity)
+        }
+        try writeIdentity(sha)
+        try Data(dataRoot.path.utf8).write(to: checkout.appendingPathComponent(".career-ops-data"))
+
+        assert(runtimeArtifactProblem(runtime, buildSHA: sha) == nil)
+        let chosen = resolveLaunchConfiguration(checkout: checkout, node: node, dataRoot: nil, runtimePath: runtime.path, buildSHA: sha)
+        assert(chosen.notice == nil)
+        assert(chosen.config.codeRoot.path == runtime.path, "A valid runtime artifact wins over the checkout preference")
+        assert(chosen.config.checkout.path == checkout.path)
+        assert(validateConfiguration(chosen.config, nodeVersion: "v22.6.0") == nil)
+        assert(effectiveDataRoot(chosen.config).path == dataRoot.resolvingSymlinksInPath().path,
+               "The data root still comes from the checkout marker, never from the artifact")
+        let env = serverEnvironment(chosen.config, inherited: ["CAREER_OPS_ROOT": "/wrong", "CAREER_OPS_CODE_ROOT": "/wrong", "PATH": "/bin"])
+        assert(env["CAREER_OPS_CODE_ROOT"] == runtime.path)
+        assert(env["CAREER_OPS_ROOT"] == dataRoot.resolvingSymlinksInPath().path,
+               "The artifact has no marker, so the data root must be passed explicitly")
+        let explicitData = resolveLaunchConfiguration(checkout: checkout, node: node, dataRoot: root, runtimePath: runtime.path, buildSHA: sha)
+        assert(serverEnvironment(explicitData.config, inherited: [:])["CAREER_OPS_ROOT"] == root.path)
+
+        for runtimePath in [nil, ""] as [String?] {
+            let legacy = resolveLaunchConfiguration(checkout: checkout, node: node, dataRoot: nil, runtimePath: runtimePath, buildSHA: sha)
+            assert(legacy.notice == nil && legacy.config.runtime == nil && legacy.config.codeRoot.path == checkout.path)
+            assert(serverEnvironment(legacy.config, inherited: [:])["CAREER_OPS_ROOT"] == nil)
+        }
+
+        func assertFallback(_ runtimePath: String, buildSHA: String?, _ label: String) {
+            let fallback = resolveLaunchConfiguration(checkout: checkout, node: node, dataRoot: nil, runtimePath: runtimePath, buildSHA: buildSHA)
+            assert(fallback.config.runtime == nil && fallback.config.codeRoot.path == checkout.path, label)
+            assert(fallback.notice?.contains(checkout.path) == true, label)
+            assert(fallback.notice?.hasPrefix("O runtime instalado") == true, label)
+            assert(serverEnvironment(fallback.config, inherited: [:])["CAREER_OPS_CODE_ROOT"] == checkout.path, label)
+        }
+        assertFallback(root.appendingPathComponent("artifacts/runtime/missing").path, buildSHA: sha, "missing artifact")
+        assertFallback("relative/runtime", buildSHA: sha, "relative path")
+        assertFallback(runtime.path, buildSHA: String(repeating: "b", count: 40), "identity mismatch")
+        assertFallback(runtime.path, buildSHA: nil, "bundle without identity")
+        assertFallback(runtime.path, buildSHA: "", "bundle with empty identity")
+        assert(runtimeArtifactProblem(runtime, buildSHA: String(repeating: "b", count: 40))?.contains("outro commit") == true)
+
+        try writeIdentity("")
+        assertFallback(runtime.path, buildSHA: sha, "artifact with empty identity")
+        try Data("not json".utf8).write(to: identity)
+        assertFallback(runtime.path, buildSHA: sha, "artifact with unreadable identity")
+        try files.removeItem(at: identity)
+        assertFallback(runtime.path, buildSHA: sha, "artifact without identity")
+        try writeIdentity(sha)
+
+        try files.removeItem(at: runtime.appendingPathComponent("web/.next/BUILD_ID"))
+        assertFallback(runtime.path, buildSHA: sha, "artifact without web build")
+        try Data("build".utf8).write(to: runtime.appendingPathComponent("web/.next/BUILD_ID"))
+        try files.removeItem(at: runtime.appendingPathComponent("web/server.mjs"))
+        assertFallback(runtime.path, buildSHA: sha, "artifact without launcher")
+        try Data().write(to: runtime.appendingPathComponent("web/server.mjs"))
+        try files.createDirectory(at: runtime.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        assertFallback(runtime.path, buildSHA: sha, "artifact that is a git checkout")
+        try files.removeItem(at: runtime.appendingPathComponent(".git"))
+        assert(runtimeArtifactProblem(runtime, buildSHA: sha) == nil)
+
+        let noData = resolveLaunchConfiguration(checkout: root.appendingPathComponent("gone"), node: node, dataRoot: nil,
+                                                runtimePath: runtime.path, buildSHA: sha)
+        assert(noData.config.codeRoot.path == runtime.path)
+        assert(validateConfiguration(noData.config, nodeVersion: "v22.6.0")?.contains("pasta de dados") == true,
+               "Without a data root or checkout the artifact must not become the data root")
     }
 
     private static func testWebPreferences(root: URL, node: URL) throws {

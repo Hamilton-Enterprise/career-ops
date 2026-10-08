@@ -5,20 +5,59 @@ struct LaunchConfiguration {
     let checkout: URL
     let node: URL
     let dataRoot: URL?
+    var runtime: URL? = nil
+
+    var codeRoot: URL { runtime ?? checkout }
+}
+
+private func isDirectory(_ url: URL) -> Bool {
+    var directory: ObjCBool = false
+    return url.isFileURL && FileManager.default.fileExists(atPath: url.path, isDirectory: &directory) && directory.boolValue
+}
+
+func runtimeArtifactProblem(_ runtime: URL, buildSHA: String?) -> String? {
+    let files = FileManager.default
+    guard let buildSHA, !buildSHA.isEmpty else { return "esta aplicação não tem o commit da compilação." }
+    guard runtime.path.hasPrefix("/"), isDirectory(runtime) else { return "a pasta não existe." }
+    guard !files.fileExists(atPath: runtime.appendingPathComponent(".git").path) else { return "a pasta é um repositório git." }
+    guard files.isReadableFile(atPath: runtime.appendingPathComponent("web/server.mjs").path),
+          files.isReadableFile(atPath: runtime.appendingPathComponent("web/.next/BUILD_ID").path) else {
+        return "falta o launcher ou a compilação web."
+    }
+    guard let data = files.contents(atPath: runtime.appendingPathComponent("web/.next/career-ops-identity.json").path),
+          let identity = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let sha = identity["CAREER_OPS_BUILD_SHA"] as? String, !sha.isEmpty else {
+        return "falta a identidade da compilação."
+    }
+    guard sha == buildSHA else { return "foi compilado noutro commit (\(sha.prefix(12))) e a aplicação espera \(buildSHA.prefix(12))." }
+    return nil
+}
+
+/// The bundle's runtime artifact wins over the checkout preference; the checkout stays the
+/// fallback and the place the data-root marker is read from.
+func resolveLaunchConfiguration(checkout: URL, node: URL, dataRoot: URL?, runtimePath: String?,
+                                buildSHA: String?) -> (config: LaunchConfiguration, notice: String?) {
+    let fallback = LaunchConfiguration(checkout: checkout, node: node, dataRoot: dataRoot)
+    guard let runtimePath, !runtimePath.isEmpty else { return (fallback, nil) }
+    let runtime = URL(fileURLWithPath: runtimePath)
+    if let problem = runtimeArtifactProblem(runtime, buildSHA: buildSHA) {
+        return (fallback, "O runtime instalado (\(runtimePath)) não pode ser usado: \(problem) A usar a pasta do projeto \(checkout.path).")
+    }
+    return (LaunchConfiguration(checkout: checkout, node: node, dataRoot: dataRoot, runtime: runtime), nil)
 }
 
 func validateConfiguration(_ config: LaunchConfiguration, nodeVersion: String? = nil) -> String? {
     let files = FileManager.default
-    func isDirectory(_ url: URL) -> Bool {
-        var directory: ObjCBool = false
-        return url.isFileURL && files.fileExists(atPath: url.path, isDirectory: &directory) && directory.boolValue
-    }
-    guard isDirectory(config.checkout) else { return "A pasta do projeto não existe: \(config.checkout.path). Escolha a pasta Career Ops." }
-    guard files.isReadableFile(atPath: config.checkout.appendingPathComponent("web/server.mjs").path) else {
+    let code = config.codeRoot
+    guard isDirectory(code) else { return "A pasta do projeto não existe: \(code.path). Escolha a pasta Career Ops." }
+    guard files.isReadableFile(atPath: code.appendingPathComponent("web/server.mjs").path) else {
         return "A pasta escolhida não contém web/server.mjs. Escolha a pasta Career Ops."
     }
-    guard files.isReadableFile(atPath: config.checkout.appendingPathComponent("web/.next/BUILD_ID").path) else {
-        return "Falta a compilação web em \(config.checkout.path)/web. Execute npm run build nessa pasta e tente novamente."
+    guard files.isReadableFile(atPath: code.appendingPathComponent("web/.next/BUILD_ID").path) else {
+        return "Falta a compilação web em \(code.path)/web. Execute npm run build nessa pasta e tente novamente."
+    }
+    if config.runtime != nil, config.dataRoot == nil, !isDirectory(effectiveDataRoot(config)) {
+        return "A pasta de dados não existe: \(effectiveDataRoot(config).path). Escolha a pasta de dados."
     }
     guard config.node.isFileURL, !isDirectory(config.node), files.isExecutableFile(atPath: config.node.path) else {
         return "O executável Node não existe ou não pode ser executado: \(config.node.path). Escolha o executável Node."
@@ -95,7 +134,8 @@ func serverEnvironment(_ config: LaunchConfiguration, inherited: [String: String
         environment.removeValue(forKey: key)
     }
     if let dataRoot = config.dataRoot { environment["CAREER_OPS_ROOT"] = dataRoot.path }
-    environment["CAREER_OPS_CODE_ROOT"] = config.checkout.path
+    else if config.runtime != nil { environment["CAREER_OPS_ROOT"] = effectiveDataRoot(config).path }
+    environment["CAREER_OPS_CODE_ROOT"] = config.codeRoot.path
     let path = inherited["PATH"].flatMap { $0.isEmpty ? nil : $0 } ?? "/usr/bin:/bin:/usr/sbin:/sbin"
     environment["PATH"] = "\(config.node.deletingLastPathComponent().path):\(path)"
     return environment

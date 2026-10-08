@@ -52,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private var closing = false
     private var quitting = false
     private var failureShown = false
+    private var runtimeNotice: String?
     private var outputPipe: Pipe?
     private var log: FileHandle?
     private let outputQueue = DispatchQueue(label: "io.career-ops.local.output")
@@ -70,6 +71,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             for (key, value) in defaults where preferences.object(forKey: key) == nil {
                 preferences.set(value, forKey: key)
             }
+        }
+        if let runtimePath = Bundle.main.object(forInfoDictionaryKey: "CareerOpsRuntimePath") as? String {
+            preferences.register(defaults: ["CareerOpsRuntimePath": runtimePath])
         }
         let menu = NSMenu()
         let appItem = NSMenuItem()
@@ -128,10 +132,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         return .terminateLater
     }
 
-    private func configuration() -> LaunchConfiguration {
+    private func configuration() -> (config: LaunchConfiguration, notice: String?) {
         func path(_ key: String) -> URL { URL(fileURLWithPath: preferences.string(forKey: key) ?? "") }
-        return LaunchConfiguration(checkout: path("CareerOpsCheckoutPath"), node: path("CareerOpsNodePath"),
-                                   dataRoot: preferences.string(forKey: "CareerOpsDataRootPath").map { URL(fileURLWithPath: $0) })
+        return resolveLaunchConfiguration(checkout: path("CareerOpsCheckoutPath"), node: path("CareerOpsNodePath"),
+                                          dataRoot: preferences.string(forKey: "CareerOpsDataRootPath").map { URL(fileURLWithPath: $0) },
+                                          runtimePath: preferences.string(forKey: "CareerOpsRuntimePath"),
+                                          buildSHA: Bundle.main.object(forInfoDictionaryKey: "CareerOpsBuildSHA") as? String)
     }
 
     private func start() {
@@ -140,8 +146,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let token = generation
         webPreferences = nil
         installPreferenceScript()
-        let config = configuration()
-        if let error = validateConfiguration(config) { fail(error); return }
+        let (config, notice) = configuration()
+        runtimeNotice = notice
+        window.subtitle = notice == nil ? "" : "Runtime indisponível: a usar a pasta do projeto. Detalhes no registo."
+        if let error = validateConfiguration(config) { fail([error, notice].compactMap { $0 }.joined(separator: "\n\n")); return }
         let process = Process()
         let pipe = Pipe()
         probe = process
@@ -181,7 +189,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             }
             log = try FileHandle(forWritingTo: logURL)
             try log?.seekToEnd()
-            try log?.write(contentsOf: Data("\n--- Arranque \(Date()) ---\n".utf8))
+            try log?.write(contentsOf: Data("\n--- Arranque \(Date()) a partir de \(config.codeRoot.path) ---\n".utf8))
+            if let runtimeNotice { try log?.write(contentsOf: Data("\(runtimeNotice)\n".utf8)) }
         } catch { fail("Não foi possível abrir o registo local: \(error.localizedDescription)"); return }
         webPreferences = WebPreferenceStore(defaults: preferences, dataRoot: effectiveDataRoot(config))
         installPreferenceScript()
@@ -192,8 +201,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         outputPipe = pipe
         origin = nil
         process.executableURL = config.node
-        process.arguments = [config.checkout.appendingPathComponent("web/server.mjs").path, "start", "-p", "0"]
-        process.currentDirectoryURL = config.checkout.appendingPathComponent("web")
+        process.arguments = [config.codeRoot.appendingPathComponent("web/server.mjs").path, "start", "-p", "0"]
+        process.currentDirectoryURL = config.codeRoot.appendingPathComponent("web")
         process.environment = serverEnvironment(config, inherited: ProcessInfo.processInfo.environment)
         process.standardOutput = pipe
         process.standardError = pipe
