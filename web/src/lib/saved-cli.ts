@@ -1,4 +1,4 @@
-import { keepIfInstalled, pickSoleInstalled } from "./cli-pick.mjs";
+import { actionBlockReason, keepIfInstalled, pickSoleInstalled } from "./cli-pick.mjs";
 
 export const CONFIG_KEY = "career-ops:config";
 
@@ -60,6 +60,25 @@ const CLIS_TIMEOUT_MS = 5000;
 export async function resolveCliId(
   onStale?: (stale: string, replacement: string | null) => void,
 ): Promise<string | null> {
+  return (await resolveWithClis(onStale)).cliId;
+}
+
+/**
+ * resolveCliId() plus whether that CLI may run `action` (an /api/run kind or an
+ * agent-availability.mjs action id). `blocked` is the PT-PT reason when the
+ * route would refuse it, so the caller can stop before the request.
+ */
+export async function resolveCliForAction(
+  action: string,
+  onStale?: (stale: string, replacement: string | null) => void,
+): Promise<{ cliId: string | null; blocked: string | null }> {
+  const { cliId, clis } = await resolveWithClis(onStale);
+  return { cliId, blocked: cliId ? actionBlockReason(clis, cliId, action) : null };
+}
+
+async function resolveWithClis(
+  onStale?: (stale: string, replacement: string | null) => void,
+): Promise<{ cliId: string | null; clis: { id: string; installed?: boolean }[] | undefined }> {
   const saved = readSavedCliId();
   let clis: { id: string; installed?: boolean }[] | undefined;
   try {
@@ -76,11 +95,11 @@ export async function resolveCliId(
   if (!Array.isArray(clis) || !clis.every(isCliEntry)) {
     // /api/clis unreachable, errored, or malformed — can't check. Trust the
     // saved id rather than stranding a working setup on a transient failure.
-    return saved;
+    return { cliId: saved, clis: undefined };
   }
-  if (keepIfInstalled(saved, clis)) return saved;
+  if (keepIfInstalled(saved, clis)) return { cliId: saved, clis };
   const sole = pickSoleInstalled(clis);
   if (sole) persistCliId(sole);
   if (saved) onStale?.(saved, sole);
-  return sole;
+  return { cliId: sole, clis };
 }

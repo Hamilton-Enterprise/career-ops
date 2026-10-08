@@ -50,6 +50,19 @@ export function pickUsableCli(id, clis) {
   return sole ? { id: sole, substitutedFrom: id || null } : { id: null, substitutedFrom: null };
 }
 
+/**
+ * The PT-PT reason `id` cannot run `actionId`, read from the `actions` list
+ * /api/clis attaches to each CLI (agent-availability.mjs), or null.
+ *
+ * Null whenever the payload does not say — an older server, an unknown action —
+ * because the route still refuses; the client must not invent a refusal.
+ */
+export function actionBlockReason(clis, id, actionId) {
+  const actions = (clis || []).find((c) => c && c.id === id)?.actions;
+  const entry = Array.isArray(actions) ? actions.find((a) => a && a.id === actionId) : null;
+  return entry && entry.available === false && typeof entry.reason === "string" ? entry.reason : null;
+}
+
 /** Installed CLI ids, for an error that tells the user what they can pick. */
 export function installedCliIds(clis) {
   return (clis || []).filter((c) => c && c.installed && typeof c.id === "string").map((c) => c.id);
