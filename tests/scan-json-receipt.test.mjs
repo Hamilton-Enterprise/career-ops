@@ -290,7 +290,7 @@ test('incomplete Workday pagination keeps recovered offers and marks the market 
       const run = parseMarketReceipt(result.stdout, result.status, plan);
       assert.equal(run.status, 'partial');
       assert.equal(run.valid, true);
-      assert.equal(run.sources[0].state, 'error');
+      assert.equal(run.sources[0].state, 'partial');
       assert.equal(run.offers.length, 1);
       assert.equal(run.offers[0].url, 'https://auchanportugal.wd3.myworkdayjobs.com/auchan-retail/job/Lisboa/Operador_JR123');
       assert.equal(existsSync(join(root, 'data', 'pipeline.md')), false);
@@ -334,8 +334,8 @@ test('partial WTTJ pagination with zero matches reaches the receipt and stops th
     assert.deepEqual(receipt.errors, [{ company: board.name, error: 'wttj: incomplete pagination (transient)' }]);
     const plan = { opportunityType:'employment', markets:['portugal'], jobBoards:[board], skippedSources:[], locationPolicy:{markets:['portugal'], strict:true} };
     const run = parseMarketReceipt(result.stdout, result.status, plan);
-    assert.notEqual(run.status, 'ok');
-    assert.equal(run.sources[0].state, 'error');
+    assert.equal(run.status, 'partial');
+    assert.equal(run.sources[0].state, 'partial');
     const phases = [];
     await runDiscovery({ opportunityType:'employment', positive:['Quantum Mechanic'], negative:[], allow:[], block:[], blockHard:[], alwaysAllow:[], sinceDays:7, ats:[], markets:['portugal'], limitPerAts:150 }, () => {}, async (search, emit) => {
       phases.push(search.phase);
@@ -389,7 +389,7 @@ test('main Workday max_pages cap propagates provider truncation through receipt 
     const plan = { opportunityType:'employment', markets:['portugal'], jobBoards:[board], skippedSources:[], locationPolicy:{markets:['portugal'], strict:true} };
     const run = parseMarketReceipt(result.stdout, result.status, plan);
     assert.equal(run.status, 'partial');
-    assert.equal(run.sources[0].state, 'error');
+    assert.equal(run.sources[0].state, 'partial');
     assert.equal(run.offers.length, 20);
     // Even if every recovered offer is filtered out, this cannot certify zero.
     const phases = [];

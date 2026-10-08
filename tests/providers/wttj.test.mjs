@@ -361,6 +361,31 @@ try {
     fail(`wttj.fetch() first-page error = ${JSON.stringify(firstPageErr) || 'did not throw'}`);
   }
 
+  const secondQueryDown = mkCtx(ENV_OK, (call) => {
+    if (call.query === 'b') throw new Error('fixture query b down');
+    return boardOf(50)(call);
+  });
+  const secondWarnings = [];
+  console.error = (...args) => { secondWarnings.push(args.join(' ')); };
+  let secondQueryJobs;
+  try {
+    secondQueryJobs = await wttj.fetch({ name: 'WTTJ', provider: 'wttj', wttj: { queries: ['a', 'b'] } }, secondQueryDown.ctx);
+  } catch (err) {
+    secondQueryJobs = err;
+  } finally {
+    console.error = origError;
+  }
+  if (
+    Array.isArray(secondQueryJobs) &&
+    secondQueryJobs.length === 50 &&
+    secondQueryJobs.wttjTruncated === 'transient' &&
+    secondWarnings.some((w) => w.includes('fixture query b down'))
+  ) {
+    pass('wttj.fetch() keeps the first query when a later query fails on its first page and flags transient truncation');
+  } else {
+    fail(`wttj.fetch() second-query error → ${Array.isArray(secondQueryJobs) ? `${secondQueryJobs.length} jobs, truncated=${secondQueryJobs.wttjTruncated}` : `threw ${secondQueryJobs && secondQueryJobs.message}`}`);
+  }
+
   const probe = mkCtx(ENV_OK, boardOf(500));
   const probeJobs = await wttj.fetch(
     { name: 'WTTJ', provider: 'wttj', wttj: { queries: ['x'], max_hits: 200 } },

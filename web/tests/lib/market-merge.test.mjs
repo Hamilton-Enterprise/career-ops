@@ -158,3 +158,33 @@ test("mixed skipped providers never certify unidentified sources as complete", (
     assert.equal(run.offers.length, offers.length);
   }
 });
+
+test("incomplete pagination is a partial source, never a failure nor a healthy zero", async () => {
+  const { SOURCE_STATE_LABEL } = await import("../../src/lib/explore-state.mjs");
+  for (const [name, provider, error] of [
+    ["Welcome to the Jungle", "wttj", "wttj: incomplete pagination (transient)"],
+    ["Auchan Portugal", "workday", "workday: incomplete pagination (structural)"],
+  ]) {
+    const plan = { opportunityType: "employment", markets: ["portugal"], jobBoards: [{ name, provider, enabled: true }], skippedSources: [], locationPolicy: { markets: ["portugal"], strict: true } };
+    const run = parseMarketReceipt(receipt([], [{ company: name, error }]), 2, plan);
+    assert.equal(run.valid, true);
+    assert.equal(run.status, "partial");
+    assert.equal(run.sources[0].state, "partial");
+    assert.equal(SOURCE_STATE_LABEL[run.sources[0].state], "Parcial");
+    assert.ok(run.sources[0].message);
+    const phases = [];
+    await runDiscovery({ opportunityType: "employment", positive: ["Quantum Mechanic"], negative: [], allow: [], block: [], blockHard: [], alwaysAllow: [], sinceDays: 7, ats: [], markets: ["portugal"], limitPerAts: 150 }, () => {}, async (search, emit) => {
+      phases.push(search.phase);
+      emit({ kind: "summary", companiesScanned: run.scanned, unreachable: 0, matches: 0, status: run.status, sources: run.sources });
+      return [];
+    });
+    assert.deepEqual(phases, ["precise"]);
+  }
+});
+
+test("an incomplete-pagination source does not hide a real failure elsewhere", () => {
+  const plan = { opportunityType: "employment", markets: ["portugal"], jobBoards: [{ name: "Welcome to the Jungle", provider: "wttj", enabled: true }, { name: "Landing.jobs", provider: "landingjobs", enabled: true }], skippedSources: [], locationPolicy: { markets: ["portugal"], strict: true } };
+  const run = parseMarketReceipt(receipt([], [{ company: "Welcome to the Jungle", error: "wttj: incomplete pagination (structural)" }, { company: "Landing.jobs", error: "offline" }]), 2, plan);
+  assert.deepEqual(run.sources.map(s => s.state), ["partial", "error"]);
+  assert.equal(run.status, "partial");
+});

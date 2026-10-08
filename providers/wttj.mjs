@@ -219,6 +219,7 @@ export default {
     const byUrl = new Map();
     let structural = false;
     let transient = false;
+    let answered = false;
     for (const query of queries) {
       const params = new URLSearchParams({
         query,
@@ -260,11 +261,14 @@ export default {
             );
           }
         } catch (err) {
-          if (page === 0) throw err;
+          // Only the entry's very first request keeps the hard-failure path;
+          // after that, earlier answers are worth more than an exception.
+          if (!answered) throw err;
           console.error(`⚠️  wttj: ${entry.name} query "${query}" stopped at page ${page + 1} (${collected} hits kept): ${err.message}`);
           stop = 'error';
           break;
         }
+        answered = true;
         if (Number.isInteger(json.nbHits) && json.nbHits >= 0) nbHits = json.nbHits;
         if (json.hits.length === 0) break;
 

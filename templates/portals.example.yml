@@ -1764,7 +1764,10 @@ search_queries:
 #     queries: ["ai engineer", "data platform engineer"]  # REQUIRED — the board is global,
 #                                 # so explicit searches must be configured; each query is a
 #                                 # separate Algolia search, results deduped across queries
-#     max_hits: 100        # optional per-query hit cap (default 100, max 200)
+#     max_hits: 100        # optional total budget per query (default 100), read in pages
+#                          # of 100; capped at 200, or 1000 with `filters`. Fewer hits
+#                          # than the board reports marks the scan as partial coverage.
+#                          # Several offices become one location joined with "; ".
 #   enabled: true
 #
 # - name: Agentic Engineering Jobs        # AI-agent engineering roles (SSR HTML, one fetch)

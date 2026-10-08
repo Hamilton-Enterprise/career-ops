@@ -58,6 +58,8 @@ export function mergeDiscoveredOffers(atsOffers, marketOffers) {
   return [...merged.values()];
 }
 
+const INCOMPLETE_PAGINATION = /: incomplete pagination \(/;
+
 /** Parse the core's versioned receipt, independently of child exit success.
  * @param {string} output @param {number|null} exitCode
  * @param {ReturnType<import('../market-presets.mjs').buildMarketPlan>} plan
@@ -81,7 +83,17 @@ export function parseMarketReceipt(output, exitCode, plan, timedOut = false) {
   run.scanned = receipt.scanned;
   for (const error of receipt.errors) {
     const state = sources.find(s => s.source === error?.company);
-    if (state) { state.state = "error"; state.message = typeof error.error === "string" ? error.error : "Falha na fonte."; }
+    if (!state) continue;
+    // scan.mjs reports a provider's truncated pagination (workday, wttj) as
+    // "<id>: incomplete pagination (<reason>)": the source answered, so it is
+    // partial, not failed. A later hard error for the same source still wins.
+    if (typeof error.error === "string" && INCOMPLETE_PAGINATION.test(error.error) && state.state !== "error") {
+      state.state = "partial";
+      state.message = "Nem todas as páginas desta fonte foram lidas; a cobertura ficou incompleta.";
+    } else {
+      state.state = "error";
+      state.message = typeof error.error === "string" ? error.error : "Falha na fonte.";
+    }
   }
   if (receipt.scanned === 0 && receipt.skipped > 0 && receipt.offers.length === 0 && receipt.errors.length === 0) {
     for (const source of sources) if (source.state === "ok") {
@@ -110,10 +122,10 @@ export function parseMarketReceipt(output, exitCode, plan, timedOut = false) {
     run.offers.push(offer);
   }
   run.offers = mergeDiscoveredOffers([], run.offers);
-  run.valid = ((exitCode === 0 || exitCode === 2 || timedOut) && sources.some(s => s.state === "ok")) || run.offers.length > 0;
+  run.valid = ((exitCode === 0 || exitCode === 2 || timedOut) && sources.some(s => s.state === "ok" || s.state === "partial")) || run.offers.length > 0;
   // Only exit 2 with identified source errors can certify the other sources.
   // A timeout or unexplained child failure leaves every remaining source incomplete.
-  if (timedOut || (exitCode !== 0 && (exitCode !== 2 || !sources.some(s => s.state === "error")))) {
+  if (timedOut || (exitCode !== 0 && (exitCode !== 2 || !sources.some(s => s.state === "error" || s.state === "partial")))) {
     for (const source of sources) if (source.state === "ok") {
       source.state = "error";
       source.message = timedOut ? "A fonte não terminou dentro do prazo." : "O scanner terminou antes de confirmar a conclusão desta fonte.";
