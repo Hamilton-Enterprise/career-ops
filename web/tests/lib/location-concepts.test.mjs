@@ -74,6 +74,12 @@ test("unknown or qualified locations stay literal, never gain a market or metro 
   }
 });
 
+test("precise Great Britain retains its literal scope instead of widening to the UK", () => {
+  assert.deepEqual(resolveLocationInputs("Great Britain", "precise"), {
+    phase: "precise", terms: ["Great Britain"], locations: [], markets: [], unresolved: ["Great Britain"], expansions: [],
+  });
+});
+
 test("literal order and accent/case dedup survive multiple locations", () => {
   const result = resolveLocationInputs(["Genebra", "Suíça", "suica", "Atlantis", "Lisboa"], "precise");
   assert.deepEqual(result.terms.slice(0, 4), ["Genebra", "Suíça", "Atlantis", "Lisboa"]);
