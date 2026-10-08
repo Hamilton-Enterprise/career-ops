@@ -80,7 +80,7 @@ test("a market-only healthy zero broadens without requiring inapplicable ATS met
   assert.equal(result.plans.length, 2);
 });
 
-test("a WTTJ query budget alone is still a healthy zero and broadens", async () => {
+test("a WTTJ query budget alone is still a healthy zero for the summary gate", async () => {
   const positive = Array.from({ length: 15 }, (_, index) => `Quantum role ${index}`);
   const input = { ...filters, positive, ats: [], allow: [], markets: ["portugal"] };
   const emptyReceipt = JSON.stringify({ version: "careerops.scan.receipt@1", scanned: 2, skipped: 0, found: 0, filtered: 0, duplicates: 0, added: 0, added_urls: [], offers: [], errors: [], unverified_zero: [], dry_run: true });
@@ -90,7 +90,7 @@ test("a WTTJ query budget alone is still a healthy zero and broadens", async () 
     phases.push(plan.phase);
     const run = parseMarketReceipt(emptyReceipt, 0, buildMarketPlan(plan.effectiveFilters.markets, plan.effectiveFilters.positive, plan.effectiveFilters.opportunityType, plan));
     const incomplete = run.sources.filter(source => source.state !== "ok").map(source => source.source);
-    emit({ kind: "summary", companiesScanned: run.scanned, unreachable: 0, matches: 0, status: run.status, sources: run.sources, missingLocation: 0, ...(incomplete.length ? { incomplete } : {}) });
+    emit({ kind: "summary", companiesScanned: run.scanned, unreachable: 0, matches: 0, status: run.status, sources: run.sources, missingLocation: 0, ...(run.queryLimitedOnly ? { queryLimited: true } : {}), ...(incomplete.length ? { incomplete } : {}) });
     return [];
   });
   assert.deepEqual(phases, ["precise", "broad"]);
@@ -100,16 +100,17 @@ test("a WTTJ query budget alone is still a healthy zero and broadens", async () 
 });
 
 test("a query budget beside any other shortfall still stops", async () => {
-  const limited = { source: "Welcome to the Jungle", state: "partial", limit: "query-limit", message: "consultados 12 de 15 termos" };
+  const limited = { source: "Welcome to the Jungle", state: "partial", limit: "query-limit", message: "feitas 12 de 15 pesquisas" };
   for (const patch of [
-    { status: "partial", sources: [...healthy.sources, limited, { source: "Landing.jobs", state: "partial" }], incomplete: ["Welcome to the Jungle", "Landing.jobs"] },
-    { status: "partial", sources: [...healthy.sources, { ...limited, limit: undefined }], incomplete: ["Welcome to the Jungle"] },
-    { status: "partial", sources: [...healthy.sources, limited], incomplete: ["Welcome to the Jungle", "workday"] },
-    { status: "failed", sources: [...healthy.sources, limited] },
+    { status: "partial", queryLimited: true, sources: [...healthy.sources, limited, { source: "Landing.jobs", state: "partial" }], incomplete: ["Welcome to the Jungle", "Landing.jobs"] },
+    { status: "partial", queryLimited: true, sources: [...healthy.sources, { ...limited, limit: undefined }], incomplete: ["Welcome to the Jungle"] },
+    { status: "partial", queryLimited: true, sources: [...healthy.sources, limited], incomplete: ["Welcome to the Jungle", "workday"] },
+    { status: "failed", sources: [...healthy.sources, limited], queryLimited: true },
+    { status: "partial", sources: [...healthy.sources, limited], incomplete: ["Welcome to the Jungle"] },
   ]) {
     assert.equal((await run({ ...healthy, ...patch })).plans.length, 1, JSON.stringify(patch));
   }
-  assert.equal((await run({ ...healthy, status: "partial", sources: [...healthy.sources, limited], incomplete: ["Welcome to the Jungle"] })).plans.length, 2);
+  assert.equal((await run({ ...healthy, status: "partial", queryLimited: true, sources: [...healthy.sources, limited], incomplete: ["Welcome to the Jungle"] })).plans.length, 2);
 });
 
 test("a streamed error blocks broadening even beside an otherwise healthy summary", async () => {

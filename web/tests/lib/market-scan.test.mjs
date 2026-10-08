@@ -291,6 +291,35 @@ test("unverified market zeros and omitted zero-health proof stay partial and nev
   }
 });
 
+test("a WTTJ query budget alone broadens through the real discovery pass; any real fault stops", async t => {
+  const root = await sandbox(t, null);
+  const positive = Array.from({ length: 15 }, (_, index) => `Quantum role ${index}`);
+  const cap = "Feitas 12 de 15 pesquisas; os restantes termos continuam a filtrar os títulos recebidos.";
+  const scan = (errors, code = 0) => fs.writeFileSync(path.join(root, "scan.mjs"),
+    `console.log(${JSON.stringify(JSON.stringify({ ...receipt, scanned: 2, offers: [], errors }))}); process.exitCode = ${code};`);
+  const discover = async () => {
+    const events = [];
+    await runDiscovery({ ...filters, opportunityType: "employment", positive }, event => events.push(event));
+    return { events, phases: events.filter(event => event.kind === "phaseStart").map(event => event.phase), summary: events.find(event => event.kind === "summary") };
+  };
+  scan([]);
+  const healthy = await discover();
+  assert.deepEqual(healthy.phases, ["precise", "broad"]);
+  assert.equal(healthy.events.some(event => event.kind === "sourceError" || event.kind === "error"), false);
+  assert.ok(healthy.events.some(event => event.kind === "sourceDone" && event.source === "Welcome to the Jungle"));
+  const wttj = healthy.summary.sources.find(source => source.source === "Welcome to the Jungle");
+  assert.deepEqual([wttj.state, wttj.limit, wttj.message], ["partial", "query-limit", `f${cap.slice(1)}`]);
+  assert.equal(healthy.summary.status, "partial");
+  for (const [errors, code] of [[[{ company: "Landing.jobs", error: "offline" }], 2], [[{ company: "Unknown board", error: "offline" }], 0]]) {
+    scan(errors, code);
+    assert.deepEqual((await discover()).phases, ["precise"], JSON.stringify(errors));
+  }
+  scan([{ company: "Welcome to the Jungle", error: "timeout" }], 2);
+  const failed = await discover();
+  assert.deepEqual(failed.phases, ["precise"]);
+  assert.equal(failed.summary.sources.find(source => source.source === "Welcome to the Jungle").message, `timeout. ${cap}`);
+});
+
 test("ATS aggregate cannot hide missing health proof in one child", async t => {
   const root = await sandbox(t, null);
   fs.writeFileSync(path.join(root, "scan-ats-full.mjs"), `// --json capHit
