@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { fenceArgs } from "./cli-fencing.mjs";
-import { prepareCliLaunch } from "./cli-launch.mjs";
+import { prepareCliLaunch, trackCliChild } from "./cli-launch.mjs";
 
 // Plain .mjs (same pattern as tracker-table.mjs/clean-chips.mjs) so
 // tests/lib/spawn-cli.test.mjs can import it directly under Node. Import it with the
@@ -42,7 +42,7 @@ import { prepareCliLaunch } from "./cli-launch.mjs";
  * @param {string} binPath
  * @param {string[]} args
  * @param {import("node:child_process").SpawnOptionsWithoutStdio} options
- * @param {{cliId: string, capabilities: import("./worker-capabilities.mjs").Capabilities}} fencing
+ * @param {{cliId: string, capabilities: import("./worker-capabilities.mjs").Capabilities, writableRoot?: string}} fencing
  */
 export function spawnHeadlessCli(binPath, args, options, fencing) {
   // Fail fast rather than spawn unfenced. Omitting `fencing` used to spread
@@ -64,5 +64,6 @@ export function spawnHeadlessCli(binPath, args, options, fencing) {
   const launch = prepareCliLaunch(binPath, fencedArgs);
   const child = spawn(launch.command, launch.args, options);
   child.stdin?.end();
+  trackCliChild(child, { processGroup: Boolean(options.detached) && process.platform !== "win32" });
   return child;
 }

@@ -5,7 +5,7 @@ import { Check, X, Loader2, AlertTriangle } from "lucide-react";
 import type { Job } from "@/components/jobs/job-store";
 import { jobErrorHint } from "@/lib/job-error-hint.mjs";
 import { cn } from "@/lib/cn";
-import { isFencingNotice } from "@/lib/cli-fencing.mjs";
+import { isFencingNotice } from "@/lib/fencing-notice.mjs";
 
 // Humanize raw agent tool names into what the user actually cares about, so a
 // multi-minute evaluation reads as progress instead of a cryptic tool dump (#8).
@@ -110,8 +110,7 @@ export function WorkerCard({
         {hasScore && (
           <span
             className={cn(
-              "ml-auto shrink-0 rounded px-1 py-0.5 font-semibold tabular-nums",
-              inline ? "text-xs" : "text-[10px]",
+              "ml-auto shrink-0 rounded px-1 py-0.5 text-xs font-semibold tabular-nums",
               tone.chip,
             )}
           >
@@ -130,22 +129,22 @@ export function WorkerCard({
         )}
       </div>
       {(bottom || running) && (
-        <div className={cn("mt-1 truncate text-faint", inline ? "text-xs" : "text-[10px]")}>
+        <div className={cn("mt-1 text-xs text-faint", running && "truncate")}>
           {running ? `${last ?? "A trabalhar"} · ${fmtElapsed(elapsed)}` : bottom}
         </div>
       )}
       {errorHint && (
-        <div className={cn("mt-1 text-amber-700 dark:text-amber-400", inline ? "text-xs" : "text-[10px]")}>
+        <div className="mt-1 text-xs text-amber-700 dark:text-amber-400 whitespace-normal break-words">
           {errorHint.text}
         </div>
       )}
       {fencing && (
-        <div className={cn("mt-1 text-amber-700 dark:text-amber-400", inline ? "text-xs" : "text-[10px]")}>
+        <div className="mt-1 text-xs text-amber-700 dark:text-amber-400 whitespace-normal break-words">
           {fencing}
         </div>
       )}
       {tokens > 0 && (
-        <div className={cn("mt-1 text-faint tabular-nums", inline ? "text-xs" : "text-[10px]")}>
+        <div className="mt-1 text-xs text-faint tabular-nums">
           {fmtTokens(tokens)} tokens{job.cost?.usd != null ? ` · $${job.cost.usd.toFixed(2)}` : ""}
         </div>
       )}

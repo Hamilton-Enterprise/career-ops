@@ -1,23 +1,130 @@
+import CryptoKit
 import Foundation
 
 struct LaunchConfiguration {
     let checkout: URL
     let node: URL
     let dataRoot: URL?
+    var runtime: URL? = nil
+
+    var codeRoot: URL { runtime ?? checkout }
+}
+
+private func isDirectory(_ url: URL) -> Bool {
+    var directory: ObjCBool = false
+    return url.isFileURL && FileManager.default.fileExists(atPath: url.path, isDirectory: &directory) && directory.boolValue
+}
+
+/// UserDefaults path preferences treat nil, "" and whitespace as "not set".
+/// `URL(fileURLWithPath: "")` is the process cwd — never use that for an empty preference.
+func optionalPathPreference(_ raw: String?) -> URL? {
+    guard let raw else { return nil }
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    return URL(fileURLWithPath: trimmed)
+}
+
+func dataRootConflictsWithRuntime(_ dataRoot: URL, _ runtime: URL) -> Bool {
+    let data = dataRoot.standardizedFileURL.resolvingSymlinksInPath().path
+    let code = runtime.standardizedFileURL.resolvingSymlinksInPath().path
+    return data == code || data.hasPrefix(code + "/") || code.hasPrefix(data + "/")
+}
+
+let installPathPreferenceKeys = [
+    "CareerOpsCheckoutPath", "CareerOpsNodePath", "CareerOpsDataRootPath", "CareerOpsRuntimePath",
+]
+
+/// One UserDefaults suite per .app path so a temp candidate cannot inherit the
+/// live install's CAREER_OPS_ROOT (same bundle id, shared `UserDefaults.standard`).
+func installPreferencesSuiteName(bundlePath: String) -> String {
+    let path = URL(fileURLWithPath: bundlePath).resolvingSymlinksInPath().path
+    let digest = SHA256.hash(data: Data(path.utf8)).map { String(format: "%02x", $0) }.joined()
+    return "io.career-ops.local.install." + digest
+}
+
+func primaryInstallBundleURL(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
+    home.appendingPathComponent("Applications/Career Ops.app")
+}
+
+/// Seed path keys from this bundle's Defaults.plist. Migrate legacy
+/// `UserDefaults.standard` only for the primary ~/Applications install — never
+/// for a side-by-side candidate, which must keep its baked --data-root.
+func loadInstallPreferences(
+    bundleURL: URL,
+    bundledDefaults: [String: Any]?,
+    standard: UserDefaults = .standard,
+    home: URL = FileManager.default.homeDirectoryForCurrentUser
+) -> UserDefaults {
+    let bundlePath = bundleURL.resolvingSymlinksInPath().path
+    let suite = UserDefaults(suiteName: installPreferencesSuiteName(bundlePath: bundlePath)) ?? standard
+    let virgin = installPathPreferenceKeys.allSatisfy { suite.object(forKey: $0) == nil }
+    guard virgin else { return suite }
+    if let bundledDefaults {
+        for (key, value) in bundledDefaults { suite.set(value, forKey: key) }
+    }
+    let primary = primaryInstallBundleURL(home: home).resolvingSymlinksInPath().path
+    if bundlePath == primary, suite.bool(forKey: "CareerOpsLegacyPathsMigrated") == false {
+        for key in installPathPreferenceKeys {
+            if let value = standard.string(forKey: key), !value.isEmpty {
+                suite.set(value, forKey: key)
+            }
+        }
+        suite.set(true, forKey: "CareerOpsLegacyPathsMigrated")
+    }
+    return suite
+}
+
+func isSameAppInstall(_ a: URL?, _ b: URL?) -> Bool {
+    guard let a, let b else { return false }
+    return a.resolvingSymlinksInPath().path == b.resolvingSymlinksInPath().path
+}
+
+func runtimeArtifactProblem(_ runtime: URL, buildSHA: String?) -> String? {
+    let files = FileManager.default
+    guard let buildSHA, !buildSHA.isEmpty else { return "esta aplicação não tem o commit da compilação." }
+    guard runtime.path.hasPrefix("/"), isDirectory(runtime) else { return "a pasta não existe." }
+    guard !files.fileExists(atPath: runtime.appendingPathComponent(".git").path) else { return "a pasta é um repositório git." }
+    guard files.isReadableFile(atPath: runtime.appendingPathComponent("web/server.mjs").path),
+          files.isReadableFile(atPath: runtime.appendingPathComponent("web/.next/BUILD_ID").path) else {
+        return "falta o launcher ou a compilação web."
+    }
+    guard let data = files.contents(atPath: runtime.appendingPathComponent("web/.next/career-ops-identity.json").path),
+          let identity = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let sha = identity["CAREER_OPS_BUILD_SHA"] as? String, !sha.isEmpty else {
+        return "falta a identidade da compilação."
+    }
+    guard sha == buildSHA else { return "foi compilado noutro commit (\(sha.prefix(12))) e a aplicação espera \(buildSHA.prefix(12))." }
+    return nil
+}
+
+/// The bundle's runtime artifact wins over the checkout preference; the checkout stays the
+/// fallback and the place the data-root marker is read from.
+func resolveLaunchConfiguration(checkout: URL, node: URL, dataRoot: URL?, runtimePath: String?,
+                                buildSHA: String?) -> (config: LaunchConfiguration, notice: String?) {
+    let fallback = LaunchConfiguration(checkout: checkout, node: node, dataRoot: dataRoot)
+    guard let runtimePath, !runtimePath.isEmpty else { return (fallback, nil) }
+    let runtime = URL(fileURLWithPath: runtimePath)
+    if let problem = runtimeArtifactProblem(runtime, buildSHA: buildSHA) {
+        return (fallback, "O runtime instalado (\(runtimePath)) não pode ser usado: \(problem) A usar a pasta do projeto \(checkout.path).")
+    }
+    return (LaunchConfiguration(checkout: checkout, node: node, dataRoot: dataRoot, runtime: runtime), nil)
 }
 
 func validateConfiguration(_ config: LaunchConfiguration, nodeVersion: String? = nil) -> String? {
     let files = FileManager.default
-    func isDirectory(_ url: URL) -> Bool {
-        var directory: ObjCBool = false
-        return url.isFileURL && files.fileExists(atPath: url.path, isDirectory: &directory) && directory.boolValue
-    }
-    guard isDirectory(config.checkout) else { return "A pasta do projeto não existe: \(config.checkout.path). Escolha a pasta Career Ops." }
-    guard files.isReadableFile(atPath: config.checkout.appendingPathComponent("web/server.mjs").path) else {
+    let code = config.codeRoot
+    guard isDirectory(code) else { return "A pasta do projeto não existe: \(code.path). Escolha a pasta Career Ops." }
+    guard files.isReadableFile(atPath: code.appendingPathComponent("web/server.mjs").path) else {
         return "A pasta escolhida não contém web/server.mjs. Escolha a pasta Career Ops."
     }
-    guard files.isReadableFile(atPath: config.checkout.appendingPathComponent("web/.next/BUILD_ID").path) else {
-        return "Falta a compilação web em \(config.checkout.path)/web. Execute npm run build nessa pasta e tente novamente."
+    guard files.isReadableFile(atPath: code.appendingPathComponent("web/.next/BUILD_ID").path) else {
+        return "Falta a compilação web em \(code.path)/web. Execute npm run build nessa pasta e tente novamente."
+    }
+    if config.runtime != nil, config.dataRoot == nil, !isDirectory(effectiveDataRoot(config)) {
+        return "A pasta de dados não existe: \(effectiveDataRoot(config).path). Escolha a pasta de dados."
+    }
+    if let runtime = config.runtime, dataRootConflictsWithRuntime(effectiveDataRoot(config), runtime) {
+        return "A pasta de dados não pode ser a pasta do runtime (\(runtime.path)). Escolha outra pasta de dados."
     }
     guard config.node.isFileURL, !isDirectory(config.node), files.isExecutableFile(atPath: config.node.path) else {
         return "O executável Node não existe ou não pode ser executado: \(config.node.path). Escolha o executável Node."
@@ -94,7 +201,8 @@ func serverEnvironment(_ config: LaunchConfiguration, inherited: [String: String
         environment.removeValue(forKey: key)
     }
     if let dataRoot = config.dataRoot { environment["CAREER_OPS_ROOT"] = dataRoot.path }
-    environment["CAREER_OPS_CODE_ROOT"] = config.checkout.path
+    else if config.runtime != nil { environment["CAREER_OPS_ROOT"] = effectiveDataRoot(config).path }
+    environment["CAREER_OPS_CODE_ROOT"] = config.codeRoot.path
     let path = inherited["PATH"].flatMap { $0.isEmpty ? nil : $0 } ?? "/usr/bin:/bin:/usr/sbin:/sbin"
     environment["PATH"] = "\(config.node.deletingLastPathComponent().path):\(path)"
     return environment
@@ -105,4 +213,169 @@ func availableDownloadDestination(_ proposed: URL?) -> URL? {
           !FileManager.default.fileExists(atPath: proposed.path),
           (try? FileManager.default.destinationOfSymbolicLink(atPath: proposed.path)) == nil else { return nil }
     return proposed
+}
+
+func effectiveDataRoot(_ config: LaunchConfiguration) -> URL {
+    func canonical(_ url: URL) -> URL { url.standardizedFileURL.resolvingSymlinksInPath() }
+    if let root = config.dataRoot { return canonical(root) }
+    let marker = config.checkout.appendingPathComponent(".career-ops-data")
+    if let content = try? String(contentsOf: marker, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+       !content.isEmpty {
+        return canonical(content.hasPrefix("/") ? URL(fileURLWithPath: content) : config.checkout.appendingPathComponent(content))
+    }
+    return canonical(config.checkout)
+}
+
+let webPreferenceHandlerName = "careerOpsPrefs"
+let webPreferenceKeys = ["career-ops:config", "career-ops:theme", "career-ops:shortlist", "career-ops:hidden"]
+let webPreferenceMaxBytes = 128 * 1024
+
+func isValidWebPreference(key: String, value: String) -> Bool {
+    guard webPreferenceKeys.contains(key), value.utf8.count <= webPreferenceMaxBytes else { return false }
+    if key == "career-ops:theme" { return value == "light" || value == "dark" }
+    guard let parsed = try? JSONSerialization.jsonObject(with: Data(value.utf8)) else { return false }
+    func isBoolean(_ value: Any) -> Bool {
+        guard let number = value as? NSNumber else { return false }
+        return CFGetTypeID(number) == CFBooleanGetTypeID()
+    }
+    switch key {
+    case "career-ops:config":
+        guard let object = parsed as? [String: Any] else { return false }
+        return object.allSatisfy { field, value in
+            switch field {
+            case "mode": return ["cli", "key", "manual"].contains(value as? String ?? "")
+            case "cliId", "provider": return value is String
+            case "logos": return isBoolean(value)
+            default: return false
+            }
+        }
+    case "career-ops:shortlist":
+        guard let items = parsed as? [Any] else { return false }
+        return items.allSatisfy { item in
+            guard let fields = item as? [String: Any] else { return false }
+            return Set(fields.keys) == ["url", "company", "role"] && fields.values.allSatisfy { $0 is String }
+        }
+    default:
+        return (parsed as? [Any])?.allSatisfy { $0 is String } ?? false
+    }
+}
+
+enum WebPreferenceChange: Equatable {
+    case set(String, String)
+    case remove(String)
+    case clear
+}
+
+struct WebPreferenceSender {
+    let isOurWebView: Bool
+    let isMainFrame: Bool
+    let scheme: String
+    let host: String
+    let port: Int
+}
+
+func webPreferenceChange(_ body: Any, from sender: WebPreferenceSender, origin: URL?, generation: String) -> WebPreferenceChange? {
+    guard sender.isOurWebView, sender.isMainFrame, let origin, origin.scheme == "http", origin.host == "127.0.0.1",
+          let port = origin.port, sender.scheme == "http", sender.host == "127.0.0.1", sender.port == port,
+          !generation.isEmpty, let message = body as? [String: Any], message["token"] as? String == generation,
+          let type = message["type"] as? String else { return nil }
+    let key = message["key"] as? String
+    switch type {
+    case "set":
+        guard let key, let value = message["value"] as? String, isValidWebPreference(key: key, value: value) else { return nil }
+        return .set(key, value)
+    case "remove":
+        guard let key, webPreferenceKeys.contains(key) else { return nil }
+        return .remove(key)
+    case "clear": return .clear
+    default: return nil
+    }
+}
+
+final class WebPreferenceStore {
+    let namespace: String
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults, dataRoot: URL) {
+        self.defaults = defaults
+        let path = dataRoot.standardizedFileURL.resolvingSymlinksInPath().path
+        namespace = "CareerOpsWebPreferences." + SHA256.hash(data: Data(path.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    func snapshot() -> [String: String] {
+        let stored = defaults.dictionary(forKey: namespace)?.compactMapValues { $0 as? String } ?? [:]
+        return stored.filter { isValidWebPreference(key: $0.key, value: $0.value) }
+    }
+
+    @discardableResult
+    func apply(_ change: WebPreferenceChange) -> Bool {
+        var values = snapshot()
+        switch change {
+        case let .set(key, value):
+            guard isValidWebPreference(key: key, value: value) else { return false }
+            values[key] = value
+        case let .remove(key):
+            guard webPreferenceKeys.contains(key) else { return false }
+            values.removeValue(forKey: key)
+        case .clear: values.removeAll()
+        }
+        if values.isEmpty { defaults.removeObject(forKey: namespace) } else { defaults.set(values, forKey: namespace) }
+        return true
+    }
+}
+
+// The page sees only the four allowlisted values and the launch token. JSONSerialization escapes
+// "/" (so no "</script>"); U+2028/U+2029 are escaped too so the literal stays one JS line.
+func webPreferenceUserScript(snapshot: [String: String], generation: String) -> String {
+    let values = snapshot.filter { isValidWebPreference(key: $0.key, value: $0.value) }
+    let data = (try? JSONSerialization.data(withJSONObject: ["token": generation, "values": values], options: [.sortedKeys])) ?? Data()
+    let payload = String(decoding: data, as: UTF8.self)
+        .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+        .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+    let keys = String(decoding: (try? JSONSerialization.data(withJSONObject: webPreferenceKeys)) ?? Data(), as: UTF8.self)
+    return """
+    (function () {
+      "use strict";
+      var snapshot = \(payload.isEmpty ? #"{"token":"","values":{}}"# : payload);
+      var keys = \(keys);
+      var handler, storage, proto;
+      try {
+        handler = window.webkit.messageHandlers.\(webPreferenceHandlerName);
+        storage = window.localStorage;
+        proto = Object.getPrototypeOf(storage);
+      } catch (error) { return; }
+      if (!handler || !storage || !proto) return;
+      var values = Object.create(null);
+      Object.keys(snapshot.values).forEach(function (key) { values[key] = snapshot.values[key]; });
+      var getItem = proto.getItem, setItem = proto.setItem, removeItem = proto.removeItem, clear = proto.clear;
+      function managed(target, key) { return target === storage && keys.indexOf(String(key)) !== -1; }
+      function post(message) {
+        message.token = snapshot.token;
+        try { handler.postMessage(message); } catch (error) {}
+      }
+      proto.getItem = function (key) {
+        if (!managed(this, key)) return getItem.apply(this, arguments);
+        key = String(key);
+        return key in values ? values[key] : null;
+      };
+      proto.setItem = function (key, value) {
+        if (!managed(this, key)) return setItem.apply(this, arguments);
+        key = String(key);
+        values[key] = String(value);
+        post({ type: "set", key: key, value: values[key] });
+      };
+      proto.removeItem = function (key) {
+        if (!managed(this, key)) return removeItem.apply(this, arguments);
+        key = String(key);
+        delete values[key];
+        post({ type: "remove", key: key });
+      };
+      proto.clear = function () {
+        if (this !== storage) return clear.apply(this, arguments);
+        values = Object.create(null);
+        post({ type: "clear" });
+        return clear.apply(this, arguments);
+      };
+    })();
+    """
 }

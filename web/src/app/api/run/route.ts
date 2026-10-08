@@ -1,7 +1,7 @@
 // Both spawners are needed here, and the distinction matters: the agent CLI goes
 // through spawnHeadlessCli (which closes stdin so `codex exec` can't hang waiting
 // on it, #2085), while the PDF render is a plain Node child process with no CLI
-// sandbox in the way (#2172) and so passes `spawn` itself to renderAndMarkPdf.
+// sandbox in the way (#2172), with the resolved user-data environment.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,6 +9,7 @@ import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from
 import { localISODate } from "@/lib/followups";
 import { accumulateTokens, hasNewCompletedReport, isFatalGenericStderr, killMsForKind, timeoutMessage } from "@/lib/run-cli-support.mjs";
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
+import { terminateCliRun } from "@/lib/cli-launch.mjs";
 import { careerOpsRoot, readMemory, findReportFile, readInbox, readScanDates, readLanguageConfig } from "@/lib/career-ops";
 import { resolvePdfPaths, type PdfPaths } from "@/lib/pdf-paths.mjs";
 import { renderAndMarkPdf, writeCvHtml, pdfRunOutcome } from "@/lib/pdf-render.mjs";
@@ -18,6 +19,7 @@ import { capabilitiesFor } from "@/lib/worker-capabilities.mjs";
 import { fencingReport, isCliAllowedForCapabilities } from "@/lib/cli-fencing.mjs";
 import { claudeCliArgs } from "@/lib/claude-invocation.mjs";
 import { resolveCvTemplate } from "@/lib/core/cv-template.mjs";
+import { resolveCodeRoot } from "@/lib/core/code-root.mjs";
 import { acquireTrackerWrite, releaseTrackerWrite } from "@/lib/core/run-registry";
 import { createRunFinalizer } from "@/lib/run-finalizer.mjs";
 
@@ -55,23 +57,27 @@ export async function POST(req: Request) {
     );
   }
 
-  // These run the REAL core (modes/scripts), not just data — fail clearly if the
-  // root is incomplete instead of faking it.
+  const codeRoot = resolveCodeRoot(process.cwd(), process.env);
+  const dataRoot = careerOpsRoot();
+  // Normalize the resolved data root for children, including marker-based and
+  // relative overrides, rather than changing its base when worker cwd changes.
+  const workerEnv = { ...process.env, CAREER_OPS_ROOT: dataRoot };
+  // These run the REAL core (modes/scripts) from the engine checkout.
   // The precondition must check the file the prompt will actually read. Pinning
   // it to modes/oferta.md meant a configured market passed a check on a file the
   // run never opens, and would have missed a market dir with no evaluation mode.
   const lang = readLanguageConfig();
   const needsScript: Record<string, string> = { evaluate: lang.evalModeFile, "fix-portal": "verify-portals.mjs", pdf: "generate-pdf.mjs" };
   const required = needsScript[kind];
-  // CAREER_OPS_ROOT is runtime user data, not a build input. Tracing this
+  // The engine checkout is selected at runtime, not a build input. Tracing this
   // dynamic path would copy the whole web project into every server bundle.
   const requiredPath = required
-    ? path.join(/* turbopackIgnore: true */ careerOpsRoot(), required)
+    ? path.join(/* turbopackIgnore: true */ codeRoot, required)
     : "";
   if (required && !fs.existsSync(/* turbopackIgnore: true */ requiredPath)) {
     return new Response(
       JSON.stringify({
-        error: `Esta tarefa exige uma instalação completa do career-ops (${required}). CAREER_OPS_ROOT aponta apenas para dados; aponta-o para uma instalação completa.`,
+        error: `Esta tarefa exige uma instalação completa do career-ops (${required}). Confirma o checkout de código ou CAREER_OPS_CODE_ROOT.`,
       }),
       { status: 400, headers: { "Content-Type": "application/json" } },
     );
@@ -130,10 +136,11 @@ export async function POST(req: Request) {
   // is: the worker has no Bash (#2172), so it cannot run cv-templates.mjs and the
   // prompt used to name the base template outright, silently ignoring cv.template
   // (#4034). Only pdf fills a template, so nothing else pays for the lookup.
-  // The root is passed, not re-derived: a relative CAREER_OPS_PROFILE resolves
-  // against it, and `process.cwd()` here is `<core>/web` (see cv-template.mjs).
-  const cvTemplate = kind === "pdf" ? await resolveCvTemplate(careerOpsRoot()) : undefined;
-  const prompt = buildPrompt({ kind, input, memory: readMemory(), today, postedAt, lang, cvTemplate });
+  // Load the system resolver from code, but pin the user profile to the data
+  // root resolved here rather than the imported module's relative env base.
+  const cvTemplate = kind === "pdf" ? await resolveCvTemplate(codeRoot, path.join(dataRoot, "config", "profile.yml")) : undefined;
+  const prompt = `The engine checkout is ${JSON.stringify(codeRoot)}. Read system modes, scripts and templates there. The user data root is ${JSON.stringify(dataRoot)}: resolve cv.md, article-digest.md, config/, modes/_profile.md, modes/_custom.md, voice-dna.md, writing-samples/, portals.yml, data/, reports/, output/, documents/, jds/, batch/tracker-additions/ and interview-prep/ there for ALL user-data reads and writes, including paths in mode instructions. Keep system files in the engine checkout.\n\n` +
+    buildPrompt({ kind, input, memory: readMemory(), today, postedAt, lang, cvTemplate });
 
   const isClaude = cliId === "claude";
   // Which tools each kind gets, and the whole claude argv, live in
@@ -183,8 +190,10 @@ export async function POST(req: Request) {
     child = spawnHeadlessCli(
       binPath,
       args,
-      { cwd: careerOpsRoot(), env: process.env },
-      { cliId, capabilities },
+      // Its own process group on POSIX, so termination reaches descendants
+      // (Windows ends the tree with taskkill; see terminateCliRun).
+      { cwd: codeRoot, env: workerEnv, detached: process.platform !== "win32" },
+      { cliId, capabilities, writableRoot: capabilities.writes ? dataRoot : undefined },
     );
   } catch (e) {
     // Fencing refuses an argv that contradicts the capability record, so nothing
@@ -226,6 +235,22 @@ export async function POST(req: Request) {
   const finishRun = createRunFinalizer(child, () => {
     if (writeToken !== null) releaseTrackerWrite(writeToken);
   });
+  // Bounded: a descendant that escaped the tree kill and holds stdio would keep
+  // `close`, and with it the guard, waiting forever.
+  const terminateWorker = (onStuck?: () => void) => {
+    terminateCliRun(child, {
+      onCloseTimeout: () => {
+        console.error("[Run worker did not close after termination]", {
+          kind,
+          cliId,
+          exitCode: child.exitCode ?? "running",
+          signal: child.signalCode ?? "none",
+        });
+        onStuck?.();
+        finishRun.workerGone();
+      },
+    });
+  };
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       let buf = "";
@@ -278,7 +303,10 @@ export async function POST(req: Request) {
       let killedByTimeout = false;
       killer = setTimeout(() => {
         killedByTimeout = true;
-        try { child.kill("SIGTERM"); } catch { /* ignore */ }
+        terminateWorker(() => {
+          send({ type: "error", msg: timeoutMessage(killMs, kind) });
+          close();
+        });
       }, killMs);
       const send = (obj: unknown) => {
         if (closed) return;
@@ -430,9 +458,9 @@ export async function POST(req: Request) {
         // leaving it — and the write-token — open until process shutdown.
         try {
           const result = await renderAndMarkPdf({
-            spawnFn: spawn,
+            spawnFn: (command: string, args: string[], options: { cwd: string }) => spawn(command, args, { ...options, env: workerEnv }),
             execPath: process.execPath,
-            root: careerOpsRoot(),
+            root: codeRoot,
             pdfPaths: paths,
             format,
             reportNum: input,
@@ -562,7 +590,7 @@ export async function POST(req: Request) {
       closed = true;
       if (heartbeat) clearInterval(heartbeat);
       if (killer) clearTimeout(killer);
-      try { child.kill("SIGTERM"); } catch { /* ignore */ }
+      terminateWorker();
       if (pdfRenderPromise) {
         // Render/mark keeps running after this client disconnects — wait for
         // it to settle before releasing the guard, so a concurrent tracker

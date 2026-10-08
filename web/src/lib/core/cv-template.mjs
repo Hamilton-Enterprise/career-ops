@@ -38,10 +38,11 @@ import { BASE_CV_TEMPLATE } from "../run-prompts.mjs";
  * not exist; the catch is for a checkout too old to export resolveTemplate, and
  * for a template whose placeholders fail validation.
  *
- * @param {string} root Absolute path to the career-ops checkout (careerOpsRoot()).
+ * @param {string} root Absolute path to the engine checkout.
+ * @param {string} [defaultProfilePath] Absolute user-profile path already resolved by the caller.
  * @returns {Promise<string>} Repo-relative template path, forward-slashed.
  */
-export async function resolveCvTemplate(root) {
+export async function resolveCvTemplate(root, defaultProfilePath) {
   const file = path.join(root, "cv-templates.mjs");
   try {
     const mod = await import(/* webpackIgnore: true */ pathToFileURL(file).href);
@@ -49,9 +50,9 @@ export async function resolveCvTemplate(root) {
     const profile = process.env.CAREER_OPS_PROFILE?.trim();
     const abs = mod.resolveTemplate("cv", null, {
       fallback: true,
-      // undefined keeps cv-templates.mjs's own default, rather than restating it
-      // here where it would drift.
-      profilePath: profile ? path.resolve(root, profile) : undefined,
+      // A separate runtime can resolve a relative data root differently from
+      // this imported module; use the caller's resolved profile when provided.
+      profilePath: profile ? path.resolve(root, profile) : defaultProfilePath,
     });
     if (typeof abs !== "string" || !abs) return BASE_CV_TEMPLATE;
     // The prompt names a repo-relative path, and always with forward slashes:

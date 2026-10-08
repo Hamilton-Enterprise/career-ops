@@ -53,6 +53,28 @@ test('new broad pass clears precise source counts and retains completed zero cou
   assert.deepEqual(final.wttj, { state: 'ok', matches: 0 });
 });
 
+test('a known-limit sourceDone streams Parcial immediately, never Falhou or Concluída', () => {
+  const { SOURCE_STATE_LABEL } = discoveryState;
+  let sources = updateDiscoverySources({}, { kind: 'sourceStart', source: 'Welcome to the Jungle' });
+  assert.equal(SOURCE_STATE_LABEL[sources['Welcome to the Jungle'].state], 'A pesquisar');
+  sources = updateDiscoverySources(sources, {
+    kind: 'sourceDone',
+    source: 'Welcome to the Jungle',
+    count: 0,
+    state: 'partial',
+    message: 'feitas 12 de 15 pesquisas; os restantes termos continuam a filtrar os títulos recebidos.',
+  });
+  assert.equal(sources['Welcome to the Jungle'].state, 'partial');
+  assert.equal(SOURCE_STATE_LABEL[sources['Welcome to the Jungle'].state], 'Parcial');
+  assert.notEqual(SOURCE_STATE_LABEL[sources['Welcome to the Jungle'].state], 'Falhou');
+  assert.notEqual(SOURCE_STATE_LABEL[sources['Welcome to the Jungle'].state], 'Concluída');
+  assert.match(sources['Welcome to the Jungle'].message, /feitas 12 de 15/);
+  // A plain sourceDone (no partial flag) still means healthy completion.
+  const ok = updateDiscoverySources({}, { kind: 'sourceDone', source: 'Landing.jobs', count: 2 });
+  assert.deepEqual(ok['Landing.jobs'], { state: 'ok', matches: 2 });
+  assert.equal(SOURCE_STATE_LABEL[ok['Landing.jobs'].state], 'Concluída');
+});
+
 test('generic source events and authoritative summary retain failures and partial ATS coverage', () => {
   let sources = updateDiscoverySources({}, { kind: 'sourceStart', source: 'Remotive' });
   assert.equal(sources.Remotive.state, 'active');

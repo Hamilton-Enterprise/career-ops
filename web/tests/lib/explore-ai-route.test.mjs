@@ -82,6 +82,13 @@ const unsupportedAgents = [
 const offer = { url: "https://example.test/jobs/42", title: "Designer", company: "Synthetic", location: "Lisboa", source: "ai-search", verification: "unconfirmed" };
 const envelope = `<<offer:${JSON.stringify(offer)}>>`;
 
+function writeMockCli(dir, name, source) {
+  const entry = path.join(dir, `${name}.cjs`);
+  fs.writeFileSync(entry, source);
+  fs.writeFileSync(path.join(dir, name), `#!${process.execPath}\nrequire(${JSON.stringify(entry)});\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, `${name}.ps1`), `& "node$exe" "$basedir/${name}.cjs" $args\n`);
+}
+
 function fixture(t, behavior = "success") {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-ai-route-test-")));
   const bins = path.join(root, "bin");
@@ -105,11 +112,16 @@ const resultPath = args[args.indexOf("--output-last-message") + 1];
 const resultDir = args.includes("--output-last-message") ? fs.realpathSync(require("node:path").dirname(resultPath)) : null;
 const behavior = ${JSON.stringify(behavior)};
 if (behavior === "ignore-term") process.on("SIGTERM", () => {});
-fs.appendFileSync(${JSON.stringify(recordFile)}, JSON.stringify({ id: ${JSON.stringify(id)}, args, cwd: process.cwd(), pid: process.pid, resultDir, home: process.env.HOME }) + "\\n");
+// A real CLI may start helpers (Codex's npm entry runs a native binary); this
+// one inherits stdio and cwd, so it holds both until it is terminated too.
+// "escape" detaches it into its own session on POSIX, out of reach of the
+// process-group kill, while it keeps the inherited stdout open.
+const descendantPid = behavior === "hang" || behavior === "escape" ? require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "inherit", detached: behavior === "escape" }).pid : undefined;
+fs.appendFileSync(${JSON.stringify(recordFile)}, JSON.stringify({ id: ${JSON.stringify(id)}, args, cwd: process.cwd(), pid: process.pid, descendantPid, resultDir, home: process.env.HOME }) + "\\n");
 process.stderr.write("fatal SECRET_FROM_STDERR query=PRIVATE_PROMPT\\n");
 if (behavior === "empty") {
   process.exitCode = 0;
-} else if (behavior === "hang" || behavior === "ignore-term") {
+} else if (behavior === "hang" || behavior === "escape" || behavior === "ignore-term") {
   setInterval(() => {}, 1000);
 } else if (behavior === "failure" || behavior === "whitespace-failure") {
   if (behavior === "whitespace-failure") process.stdout.write("   ");
@@ -125,7 +137,7 @@ if (behavior === "empty") {
   if (["success-nonzero", "partial-failure", "invalid-failure"].includes(behavior)) process.exitCode = 7;
 }
 `;
-    fs.writeFileSync(path.join(bins, bin), script, { mode: 0o755 });
+    writeMockCli(bins, bin, script);
   }
   const values = { PATH: bins, CAREER_OPS_ROOT: data, CAREER_OPS_DATA_DIR: data, CAREER_OPS_CODE_ROOT: code };
   const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
@@ -133,7 +145,9 @@ if (behavior === "empty") {
   t.after(() => {
     if (fs.existsSync(recordFile)) {
       for (const record of records()) {
-        try { process.kill(record.pid, "SIGKILL"); } catch { /* already reaped */ }
+        for (const pid of [record.pid, record.descendantPid].filter(Boolean)) {
+          try { process.kill(pid, "SIGKILL"); } catch { /* already reaped */ }
+        }
         if (record.cwd.startsWith(path.join(fs.realpathSync(os.tmpdir()), "career-ops-")) && record.cwd !== root && !record.cwd.startsWith(root + path.sep)) {
           fs.rmSync(record.cwd, { recursive: true, force: true });
         }
@@ -162,6 +176,16 @@ async function waitFor(predicate, message) {
     await delay(10);
   }
   assert.fail(message);
+}
+
+function isDead(pid) {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (e) {
+    if (e.code !== "ESRCH") throw e;
+    return true;
+  }
 }
 
 function assertPreserved(f) {
@@ -223,15 +247,35 @@ for (const { id, name } of agents) {
     assert.match(outcome.error, /(?:code|código) 7/);
   });
 
-  test(`${id}: stream cancellation terminates the child and removes its directory`, async (t) => {
+  test(`${id}: stream cancellation terminates the child's process tree and removes its directory`, async (t) => {
     const f = fixture(t, "hang");
     const response = await invoke(id);
     assert.equal(response.status, 200);
     await waitFor(() => f.records().length === 1, "fixture never started");
-    const { cwd, pid } = f.records()[0];
-    await response.body.cancel();
-    await waitFor(() => { try { process.kill(pid, 0); return false; } catch { return true; } }, "cancelled child remains alive");
-    assert.equal(fs.existsSync(cwd), false, "cancel must clean up without relying on a subsequent close");
+    const { cwd, pid, descendantPid } = f.records()[0];
+    assert.ok(descendantPid, "fixture never started its descendant");
+    const reader = response.body.getReader();
+    await reader.cancel();
+    assert.equal((await reader.read()).done, true, "the response stream is closed");
+    await waitFor(() => isDead(pid), "cancelled child remains alive");
+    await waitFor(() => isDead(descendantPid), "cancelled child's descendant remains alive");
+    // Removal follows the child's close (stdio released), which follows the deaths above.
+    await waitFor(() => !fs.existsSync(cwd), "cancel must remove cwd once the process tree has released it");
+    assertPreserved(f);
+  });
+
+  test(`${id}: a descendant that escapes the tree kill and holds stdout cannot keep the directory`, async (t) => {
+    const f = fixture(t, "escape");
+    const response = await invoke(id);
+    assert.equal(response.status, 200);
+    await waitFor(() => f.records().length === 1, "fixture never started");
+    const { cwd, pid, descendantPid } = f.records()[0];
+    assert.ok(descendantPid, "fixture never started its descendant");
+    const reader = response.body.getReader();
+    await reader.cancel();
+    assert.equal((await reader.read()).done, true, "the response stream is closed");
+    await waitFor(() => isDead(pid), "cancelled child remains alive");
+    await waitFor(() => !fs.existsSync(cwd), "cancel must remove cwd even while an escaped descendant holds stdout");
     assertPreserved(f);
   });
 
@@ -248,7 +292,7 @@ for (const { id, name } of agents) {
     await waitFor(() => { try { process.kill(pid, 0); return false; } catch { return true; } }, "timed-out child remains alive");
     assert.match(text, /tempo limite/);
     assert.doesNotMatch(text, /SECRET_FROM_STDERR|PRIVATE_PROMPT/);
-    assert.equal(fs.existsSync(f.records()[0].cwd), false, "timeout must remove cwd");
+    await waitFor(() => !fs.existsSync(f.records()[0].cwd), "timeout must remove cwd after the child releases it");
     assertPreserved(f);
     const outcome = await providerOutcome(t, text);
     assert.equal(outcome.phase, 'failed');
@@ -263,11 +307,17 @@ for (const { id, name } of agents) {
     if (id === "codex") await (await invoke(id)).text();
     const realMkdtemp = fs.mkdtempSync;
     let cwd;
+    // Break what this platform actually launches. Windows resolves npm's shim to
+    // the .cjs target, so without it the bare shim is spawned and CreateProcess
+    // refuses it; POSIX executes the extensionless shim itself.
+    const launchFile = path.join(f.bins, process.platform === "win32" ? `${agent.bin}.cjs` : agent.bin);
     t.mock.method(fs, "mkdtempSync", (...args) => { cwd = realMkdtemp(...args); return cwd; });
-    if (id !== "codex") fs.writeFileSync(path.join(f.bins, agent.bin), "#!/nonexistent/PRIVATE_INTERPRETER\n");
-    else {
+    if (id !== "codex") {
+      if (process.platform === "win32") fs.unlinkSync(launchFile);
+      else fs.writeFileSync(launchFile, "#!/nonexistent/PRIVATE_INTERPRETER\n");
+    } else {
       // Delete after the cached probe stat, immediately after creating cwd.
-      t.mock.method(fs, "mkdtempSync", (...args) => { cwd = realMkdtemp(...args); fs.unlinkSync(path.join(f.bins, agent.bin)); return cwd; });
+      t.mock.method(fs, "mkdtempSync", (...args) => { cwd = realMkdtemp(...args); fs.unlinkSync(launchFile); return cwd; });
     }
     const response = await invoke(id);
     assert.equal(response.status, 200);

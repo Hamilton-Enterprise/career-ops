@@ -44,21 +44,23 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
   const [undo, setUndo] = useState<{ label: string; fn: () => void } | null>(null);
   const [hasCli, setHasCli] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const evaluable = useMemo(() => new Set(inbox
+    .filter((job) => job.opportunityType !== "freelance" && !hidden.includes(job.url))
+    .map((job) => job.url)), [inbox, hidden]);
 
   useEffect(() => {
     try {
-      const s = localStorage.getItem(SHORTLIST_KEY);
-      if (s) {
-        const evaluable = new Set(inbox.filter((job) => job.opportunityType !== "freelance").map((job) => job.url));
-        setShortlist((JSON.parse(s) as ShortItem[]).filter((item) => evaluable.has(item.url)));
-      }
       const h = localStorage.getItem(HIDDEN_KEY);
+      let hiddenUrls: string[] = [];
       if (h) {
         const parsed = JSON.parse(h) as unknown;
         const urls = Array.isArray(parsed) ? parsed.filter((u): u is string => typeof u === "string") : [];
         const pending = new Set(inbox.map((j) => j.url));
-        setHidden(urls.filter((u) => pending.has(u)));
+        hiddenUrls = urls.filter((u) => pending.has(u));
+        setHidden(hiddenUrls);
       }
+      const s = localStorage.getItem(SHORTLIST_KEY);
+      if (s) setShortlist((JSON.parse(s) as ShortItem[]).filter((item) => evaluable.has(item.url) && !hiddenUrls.includes(item.url)));
       const c = localStorage.getItem(CONFIG_KEY);
       setHasCli(!!(c && JSON.parse(c).cliId));
     } catch {
@@ -82,6 +84,12 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
       return next.length === h.length ? h : next;
     });
   }, [inbox]);
+  useEffect(() => {
+    setShortlist((items) => {
+      const next = items.filter((item) => evaluable.has(item.url));
+      return next.length === items.length ? items : next;
+    });
+  }, [evaluable]);
   // auto-dismiss the undo toast
   useEffect(() => {
     if (!undo) return;
@@ -179,7 +187,7 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
   };
 
   const save = (job: InboxJob) => {
-    if (job.opportunityType === "freelance" || isShortlisted(job.url)) return;
+    if (!evaluable.has(job.url) || isShortlisted(job.url)) return;
     setShortlist((s) => [...s, { url: job.url, company: job.company, role: job.role }]);
   };
   const skip = (job: InboxJob) => {
@@ -199,7 +207,7 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
     for (const url of urls) void persistSkip(url, false);
   };
   const toggleSelect = (job: InboxJob) => {
-    if (job.opportunityType === "freelance") return;
+    if (!evaluable.has(job.url)) return;
     setSelected((s) => {
       const n = new Set(s);
       if (n.has(job.url)) n.delete(job.url);
@@ -209,7 +217,7 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
   };
   const saveSelected = () => {
     const add = enriched
-      .filter((e) => e.job.opportunityType !== "freelance" && selected.has(e.job.url) && !isShortlisted(e.job.url))
+      .filter((e) => evaluable.has(e.job.url) && selected.has(e.job.url) && !isShortlisted(e.job.url))
       .map((e) => ({ url: e.job.url, company: e.job.company, role: e.job.role }));
     if (add.length) setShortlist((s) => [...s, ...add]);
     setSelected(new Set());
@@ -223,6 +231,7 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
   const scoreShortlist = () => {
     const batchId = `shortlist-${Date.now()}`;
     for (const it of shortlist) {
+      if (!evaluable.has(it.url)) continue;
       startJob({ title: `Avaliar · ${it.company}`, subtitle: it.role, kind: "evaluate", input: it.url, page: "/pipeline", batchId });
     }
     setShortlist([]); // sent — the rows flip to Scoring… → badge via scoreByUrl

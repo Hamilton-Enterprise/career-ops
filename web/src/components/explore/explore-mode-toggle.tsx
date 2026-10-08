@@ -48,7 +48,7 @@ export function ExploreModeToggle({
         <span className="hidden sm:inline-flex">
           <CostBadge kind="spend" size="xs" />
         </span>
-        {!cliConfigured && <span className="text-[10px] text-faint">requer um agente</span>}
+        {!cliConfigured && <span className="text-xs text-faint">requer um agente</span>}
       </button>
     </div>
   );

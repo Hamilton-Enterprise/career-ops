@@ -62,6 +62,11 @@ import { flagValue, hasFlag } from './lib/cli-flags.mjs';
 import { collectMjsFiles, isNestedCheckout, isUnderNestedCheckout } from './lib/mjs-files.mjs';
 import { SCRATCH_PREFIX, isScratchDir, markScratchOwner, sweepScratchDirs } from './lib/scratch-dirs.mjs';
 
+// A fixture must never inherit an installation's data paths or marker target.
+function fixtureEnv(root) {
+  return { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('CAREER_OPS_'))), CAREER_OPS_ROOT: root, CAREER_OPS_DATA_DIR: root };
+}
+
 /**
  * Read a repo-relative text file as UTF-8.
  *
@@ -558,7 +563,7 @@ try {
   // real ROOT/node_modules, which is how the root-level exclusion already
   // worked), and a nested web/node_modules is ~400 MB on a machine that has
   // installed the web app's deps — copying it dominated this section (#2387).
-  const EXCLUDE_AT_ANY_DEPTH = new Set(['node_modules', '.git']);
+  const EXCLUDE_AT_ANY_DEPTH = new Set(['node_modules', '.git', '.next']);
 
   const copyDirSync = (src, dest, exclude = []) => {
     const name = src.split(/[\\/]/).pop();
@@ -610,6 +615,8 @@ try {
     // drops them wherever they occur, root included.
     'data',
     'reports',
+    '.career-ops-data',
+    '.env',
     '.update-lock',
     '.career-ops-web',
     '.playwright-mcp',
@@ -679,6 +686,7 @@ try {
     // a hung CI job. Absent means absent, so run()'s own default stands.
     const result = run(NODE, [join(scriptTmp, scriptFile), ...args], {
       cwd: scriptTmp,
+      env: fixtureEnv(scriptTmp),
       stdio: ['pipe', 'pipe', 'pipe'],
       ...(declared ? { timeout: timeoutMs } : {}),
     });
@@ -724,6 +732,7 @@ try {
   {
     const assessmentCli = (...argv) => spawnSync(NODE, [join(scriptTmp, 'assessment-log.mjs'), ...argv], {
       cwd: scriptTmp,
+      env: fixtureEnv(scriptTmp),
       encoding: 'utf-8',
       timeout: 30000,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -778,6 +787,7 @@ try {
   {
     const replyWatchCli = (...argv) => spawnSync(NODE, [join(scriptTmp, 'reply-watch.mjs'), ...argv], {
       cwd: scriptTmp,
+      env: fixtureEnv(scriptTmp),
       encoding: 'utf-8',
       timeout: 30000,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -2461,13 +2471,13 @@ try {
   const insideHtmlPath = join(ROOT, 'templates', 'cv-template.html');
   const outsideHtmlPath = join(dirname(ROOT), 'outside-cv-template.html');
 
-  if (repoRelativeManifestPath(insideHtmlPath) === 'templates/cv-template.html') {
+  if (repoRelativeManifestPath(insideHtmlPath, ROOT) === 'templates/cv-template.html') {
     pass('PDF manifest records repo-local source HTML paths');
   } else {
     fail('PDF manifest does not normalize repo-local source HTML paths');
   }
 
-  if (repoRelativeManifestPath('') === '' && repoRelativeManifestPath(outsideHtmlPath) === '') {
+  if (repoRelativeManifestPath('', ROOT) === '' && repoRelativeManifestPath(outsideHtmlPath, ROOT) === '') {
     pass('PDF manifest leaves HTML column blank when source HTML is missing or outside the repo');
   } else {
     fail('PDF manifest mishandles missing or external source HTML paths');
@@ -7379,31 +7389,37 @@ if (!hasBrowser) {
   if (!liveJobUrl) {
     warn('archive render skipped — Greenhouse API unreachable');
   } else {
-    const JDS_DIR = join(ROOT, 'jds');
-    const startedAt = Date.now();
-    const archiveOut = run('node', ['archive-posting.mjs', liveJobUrl], { timeout: 60000 });
+    const archiveRoot = mkdtempSync(join(ROOT, SCRATCH_PREFIX));
+    markScratchOwner(archiveRoot);
+    try {
+      const JDS_DIR = join(archiveRoot, 'jds');
+      const startedAt = Date.now();
+      const archiveOut = run(NODE, ['archive-posting.mjs', liveJobUrl], { timeout: 60000, env: fixtureEnv(archiveRoot) });
 
-    if (archiveOut === null) {
-      fail('live archive: script exited non-zero on live URL');
-    } else {
-      pass('live archive: exited 0');
-
-      const recent = existsSync(JDS_DIR)
-        ? readdirSync(JDS_DIR)
-            .filter(f => f.endsWith('.pdf'))
-            .filter(f => statSync(join(JDS_DIR, f)).mtimeMs >= startedAt)
-        : [];
-
-      if (recent.length === 0) {
-        fail('live archive: no PDF written to jds/ during test run');
+      if (archiveOut === null) {
+        fail('live archive: script exited non-zero on live URL');
       } else {
-        const pdf = join(JDS_DIR, recent[0]);
-        const { size } = statSync(pdf);
-        size > 50 * 1024
-          ? pass(`live archive: PDF has real content (${(size / 1024).toFixed(0)} KB)`)
-          : fail(`live archive: PDF suspiciously small — likely empty page (${size} bytes)`);
-        unlinkSync(pdf);
+        pass('live archive: exited 0');
+
+        const recent = existsSync(JDS_DIR)
+          ? readdirSync(JDS_DIR)
+              .filter(f => f.endsWith('.pdf'))
+              .filter(f => statSync(join(JDS_DIR, f)).mtimeMs >= startedAt)
+          : [];
+
+        if (recent.length === 0) {
+          fail('live archive: no PDF written to jds/ during test run');
+        } else {
+          const pdf = join(JDS_DIR, recent[0]);
+          const { size } = statSync(pdf);
+          size > 50 * 1024
+            ? pass(`live archive: PDF has real content (${(size / 1024).toFixed(0)} KB)`)
+            : fail(`live archive: PDF suspiciously small — likely empty page (${size} bytes)`);
+          unlinkSync(pdf);
+        }
       }
+    } finally {
+      rmSync(archiveRoot, { recursive: true, force: true });
     }
   }
 }
@@ -17215,10 +17231,15 @@ try {
 
 console.log('\n20. Path resolution layer and overrides');
 
+const resolverRoot = mkdtempSync(join(ROOT, SCRATCH_PREFIX));
+const resolverRootEnv = process.env.CAREER_OPS_ROOT;
+const resolverDataEnv = process.env.CAREER_OPS_DATA_DIR;
 try {
-  const { getCareerOpsRoot } = await import(pathToFileURL(join(ROOT, 'path-resolver.mjs')).href);
+  markScratchOwner(resolverRoot);
+  copyFileSync(join(ROOT, 'path-resolver.mjs'), join(resolverRoot, 'path-resolver.mjs'));
+  const { getCareerOpsRoot } = await import(pathToFileURL(join(resolverRoot, 'path-resolver.mjs')).href);
 
-  // 1. Unset env vars should resolve to codebase root (ROOT)
+  // 1. A marker-free fixture defaults to its own code root.
   const originalRoot = process.env.CAREER_OPS_ROOT;
   const originalDataDir = process.env.CAREER_OPS_DATA_DIR;
   delete process.env.CAREER_OPS_ROOT;
@@ -17226,10 +17247,10 @@ try {
 
   try {
     const defaultRoot = getCareerOpsRoot();
-    if (defaultRoot === ROOT) {
+    if (defaultRoot === resolverRoot) {
       pass('getCareerOpsRoot() defaults to codebase root when environment variables are unset');
     } else {
-      fail(`getCareerOpsRoot() returned ${defaultRoot}, expected ${ROOT}`);
+      fail(`getCareerOpsRoot() returned ${defaultRoot}, expected ${resolverRoot}`);
     }
 
     // 2. CAREER_OPS_ROOT should override the resolved path
@@ -17264,7 +17285,7 @@ try {
   const tempTarget = mkdtempSync(join(ROOT, 'co-temp-target-'));
   try {
     process.env.CAREER_OPS_ROOT = tempTarget;
-    const r = JSON.parse(run(NODE, ['doctor.mjs', '--json']) || '{}');
+    const r = JSON.parse(run(NODE, ['doctor.mjs', '--json'], { env: fixtureEnv(tempTarget) }) || '{}');
     if (r.onboardingNeeded === true && r.missing.includes('cv.md')) {
       pass('doctor.mjs respects CAREER_OPS_ROOT default root check');
     } else {
@@ -17277,7 +17298,7 @@ try {
   // 4b. Test doctor.mjs respects CAREER_OPS_DATA_DIR override
   try {
     process.env.CAREER_OPS_DATA_DIR = tempTarget;
-    const r = JSON.parse(run(NODE, ['doctor.mjs', '--json']) || '{}');
+    const r = JSON.parse(run(NODE, ['doctor.mjs', '--json'], { env: { ...fixtureEnv(tempTarget), CAREER_OPS_ROOT: '' } }) || '{}');
     if (r.onboardingNeeded === true && r.missing.includes('cv.md')) {
       pass('doctor.mjs respects CAREER_OPS_DATA_DIR override check');
     } else {
@@ -17305,7 +17326,7 @@ try {
 
   try {
     process.env.CAREER_OPS_ROOT = tempRoot;
-    run(NODE, ['normalize-statuses.mjs']);
+    run(NODE, ['normalize-statuses.mjs'], { env: fixtureEnv(tempRoot) });
     const updated = readFileSync(tempTracker, 'utf-8');
     if (updated.includes('| Applied |') && !updated.includes('**Applied**')) {
       pass('normalize-statuses.mjs respects CAREER_OPS_ROOT and modifies the correct tracker file');
@@ -17320,21 +17341,15 @@ try {
 
   // 6. Test .career-ops-data marker file resolution
   const tempMarkerRoot = mkdtempSync(join(ROOT, 'co-temp-marker-'));
-  const markerFile = join(ROOT, '.career-ops-data');
+  const markerFile = join(resolverRoot, '.career-ops-data');
   const originalRootEnv = process.env.CAREER_OPS_ROOT;
   const originalDataDirEnv = process.env.CAREER_OPS_DATA_DIR;
   delete process.env.CAREER_OPS_ROOT;
   delete process.env.CAREER_OPS_DATA_DIR;
 
-  const originalMarkerExists = existsSync(markerFile);
-  let originalMarkerContent = '';
-  if (originalMarkerExists) {
-    try { originalMarkerContent = readFileSync(markerFile, 'utf-8'); } catch {}
-  }
-
   try {
     writeFileSync(markerFile, tempMarkerRoot, 'utf-8');
-    const { getCareerOpsRoot: getRootWithMarker } = await import(pathToFileURL(join(ROOT, 'path-resolver.mjs')).href + '?cachebust=' + Date.now());
+    const { getCareerOpsRoot: getRootWithMarker } = await import(pathToFileURL(join(resolverRoot, 'path-resolver.mjs')).href);
     const resolved = getRootWithMarker();
     if (resolved === tempMarkerRoot) {
       pass('getCareerOpsRoot() respects .career-ops-data marker file');
@@ -17342,13 +17357,7 @@ try {
       fail(`getCareerOpsRoot() with marker returned ${resolved}, expected ${tempMarkerRoot}`);
     }
   } finally {
-    try {
-      if (originalMarkerExists) {
-        writeFileSync(markerFile, originalMarkerContent, 'utf-8');
-      } else {
-        unlinkSync(markerFile);
-      }
-    } catch {}
+    unlinkSync(markerFile);
     if (originalRootEnv) process.env.CAREER_OPS_ROOT = originalRootEnv;
     if (originalDataDirEnv) process.env.CAREER_OPS_DATA_DIR = originalDataDirEnv;
     rmSync(tempMarkerRoot, { recursive: true, force: true });
@@ -17366,6 +17375,12 @@ try {
 
 } catch (e) {
   fail(`Path resolution layer test crashed: ${e.message}`);
+} finally {
+  if (resolverRootEnv === undefined) delete process.env.CAREER_OPS_ROOT;
+  else process.env.CAREER_OPS_ROOT = resolverRootEnv;
+  if (resolverDataEnv === undefined) delete process.env.CAREER_OPS_DATA_DIR;
+  else process.env.CAREER_OPS_DATA_DIR = resolverDataEnv;
+  rmSync(resolverRoot, { recursive: true, force: true });
 }
 
 console.log('\n56. Fingerprint core — JD cross-listing detection (#1597)');

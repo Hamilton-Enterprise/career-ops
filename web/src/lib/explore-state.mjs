@@ -59,7 +59,18 @@ export function updateDiscoverySources(sources, event) {
   const previous = next[source] ?? { state: 'queued' };
   switch (event.kind) {
     case 'sourceStart': next[source] = { ...previous, state: 'active' }; break;
-    case 'sourceDone': next[source] = { ...previous, state: previous.state === 'partial' ? 'partial' : 'ok', matches: event.count }; break;
+    case 'sourceDone': {
+      // Known budgets stream as partial immediately so the chip never flashes
+      // Concluída/Falhou while the deferred summary is held for broad-phase.
+      const doneState = event.state === 'partial' || previous.state === 'partial' ? 'partial' : 'ok';
+      next[source] = {
+        ...previous,
+        state: doneState,
+        matches: event.count,
+        ...(typeof event.message === 'string' && event.message ? { message: event.message } : {}),
+      };
+      break;
+    }
     case 'sourceError': next[source] = { ...previous, state: 'error', message: event.message }; break;
     case 'atsStart': next[source] = { ...previous, state: 'active', companies: event.companies }; break;
     case 'progress': next[source] = { ...previous, state: 'active', done: event.scanned, total: event.total, matches: event.matches }; break;

@@ -1,6 +1,6 @@
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
-import { CAPS } from "@/lib/worker-capabilities.mjs";
-import { scopeFrom } from "@/lib/claude-invocation.mjs";
+import { ACTION_CAPABILITIES } from "@/lib/worker-capabilities.mjs";
+import { CLAUDE_READ_ONLY_ISOLATION, scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
 import type { CliSpec } from "@/lib/clis";
 
@@ -65,17 +65,17 @@ export function runPlanner(opts: {
   const { cliId, spec, binPath, prompt, fieldCount, cwd, t0, log } = opts;
 
   const isClaude = cliId === "claude";
-  // --strict-mcp-config with no --mcp-config = load ZERO MCP servers → much
-  // faster startup (skips the user's global playwright/gmail/linear/… servers
-  // the planner doesn't need; it only reads local files).
+  // No MCP server and no hook: faster startup (skips the user's global
+  // playwright/gmail/linear/… servers the planner doesn't need; it only reads
+  // local files), and nothing outside the tool lists can write.
   const args = isClaude
-    ? ["-p", prompt, "--permission-mode", "acceptEdits", "--strict-mcp-config", "--allowedTools", ADVISOR_SCOPE.allowed, "--disallowedTools", ADVISOR_SCOPE.disallowed]
+    ? ["-p", prompt, "--permission-mode", "acceptEdits", ...CLAUDE_READ_ONLY_ISOLATION, "--allowedTools", ADVISOR_SCOPE.allowed, "--disallowedTools", ADVISOR_SCOPE.disallowed]
     : spec.args(prompt);
   // A runtime with no verified fencing mechanism plans with its default access.
   // log() is the caller's non-fatal channel; it surfaces in the collapsed
   // "Pre-fill diagnostics" drawer, which is where the other planner facts go
   // (#2507).
-  const fencing = fencingReport({ cliId: spec.id, cliName: spec.name, capabilities: CAPS.localReadOnly });
+  const fencing = fencingReport({ cliId: spec.id, cliName: spec.name, capabilities: ACTION_CAPABILITIES.apply });
   if (fencing.notice) log(`⚠️ ${fencing.notice}`);
   // Scale the timeout with form size (big forms = more drafting). Cap < maxDuration.
   const killMs = Math.min(300_000, 150_000 + fieldCount * 6_000);
@@ -96,7 +96,7 @@ export function runPlanner(opts: {
         // spec.id, not the caller's cliId: same value once resolveCli has
         // accepted it, but typed as the canonical id rather than the caller's
         // optional string.
-        { cliId: spec.id, capabilities: CAPS.localReadOnly },
+        { cliId: spec.id, capabilities: ACTION_CAPABILITIES.apply },
       );
     } catch (e) {
       // Fencing refuses an argv that contradicts the capability record. Resolve

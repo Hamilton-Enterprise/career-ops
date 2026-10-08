@@ -3,6 +3,11 @@ import assert from "node:assert/strict";
 import * as marketPresets from "../../src/lib/market-presets.mjs";
 import { mergeDiscoveredOffers } from "../../src/lib/core/market-merge.mjs";
 import { resolveLocationInputs } from "../../src/lib/location-concepts.mjs";
+import { readFileSync } from "node:fs";
+import * as yaml from "js-yaml";
+import { buildSearchPlan } from "../../src/lib/search-plan.mjs";
+import { matchesOccupationTerms } from "../../src/lib/occupation-match.mjs";
+import { FREELANCE_SHORTCUTS } from "../../src/lib/freelance-presets.mjs";
 
 const { cleanMarkets, encodeMarkets, decodeMarkets, buildMarketPlan, classifyMarketLocation } = marketPresets;
 
@@ -12,7 +17,7 @@ test("Portuguese retail and pharmacy concepts place Auchan before existing marke
     assert.deepEqual(plan.jobBoards, [
       { name: "Auchan Portugal", provider: "workday", enabled: true, careers_url: "https://auchanportugal.wd3.myworkdayjobs.com/auchan-retail" },
       { name: "Landing.jobs", provider: "landingjobs", enabled: true },
-      { name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: { queries: ["Operador de Loja"], filters: "offices.country_code:PT" } },
+      { name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: { queries: ["Operador de Loja"], filters: "offices.country_code:PT", max_hits: 300, timeout_ms: 5000 } },
     ]);
   }
 });
@@ -186,6 +191,47 @@ test("WTTJ uses supplied profile terms and skips when no real terms exist", () =
   assert.deepEqual(plan.skippedSources, [{ source: "wttj", reason: "missing-search-terms" }]);
 });
 
+const templatePositives = yaml.load(readFileSync(new URL("../../../templates/portals.example.yml", import.meta.url), "utf8")).title_filter.positive;
+const searchFilters = { opportunityType: "employment", negative: [], allow: [], block: [], blockHard: [], alwaysAllow: [], sinceDays: 7, ats: [], limitPerAts: 150 };
+const wttjOf = plan => plan.jobBoards.find(board => board.provider === "wttj").wttj;
+
+test("WTTJ sends at most 12 queries, originals first, and reports the rest while titles keep every term", () => {
+  assert.equal(templatePositives.length, 37);
+  for (const phase of ["precise", "broad"]) {
+    const search = buildSearchPlan({ ...searchFilters, positive: templatePositives, markets: ["europe"] }, phase);
+    const plan = buildMarketPlan(["europe"], search.effectiveFilters.positive, "employment", search);
+    assert.deepEqual(wttjOf(plan).queries, templatePositives.slice(0, 12), phase);
+    const [skipped, ...rest] = plan.skippedSources;
+    assert.deepEqual(rest, []);
+    assert.equal(skipped.source, "wttj");
+    assert.equal(skipped.reason, "query-limit");
+    assert.deepEqual(skipped.omitted.slice(0, 25), templatePositives.slice(12), phase);
+    assert.ok(!skipped.omitted.includes("Kunstliche Intelligenz"), "accent-folded twin of an original is not a separate query");
+    assert.deepEqual(templatePositives.filter(term => !search.effectiveFilters.positive.includes(term)), []);
+    assert.equal(matchesOccupationTerms("Hyperautomation Lead", search.effectiveFilters.positive), true);
+  }
+});
+
+test("freelance WTTJ queries keep 12 of the 18 shortcut terms and report the other 6", () => {
+  const positive = [...new Set(Object.values(FREELANCE_SHORTCUTS).flat())];
+  const search = buildSearchPlan({ ...searchFilters, opportunityType: "freelance", positive, markets: ["remote"] }, "precise");
+  const plan = buildMarketPlan(["remote"], search.effectiveFilters.positive, "freelance", search);
+  assert.deepEqual(wttjOf(plan).queries, positive.slice(0, 12));
+  assert.deepEqual(plan.skippedSources, [{ source: "wttj", reason: "query-limit", omitted: positive.slice(12) }]);
+  assert.equal(matchesOccupationTerms("Senior n8n builder", search.effectiveFilters.positive), true);
+});
+
+test("12 or fewer distinct queries need no query-limit entry and drop folded spelling twins", () => {
+  const search = buildSearchPlan({ ...searchFilters, positive: ["Técnico Auxiliar de Farmácia", "Operador/a de Loja"], markets: ["portugal"] }, "broad");
+  const plan = buildMarketPlan(["portugal"], search.effectiveFilters.positive, "employment", search);
+  const { queries } = wttjOf(plan);
+  assert.deepEqual(queries.slice(0, 2), ["Técnico Auxiliar de Farmácia", "Operador/a de Loja"]);
+  for (const twin of ["Tecnico Auxiliar de Farmacia", "Operador de Loja", "Operador(a) de Loja"]) assert.ok(!queries.includes(twin), twin);
+  assert.ok(queries.includes("Pharmacy Assistant"));
+  assert.ok(queries.length <= 12);
+  assert.deepEqual(plan.skippedSources, []);
+});
+
 test("remote selects the seven existing remote feeds", () => {
   assert.deepEqual(buildMarketPlan(["remote"], []).jobBoards.map((b) => b.provider), [
     "remoteok", "remotive", "himalayas", "jobicy", "jobspresso", "workingnomads", "weworkremotely",
@@ -242,9 +288,9 @@ test("Europe accepts EU, EEA, UK and Switzerland, not unrestricted EMEA", () => 
 test("remote feed provenance proves remote work but leaves country eligibility unknown", () => {
   const plan = buildMarketPlan(["remote"], []);
   for (const offer of [
-    { location: "United States", source: "Remotive" },
+    { location: "Worldwide", source: "Remotive" },
     { location: "Worldwide", ats: "remoteok" },
-    { location: "Remote - US only", source: "greenhouse" },
+    { location: "Remote - Europe", source: "greenhouse" },
   ]) {
     assert.deepEqual(classifyMarketLocation(offer, plan), { accepted: true, remote: true, eligibility: "unknown" });
   }
@@ -315,4 +361,119 @@ test("merged origins preserve remote evidence when the preferred URL belongs to 
 test("non-remote origins with suffixes cannot admit a worldwide posting", () => {
   assert.deepEqual(classifyMarketLocation({ location: "Worldwide", source: "greenhouse-full", ats: "greenhouse-full", provider: "landingjobs-api", sources: ["wttj-api", "notremotive-api"] }, buildMarketPlan(["remote"], [])),
     { accepted: false, reason: "outside-market" });
+});
+
+const SIX_MARKETS = ["portugal", "spain", "united-kingdom", "switzerland", "luxembourg", "netherlands"];
+
+test("country-only selection accepts every catalog alias, including native-language names", async () => {
+  const { countryAliases } = await import("../../src/lib/location-concepts.mjs");
+  assert.equal(typeof countryAliases, "function");
+  for (const market of SIX_MARKETS) {
+    const plan = buildMarketPlan([market], ["x"]);
+    const aliases = countryAliases(market);
+    assert.ok(aliases.length >= 2, market);
+    for (const location of aliases) assert.equal(classifyMarketLocation({ location }, plan).accepted, true, `${market}: ${location}`);
+  }
+  for (const [market, location] of [
+    ["portugal", "Portugal"], ["spain", "España"], ["spain", "Espanha"], ["united-kingdom", "Reino Unido"],
+    ["switzerland", "Schweiz"], ["switzerland", "Suisse"], ["switzerland", "Svizzera"], ["luxembourg", "Luxemburg"],
+    ["netherlands", "Nederland"], ["netherlands", "Holanda"],
+  ]) assert.deepEqual(classifyMarketLocation({ location }, buildMarketPlan([market], ["x"])), { accepted: true }, `${market}: ${location}`);
+});
+
+test("target cities and countries stay accepted with their own qualifiers", () => {
+  for (const [market, locations] of [
+    ["portugal", ["Lisboa", "Lisbon, Portugal", "Lisboa, PT", "Porto"]],
+    ["spain", ["Madrid, Spain", "Madrid, ES", "Valencia, España"]],
+    ["united-kingdom", ["London, UK", "London, GB", "Birmingham", "Manchester, England"]],
+    ["switzerland", ["Zürich, Schweiz", "Genève, Suisse", "Lugano, Svizzera", "Zurich, CH"]],
+    ["luxembourg", ["Luxembourg City, Luxembourg", "Esch-sur-Alzette, LU"]],
+    ["netherlands", ["Utrecht, Nederland", "Amsterdam, NL", "Rotterdam, Holanda"]],
+  ]) {
+    const plan = buildMarketPlan([market], ["x"]);
+    for (const location of locations) assert.deepEqual(classifyMarketLocation({ location }, plan), { accepted: true }, `${market}: ${location}`);
+  }
+});
+
+test("homonym cities with a foreign state, province or country qualifier are rejected", () => {
+  for (const [market, locations] of [
+    ["portugal", ["Lisboa, México", "Porto, Brasil", "Lisbon, Maine", "Lisbon, OH", "Lisboa, Estados Unidos", "Braga, Brazil"]],
+    ["spain", ["Valencia, Venezuela", "Barcelona, Venezuela", "Madrid, Iowa", "Valencia, FL", "Sevilla, Colombia", "Madrid, Nuevo México"]],
+    ["united-kingdom", ["London, Ontario", "Birmingham, Alabama", "Birmingham, AL", "Manchester, New Hampshire", "London, KY", "London, ON", "London, États-Unis"]],
+    ["switzerland", ["Geneva, Illinois", "Geneva, NY", "Lucerne, California", "Zürich, Kanada"]],
+    ["luxembourg", ["Luxemburg, Wisconsin", "Luxembourg, WI", "Luxemburg, Iowa"]],
+    ["netherlands", ["Amsterdam, NY", "Rotterdam, New York", "Groningen, Suriname", "Amsterdam, Verenigde Staten"]],
+  ]) {
+    const plan = buildMarketPlan([market], ["x"]);
+    for (const location of locations) assert.deepEqual(classifyMarketLocation({ location }, plan), { accepted: false, reason: "outside-market" }, `${market}: ${location}`);
+  }
+});
+
+test("two-letter state codes count only as an uppercase comma part after a city", () => {
+  const plan = buildMarketPlan(["united-kingdom"], ["x"]);
+  assert.equal(classifyMarketLocation({ location: "Birmingham, AL" }, plan).accepted, false);
+  assert.equal(classifyMarketLocation({ location: "Birmingham, al" }, plan).accepted, true);
+  assert.equal(classifyMarketLocation({ location: "Egypt" }, buildMarketPlan(["portugal"], ["x"])).accepted, false);
+});
+
+test("unknown non-place qualifiers keep the literal and resolved-city behaviour", () => {
+  // Literal market selection: an unknown neighbourhood next to a target city is accepted.
+  assert.equal(classifyMarketLocation({ location: "London, Shoreditch" }, buildMarketPlan(["united-kingdom"], ["x"])).accepted, true);
+  assert.equal(classifyMarketLocation({ location: "Lisboa, Alfama" }, buildMarketPlan(["portugal"], ["x"])).accepted, true);
+  // A resolved city still fails closed on any unknown qualifier.
+  const resolved = buildMarketPlan(["portugal"], ["x"], "employment", { locationResolution: resolveLocationInputs("Lisboa", "precise") });
+  assert.equal(classifyMarketLocation({ location: "Lisboa, Alfama" }, resolved).accepted, false);
+});
+
+test("multi-location strings accept any unambiguous selected group and reject all-foreign groups", () => {
+  const uk = buildMarketPlan(["united-kingdom"], ["x"]);
+  assert.equal(classifyMarketLocation({ location: "London, UK; New York, NY" }, uk).accepted, true);
+  assert.equal(classifyMarketLocation({ location: "New York, NY | London" }, uk).accepted, true);
+  assert.equal(classifyMarketLocation({ location: "London, Ontario; Birmingham, AL" }, uk).accepted, false);
+  assert.equal(classifyMarketLocation({ location: "Toronto, ON | London, Ontario" }, uk).accepted, false);
+  const pt = buildMarketPlan(["portugal"], ["x"]);
+  assert.equal(classifyMarketLocation({ location: "Lisboa / Madrid" }, pt).accepted, true);
+  assert.equal(classifyMarketLocation({ location: "São Paulo, Brasil / Lisboa" }, pt).accepted, true);
+  assert.equal(classifyMarketLocation({ location: "Porto, Brasil / Lisboa, México" }, pt).accepted, false);
+});
+
+test("remote selection rejects a published national restriction outside the selected markets", () => {
+  const remote = buildMarketPlan(["remote"], ["x"]);
+  for (const offer of [
+    { location: "Remote - US only" }, { location: "Remote (USA)" }, { location: "Remote, Canada" },
+    { location: "Remote (UK)" }, { location: "Remote - United States" },
+    { location: "United States", source: "Remotive" }, { location: "Remote - US only", source: "greenhouse" },
+  ]) assert.deepEqual(classifyMarketLocation(offer, remote), { accepted: false, reason: "outside-market" }, offer.location);
+  for (const location of ["Remote", "Remote - Europe", "Remoto"]) {
+    assert.deepEqual(classifyMarketLocation({ location }, remote), { accepted: true, remote: true, eligibility: "unknown" }, location);
+  }
+  for (const markets of [["remote", "portugal"], ["portugal", "remote"]]) {
+    const plan = buildMarketPlan(markets, ["x"]);
+    assert.equal(classifyMarketLocation({ location: "Remote, Portugal" }, plan).accepted, true, `${markets}`);
+    assert.equal(classifyMarketLocation({ location: "Remote - US only" }, plan).accepted, false, `${markets}`);
+  }
+  assert.equal(classifyMarketLocation({ location: "Remote (UK)" }, buildMarketPlan(["remote", "united-kingdom"], ["x"])).accepted, true);
+  assert.equal(classifyMarketLocation({ location: "Remote, Germany" }, buildMarketPlan(["remote", "europe"], ["x"])).accepted, true);
+});
+
+test("a market's own ISO 3166-2 subdivision codes are not foreign qualifiers", () => {
+  for (const [market, accepted, rejected] of [
+    ["netherlands", ["Amsterdam, NH", "Utrecht, UT", "Groningen, GR", "Maastricht, LI", "Eindhoven, NB", "Utrecht, NL"], ["Amsterdam, NY", "Amsterdam, MA", "Rotterdam, TX"]],
+    ["spain", ["Málaga, MA", "Valencia, VA", "Sevilla, SE", "Valencia, V", "Madrid, MD"], ["Valencia, FL", "Madrid, IA", "Barcelona, NH"]],
+    ["switzerland", ["Bern, BE", "Neuchâtel, NE", "Appenzell, AR", "Lucerne, LU", "Geneva, GE", "Zurich, ZH"], ["Geneva, IL", "Bern, NC", "Zurich, AT", "Bern, NH"]],
+    ["united-kingdom", ["London, UK", "London, GB"], ["Birmingham, AL", "London, ON", "Manchester, NH", "London, BE"]],
+  ]) {
+    const plan = buildMarketPlan([market], ["x"]);
+    for (const location of accepted) assert.deepEqual(classifyMarketLocation({ location }, plan), { accepted: true }, `${market}: ${location}`);
+    for (const location of rejected) assert.deepEqual(classifyMarketLocation({ location }, plan), { accepted: false, reason: "outside-market" }, `${market}: ${location}`);
+  }
+});
+
+test("the country-filtered WTTJ board reads up to 300 hits per query within the scan deadline", () => {
+  for (const markets of [["portugal"], ["europe"], ["spain", "france"]]) {
+    const wttj = buildMarketPlan(markets, ["Engineer"]).jobBoards.find(board => board.provider === "wttj").wttj;
+    assert.equal(wttj.max_hits, 300, markets.join(","));
+    assert.equal(wttj.timeout_ms, 5000, markets.join(","));
+    assert.match(wttj.filters, /offices\.country_code:/);
+  }
 });

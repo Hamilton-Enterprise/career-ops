@@ -40,6 +40,25 @@ export const NETWORK_TOOLS = Object.freeze(["WebFetch", "WebSearch"]);
 const ALWAYS_DENIED = ["Task"];
 
 /**
+ * The flags that make a non-writing Claude worker's tool lists a COMPLETE
+ * description of what it can reach. Both close a channel the lists cannot name:
+ *
+ * - `--strict-mcp-config` with no `--mcp-config` loads zero MCP servers, so no
+ *   server from the user's config can supply a write tool.
+ * - `--settings {"disableAllHooks":true}` turns off user and project hooks,
+ *   which are shell commands run around every tool call — a write path that no
+ *   deny list sees. A per-session override, so HOME and auth are untouched.
+ *
+ * Spread this into every hand-written non-writing argv; verifyClaudeArgs
+ * refuses one that lacks either half.
+ */
+export const CLAUDE_READ_ONLY_ISOLATION = Object.freeze([
+  "--strict-mcp-config",
+  "--settings",
+  JSON.stringify({ disableAllHooks: true }),
+]);
+
+/**
  * Split a comma-separated tool list into bare tool names.
  *
  * Claude Code accepts parameterized specifiers (`Bash(node x.mjs:*)`,
@@ -125,7 +144,14 @@ export const TOOL_SCOPES = Object.freeze({
  * @returns {ToolScope}
  */
 export function toolScopeFor(kind) {
-  const { writes, network } = capabilitiesFor(kind);
+  return toolScopeForCapabilities(capabilitiesFor(kind));
+}
+
+/**
+ * @param {import("./worker-capabilities.mjs").Capabilities} capabilities
+ * @returns {ToolScope}
+ */
+function toolScopeForCapabilities({ writes, network }) {
   if (writes) return TOOL_SCOPES.persisting;
   return network ? TOOL_SCOPES.networkReadOnly : TOOL_SCOPES.localReadOnly;
 }
@@ -151,11 +177,14 @@ export function grantsWriteCapability(scope) {
  * Assembled here, not in the route, so a guard can assert on the command line
  * that actually ships instead of on source text that can be rewritten around it.
  *
- * @param {{kind: string, prompt: string}} args
+ * `capabilities` defaults to the kind's record; the availability table passes
+ * the record of a route that is not an /api/run kind (AI search, the assistant).
+ *
+ * @param {{kind: string, prompt: string, capabilities?: import("./worker-capabilities.mjs").Capabilities}} args
  * @returns {string[]}
  */
-export function claudeCliArgs({ kind, prompt }) {
-  const scope = toolScopeFor(kind);
+export function claudeCliArgs({ kind, prompt, capabilities = capabilitiesFor(kind) }) {
+  const scope = toolScopeForCapabilities(capabilities);
   return [
     "-p", prompt,
     "--output-format", "stream-json",
@@ -168,8 +197,8 @@ export function claudeCliArgs({ kind, prompt }) {
     // write tool that appears in neither list. #2185 is about pdf, and applying
     // this to every kind would silently stop a configured MCP server (e.g. the
     // optional Canva server) from loading on evaluate/research runs. The same gap
-    // for the other kinds is #2507.
-    ...(capabilitiesFor(kind).writes ? [] : ["--strict-mcp-config"]),
+    // for the other kinds is #2507. Hooks are switched off on the same rule.
+    ...(capabilities.writes ? [] : CLAUDE_READ_ONLY_ISOLATION),
     "--allowedTools", scope.allowed,
     "--disallowedTools", scope.disallowed,
   ];
@@ -259,5 +288,48 @@ export function verifyClaudeArgs(args, capabilities) {
         "--permission-mode acceptEdits.",
     );
   }
+
+  if (!capabilities.writes && !disablesAllHooks(args)) {
+    throw new Error(
+      "cli-fencing: claude argv for a non-writing worker must pass exactly one inline --settings " +
+        'whose JSON is exactly {"disableAllHooks":true}, otherwise a user or project hook could run a ' +
+        "shell command the capability record forbids. Spread CLAUDE_READ_ONLY_ISOLATION into the argv.",
+    );
+  }
   return args;
+}
+
+/**
+ * Does this argv carry exactly one inline `--settings` that disables all hooks?
+ *
+ * Exactly one, because a second override could re-enable them and which one
+ * wins is the CLI's business, not something to certify. Inline JSON only, and
+ * exactly `{"disableAllHooks":true}`: a settings FILE path cannot be inspected
+ * from the argv, and a merged object would carry settings nobody reviewed.
+ *
+ * @param {string[]} args
+ * @returns {boolean}
+ */
+function disablesAllHooks(args) {
+  const values = [];
+  args.forEach((arg, i) => {
+    if (arg === "--settings") values.push(args[i + 1] ?? "");
+    else if (arg.startsWith("--settings=")) values.push(arg.slice("--settings=".length));
+  });
+  if (values.length !== 1) return false;
+  let settings;
+  try {
+    settings = JSON.parse(values[0]);
+  } catch {
+    return false;
+  }
+  // Exactly this object. Any other key (apiKeyHelper, env, permissions, hooks…)
+  // is a setting the fencer has not reviewed and could reopen what this closes.
+  return (
+    settings !== null &&
+    typeof settings === "object" &&
+    !Array.isArray(settings) &&
+    Object.keys(settings).length === 1 &&
+    settings.disableAllHooks === true
+  );
 }

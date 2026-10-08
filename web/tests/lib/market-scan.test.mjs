@@ -72,7 +72,7 @@ test("missing scanner and malformed output produce failed source states", async 
 });
 
 test("timeout preserves a flushed receipt as partial and cleans ephemeral config", async t => {
-  const root = await sandbox(t, `import fs from 'node:fs'; fs.writeFileSync('temp-path', process.env.CAREER_OPS_PORTALS); process.on('SIGTERM', () => { console.log(${JSON.stringify(JSON.stringify(receipt))}); process.exit(2); }); setInterval(() => {}, 1000);`, "scan:\n  timeout_seconds: 1\n");
+  const root = await sandbox(t, `import fs from 'node:fs'; fs.writeFileSync('temp-path', process.env.CAREER_OPS_PORTALS); console.log(${JSON.stringify(JSON.stringify(receipt))}); setInterval(() => {}, 1000);`, "scan:\n  timeout_seconds: 1\n");
   const events = [];
   const run = await runMarketDiscovery(filters, e => events.push(e));
   assert.equal(run.status, "partial");
@@ -291,6 +291,40 @@ test("unverified market zeros and omitted zero-health proof stay partial and nev
   }
 });
 
+test("a WTTJ query budget alone broadens through the real discovery pass; any real fault stops", async t => {
+  const root = await sandbox(t, null);
+  const positive = Array.from({ length: 15 }, (_, index) => `Quantum role ${index}`);
+  const cap = "Feitas 12 de 15 pesquisas; os restantes termos continuam a filtrar os títulos recebidos.";
+  const scan = (errors, code = 0) => fs.writeFileSync(path.join(root, "scan.mjs"),
+    `console.log(${JSON.stringify(JSON.stringify({ ...receipt, scanned: 2, offers: [], errors }))}); process.exitCode = ${code};`);
+  const discover = async () => {
+    const events = [];
+    await runDiscovery({ ...filters, opportunityType: "employment", positive }, event => events.push(event));
+    return { events, phases: events.filter(event => event.kind === "phaseStart").map(event => event.phase), summary: events.find(event => event.kind === "summary") };
+  };
+  scan([]);
+  const healthy = await discover();
+  assert.deepEqual(healthy.phases, ["precise", "broad"]);
+  assert.equal(healthy.events.some(event => event.kind === "sourceError" || event.kind === "error"), false);
+  const streamed = healthy.events.find(event => event.kind === "sourceDone" && event.source === "Welcome to the Jungle");
+  assert.ok(streamed, "known-limit completion is streamed as sourceDone");
+  assert.equal(streamed.state, "partial", "chip must show Parcial before the deferred summary");
+  assert.match(streamed.message ?? "", /feitas 12 de 15/i);
+  const summaryIndex = healthy.events.findIndex(event => event.kind === "summary");
+  assert.ok(healthy.events.indexOf(streamed) < summaryIndex, "Parcial streams before the summary arrives");
+  const wttj = healthy.summary.sources.find(source => source.source === "Welcome to the Jungle");
+  assert.deepEqual([wttj.state, wttj.limits, wttj.message], ["partial", ["query-limit"], `f${cap.slice(1)}`]);
+  assert.equal(healthy.summary.status, "partial");
+  for (const [errors, code] of [[[{ company: "Landing.jobs", error: "offline" }], 2], [[{ company: "Unknown board", error: "offline" }], 0]]) {
+    scan(errors, code);
+    assert.deepEqual((await discover()).phases, ["precise"], JSON.stringify(errors));
+  }
+  scan([{ company: "Welcome to the Jungle", error: "timeout" }], 2);
+  const failed = await discover();
+  assert.deepEqual(failed.phases, ["precise"]);
+  assert.equal(failed.summary.sources.find(source => source.source === "Welcome to the Jungle").message, `timeout. ${cap}`);
+});
+
 test("ATS aggregate cannot hide missing health proof in one child", async t => {
   const root = await sandbox(t, null);
   fs.writeFileSync(path.join(root, "scan-ats-full.mjs"), `// --json capHit
@@ -339,5 +373,49 @@ test("the optional search plan feeds identical geography into ephemeral config a
     assert.equal(config.location_filter.allow.includes("Amadora"), phase === "broad");
     assert.deepEqual(run.offers.map(offer => offer.location), phase === "precise" ? ["Lisboa", "Lisbon", "Lisbonne"] : cities.slice(0, 7));
     assert.equal(config.title_filter.positive.includes("Retail Assistant"), phase === "broad");
+  }
+});
+
+test("a WTTJ hit budget broadens alone or beside a query budget; a pagination fault stops", async t => {
+  const root = await sandbox(t, null);
+  const hitBudget = { company: "Welcome to the Jungle", kind: "hit-budget", read: 600, total: 1450, queries: 2, terms: [] };
+  const scan = (payload, code = 0) => fs.writeFileSync(path.join(root, "scan.mjs"),
+    `console.log(${JSON.stringify(JSON.stringify({ ...receipt, scanned: 2, offers: [], ...payload }))}); process.exitCode = ${code};`);
+  const discover = async (positive) => {
+    const events = [];
+    await runDiscovery({ ...filters, opportunityType: "employment", positive }, event => events.push(event));
+    const summary = events.find(event => event.kind === "summary");
+    return { events, summary, phases: events.filter(event => event.kind === "phaseStart").map(event => event.phase),
+      wttj: summary.sources.find(source => source.source === "Welcome to the Jungle") };
+  };
+  const budget = "lidos os primeiros 600 de 1450 resultados em 2 pesquisas (limite por pesquisa).";
+
+  scan({ limits: [hitBudget] });
+  const alone = await discover(["Quantum role", "Quantum lead"]);
+  assert.deepEqual(alone.phases, ["precise", "broad"]);
+  assert.equal(alone.events.some(event => event.kind === "sourceError" || event.kind === "error"), false);
+  const hitDone = alone.events.find(event => event.kind === "sourceDone" && event.source === "Welcome to the Jungle");
+  assert.equal(hitDone?.state, "partial");
+  assert.match(hitDone?.message ?? "", /lidos os primeiros 600 de 1450/i);
+  assert.deepEqual([alone.wttj.state, alone.wttj.limits, alone.wttj.message], ["partial", ["hit-budget"], budget]);
+  assert.equal(alone.summary.knownLimitsOnly, true);
+
+  const both = await discover(Array.from({ length: 15 }, (_, index) => `Quantum role ${index}`));
+  assert.deepEqual(both.phases, ["precise", "broad"]);
+  assert.equal(both.events.some(event => event.kind === "sourceError" || event.kind === "error"), false);
+  assert.deepEqual(both.wttj.limits, ["query-limit", "hit-budget"]);
+  assert.equal(both.wttj.message, "feitas 12 de 15 pesquisas; os restantes termos continuam a filtrar os títulos recebidos. Lidos os primeiros 600 de 1450 resultados em 2 pesquisas (limite por pesquisa).");
+
+  for (const reason of ["structural", "transient"]) {
+    scan({ limits: [hitBudget], errors: [{ company: "Welcome to the Jungle", error: `wttj: incomplete pagination (${reason})` }] }, 2);
+    const fault = await discover(["Quantum role", "Quantum lead"]);
+    assert.deepEqual(fault.phases, ["precise"], reason);
+    // A partial receipt must not flash Falhou: stream Parcial, keep broad blocked.
+    const partialDone = fault.events.find(event => event.kind === "sourceDone" && event.source === "Welcome to the Jungle");
+    assert.equal(partialDone?.state, "partial", reason);
+    assert.equal(fault.events.some(event => event.kind === "sourceError" && event.source === "Welcome to the Jungle"), false, reason);
+    assert.equal(fault.wttj.state, "partial");
+    assert.equal(fault.wttj.limits, undefined);
+    assert.match(fault.wttj.message, /cobertura ficou incompleta\. Lidos os primeiros 600 de 1450/);
   }
 });

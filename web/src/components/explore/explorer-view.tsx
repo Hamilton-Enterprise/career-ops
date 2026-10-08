@@ -18,6 +18,7 @@ import { useExplore } from "./explore-provider";
 import { ScheduleJobAction } from "./schedule-job-action";
 import { PT_PT_LOCALE } from "@/lib/pt-pt";
 import { canDiscover as hasDiscoverySelection, discoverySourceReasons } from "@/lib/explore-state.mjs";
+import { actionBlockReason } from "@/lib/cli-pick.mjs";
 
 // Same shape as core normalizeTextKey(s, " ") — never [^a-z0-9] (#2666).
 const norm = (s: string) => normalizeTextKey(s, " ");
@@ -51,13 +52,19 @@ export function ExplorerView({
       : undefined;
   const inited = useRef(false);
   const [refineOpen, setRefineOpen] = useState(false);
-  const [cli, setCli] = useState<{ id: string | null; name?: string }>({ id: null });
+  const [cli, setCli] = useState<{ id: string | null; name?: string; aiBlocked?: string | null }>({ id: null });
   const [firstRun, setFirstRun] = useState(false);
 
   useEffect(() => {
     try {
       const id = JSON.parse(localStorage.getItem("career-ops:config") || "{}").cliId || null;
       setCli({ id, name: id ? CLI_NAMES[id] || id : undefined });
+      if (id) {
+        fetch("/api/clis")
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => setCli((c) => (c.id === id ? { ...c, aiBlocked: actionBlockReason(d?.clis, id, "ai-search") } : c)))
+          .catch(() => {});
+      }
     } catch {
       setCli({ id: null });
     }
@@ -174,6 +181,7 @@ export function ExplorerView({
               onSubmit={() => void discoverAI()}
               cliConfigured={!!cli.id}
               cliName={cli.name}
+              blockedReason={cli.aiBlocked ?? null}
               onRunScan={() => setMode("scan")}
             />
             {phase === "results" && <ResultsList offers={enriched} />}
@@ -432,7 +440,7 @@ function BlockedCard() {
     <div className="rounded-2xl border border-border bg-surface/30 px-6 py-12 text-center">
       <h2 className={`${instrumentSerif.className} text-2xl text-foreground`}>Escolhe um agente para pesquisar na web</h2>
       <p className="mx-auto mt-1.5 max-w-md text-sm text-muted">
-        Podes usar Claude Code, Codex, Gemini, Cursor ou outro agente instalado. A pesquisa direta continua disponível sem agente.
+        Usa um agente com isolamento só de leitura verificado (Claude Code ou Codex). A pesquisa direta continua disponível sem agente.
       </p>
       <Link href="/config" className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-brand px-3.5 py-2 text-sm font-semibold text-brand-foreground transition hover:brightness-110">
         <Settings className="size-4" /> Abrir Definições

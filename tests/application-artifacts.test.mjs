@@ -3,7 +3,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { rmSync } from './helpers.mjs';
+import { rmSync, ROOT } from './helpers.mjs';
 import { applicationArtifactPaths, ensureApplicationArtifactDirs, slugifySegment, writeReuseDecision } from '../application-artifacts.mjs';
 import { repoRelativeManifestPath, workspaceRelativeManifestPath } from '../generate-pdf.mjs';
 
@@ -64,9 +64,9 @@ try {
   else throw new Error('punctuation-only slug did not use the application fallback');
 
   const repoPaths = applicationArtifactPaths({ reportNum: 7, company: 'Acme AI', role: 'Senior AI Engineer', version: 2, root: join(process.cwd(), 'output') });
-  if (workspaceRelativeManifestPath(repoPaths.cv.tailored.html) === 'output/007-acme-ai-senior-ai-engineer/cv/tailored/v002/cv.html'
-      && workspaceRelativeManifestPath(repoPaths.cv.tailored.pdf) === 'output/007-acme-ai-senior-ai-engineer/cv/tailored/v002/cv.pdf'
-      && repoRelativeManifestPath(repoPaths.cv.tailored.pdf) === workspaceRelativeManifestPath(repoPaths.cv.tailored.pdf)) {
+  if (workspaceRelativeManifestPath(repoPaths.cv.tailored.html, ROOT) === 'output/007-acme-ai-senior-ai-engineer/cv/tailored/v002/cv.html'
+      && workspaceRelativeManifestPath(repoPaths.cv.tailored.pdf, ROOT) === 'output/007-acme-ai-senior-ai-engineer/cv/tailored/v002/cv.pdf'
+      && repoRelativeManifestPath(repoPaths.cv.tailored.pdf, ROOT) === workspaceRelativeManifestPath(repoPaths.cv.tailored.pdf, ROOT)) {
     console.log('  ✅ nested application HTML and PDF paths remain manifest-safe');
   } else {
     throw new Error('nested application paths were not preserved as repo-relative manifest entries');

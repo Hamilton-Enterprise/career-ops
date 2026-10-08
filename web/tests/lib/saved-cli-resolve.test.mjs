@@ -12,7 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { resolveCliId } = await import("../../src/lib/saved-cli.ts");
+const { resolveCliId, resolveCliForAction } = await import("../../src/lib/saved-cli.ts");
 
 const CONFIG_KEY = "career-ops:config";
 
@@ -177,4 +177,18 @@ test("the /api/clis fetch is bounded, and a timeout falls back to the saved id",
   };
   assert.equal(await resolveCliId(), "claude");
   assert.ok(init?.signal instanceof AbortSignal, "fetch('/api/clis') must carry an AbortSignal");
+});
+
+test("resolveCliForAction names the reason the route would refuse, before any request", async () => {
+  const actions = [
+    { id: "evaluate", label: "Avaliar oferta", available: false, reason: "O Cursor Agent corre só em modo de pergunta; esta ação escreve ficheiros." },
+    { id: "pdf", label: "Gerar CV", available: true, reason: null },
+  ];
+  stubEnv({ saved: "cursor", clis: [{ id: "cursor", installed: true, actions }] });
+  assert.deepEqual(await resolveCliForAction("evaluate"), { cliId: "cursor", blocked: actions[0].reason });
+  assert.deepEqual(await resolveCliForAction("pdf"), { cliId: "cursor", blocked: null });
+
+  // And an unreachable /api/clis cannot block: the server still decides.
+  stubEnv({ saved: "cursor", fetchThrows: true });
+  assert.deepEqual(await resolveCliForAction("evaluate"), { cliId: "cursor", blocked: null });
 });

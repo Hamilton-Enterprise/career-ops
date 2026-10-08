@@ -25,6 +25,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { CODEX_REQUIRED_EXEC_FLAGS, CODEX_REQUIRED_GLOBAL_FLAGS } from "./cli-fencing.mjs";
+import { prepareCliLaunch } from "./cli-launch.mjs";
 
 /**
  * The stat fields that together say "this is still the same executable".
@@ -34,11 +35,7 @@ const IDENTITY_FIELDS = Object.freeze(["mtimeMs", "ctimeMs", "size", "ino", "dev
 
 /**
  * @typedef {Object} ProbeCacheEntry
- * @property {number} mtimeMs
- * @property {number} ctimeMs
- * @property {number} size
- * @property {number} ino
- * @property {number} dev
+ * @property {string} identity
  * @property {Promise<{globalHelp: string, execHelp: string}>} help
  */
 
@@ -82,7 +79,17 @@ function readCliHelp(binPath, args) {
     const appendBounded = (current, chunk) => (current + chunk.toString()).slice(-HELP_CAPTURE_BYTES);
 
     // NO_COLOR so flag names are matched as written, not around ANSI escapes.
-    const child = spawn(binPath, args, { env: { ...process.env, NO_COLOR: "1" } });
+    // Use the same shell-free npm-wrapper resolution as the actual CLI run;
+    // otherwise Windows rejects the extensionless shim during this probe even
+    // though spawnHeadlessCli can launch the real JS entrypoint beside it.
+    let launch;
+    try {
+      launch = prepareCliLaunch(binPath, args);
+    } catch {
+      finish("");
+      return;
+    }
+    const child = spawn(launch.command, launch.args, { env: { ...process.env, NO_COLOR: "1" } });
     child.stdin?.end();
 
     child.stdout.on("data", (chunk) => {
@@ -234,19 +241,20 @@ export function helpSatisfiesFencing({ globalHelp, execHelp }, alsoRequiresInExe
  * retry existed for. Re-spawning two processes on every AI-search request for
  * the life of an old install was never the point.
  *
- * Identity is all five stat fields, not size+mtime: an executable replaced in
+ * Identity covers both the discovered shim and the file it actually launches,
+ * using all five stat fields rather than size+mtime. An executable replaced in
  * place can preserve both — a build system writing the same-length binary, or a
  * restore that puts the timestamp back — while being a different file. ctime and
  * the inode move when it does. Cheap, and this cache decides whether an agent
  * gets sandboxed.
  *
  * @param {string} binPath
- * @param {{mtimeMs: number, ctimeMs: number, size: number, ino: number, dev: number}} identity
+ * @param {string} identity
  * @returns {Promise<{globalHelp: string, execHelp: string}>}
  */
 function readBothHelps(binPath, identity) {
   const cached = probeCache.get(binPath);
-  if (cached && IDENTITY_FIELDS.every((field) => cached[field] === identity[field])) {
+  if (cached?.identity === identity) {
     return cached.help;
   }
 
@@ -269,7 +277,7 @@ function readBothHelps(binPath, identity) {
 
   // Concurrent cold requests share the same in-flight read. The stat identity
   // makes a Codex upgrade at the same path invalidate a cached help text.
-  entry = { ...identity, help };
+  entry = { identity, help };
   probeCache.set(binPath, entry);
   return help;
 }
@@ -285,14 +293,16 @@ function readBothHelps(binPath, identity) {
  * @returns {Promise<boolean>}
  */
 export function codexFencingSupported(binPath, { alsoRequiresInExec = [] } = {}) {
-  let stats;
-
   try {
-    stats = fs.statSync(binPath);
+    const launch = prepareCliLaunch(binPath, []);
+    const launchedFile = launch.command === process.execPath && launch.args[0] ? launch.args[0] : launch.command;
+    const identify = (file) => {
+      const stats = fs.statSync(file);
+      return [file, ...IDENTITY_FIELDS.map((field) => stats[field])];
+    };
+    const identity = JSON.stringify([identify(binPath), identify(launchedFile)]);
+    return readBothHelps(binPath, identity).then((help) => helpSatisfiesFencing(help, alsoRequiresInExec));
   } catch {
     return Promise.resolve(false);
   }
-
-  const identity = Object.fromEntries(IDENTITY_FIELDS.map((field) => [field, stats[field]]));
-  return readBothHelps(binPath, identity).then((help) => helpSatisfiesFencing(help, alsoRequiresInExec));
 }

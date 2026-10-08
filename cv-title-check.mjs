@@ -61,6 +61,7 @@ import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
 import { normalizeCompany } from './tracker-utils.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
+import { asciiFold } from './lib/ascii-fold.mjs';
 
 const CV_PATH = 'cv.md';
 
@@ -83,26 +84,34 @@ const CV_PATH = 'cv.md';
 // that reports nothing for that entry.
 const HEADING_RE = /^###\s+(.+?)\s*$/;
 const BOLD_LINE_RE = /^\*\*(.+?)\*\*\s*$/;
+// Matched against asciiFold()ed heading text, so accents, case and a trailing
+// colon do not matter.
+const EXPERIENCE_SECTION_RE = /^(?:(?:work|professional) )?experience$|^experiencia(?: profissional)?$/;
+const NON_EMPLOYMENT_SECTION_RE = /^(?:education|projects?|skills|languages|certifications?|formacao(?: academica)?|educacao|projetos|projectos|competencias|idiomas|linguas|cursos|voluntariado|certificacoes)$/;
 
 export function parseCvExperience(cvText) {
   const lines = String(cvText ?? '').replace(/\r\n/g, '\n').split('\n');
   const entries = [];
 
-  // Only scan inside a "## Work Experience" (or "## Experience") section, so
-  // an unrelated "### " heading elsewhere in the CV (e.g. under Projects)
-  // never gets misread as a job.
+  // Only scan inside an Experience section ("## Work Experience",
+  // "## Experiência profissional", ...), so an unrelated "### " heading
+  // elsewhere in the CV (e.g. under Projects) never gets misread as a job.
   let inExperience = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const h2 = line.match(/^##\s+(.+?)\s*$/);
     if (h2) {
-      inExperience = /^(work\s+)?experience$/i.test(h2[1].trim());
+      inExperience = EXPERIENCE_SECTION_RE.test(asciiFold(h2[1]));
       continue;
     }
     if (!inExperience) continue;
 
     const heading = line.match(HEADING_RE);
     if (!heading) continue;
+    if (NON_EMPLOYMENT_SECTION_RE.test(asciiFold(heading[1]))) {
+      inExperience = false;
+      continue;
+    }
 
     const [companyPart] = heading[1].split(/\s+[-–—]{1,2}\s+/);
     const company = companyPart.trim();
@@ -284,7 +293,9 @@ export function checkTitles(cvEntries, tailoredEntries) {
     if (!seenKeys.has(key)) unmatchedCv.push(...cvGroup);
   }
 
-  return { matched, mismatches, ambiguous, unmatchedTailored, unmatchedCv };
+  // Nothing paired means nothing was checked — never a clean result.
+  const unverified = matched.length + mismatches.length + ambiguous.length === 0;
+  return { matched, mismatches, ambiguous, unmatchedTailored, unmatchedCv, unverified };
 }
 
 // ── Self-test ────────────────────────────────────────────────────────
@@ -457,6 +468,49 @@ function runSelfTest() {
   eq('an ambiguous tailored-CV-side key is not silently reported as a mismatch either', dupTailoredResult.mismatches.length, 0);
   eq('the ambiguous group carries both tailored titles', dupTailoredResult.ambiguous[0]?.tailoredTitles.sort(), ['Engineering Lead', 'Senior Software Engineer']);
 
+  // Portuguese headings (accents and case ignored) are an Experience section;
+  // study and projects close it, at ## or ### level.
+  const ptCvText = `
+# CV -- Pessoa Exemplo
+
+## Experiência profissional
+
+### Empresa Alfa -- Lisboa
+
+**Analista**
+2021-2024
+
+### Formação académica
+
+### Universidade Exemplo -- Porto
+
+**Licenciatura**
+2015-2019
+
+## Projetos
+
+### Projeto Beta -- Remoto
+
+**Autor**
+2019-2020
+`;
+  const ptEntries = parseCvExperience(ptCvText);
+  eq('parses only the employment entry from a Portuguese CV', ptEntries.map(e => e.company), ['Empresa Alfa']);
+  for (const heading of ['## Experiencia profissional', '## Experiência', '## EXPERIÊNCIA PROFISSIONAL:']) {
+    eq(`"${heading}" is recognized as an Experience section`,
+      parseCvExperience(`${heading}\n\n### Empresa Alfa -- Lisboa\n\n**Analista**\n2021-2024\n`).length, 1);
+  }
+  for (const boundary of ['Formação', 'Educação', 'Projetos', 'Competências', 'Idiomas', 'Línguas', 'Cursos', 'Voluntariado', 'Certificações']) {
+    eq(`"### ${boundary}" closes the Experience section`,
+      parseCvExperience(`## Experiência\n\n### ${boundary}\n\n### Escola Gama -- Braga\n\n**Curso**\n2010-2012\n`).length, 0);
+  }
+  const ptResult = checkTitles(ptEntries, parseTailoredExperience({ experience: [{ company: 'Empresa Alfa', role: 'Analista', dates: '2021-2024' }] }));
+  eq('a Portuguese CV gives a real comparison', [ptResult.matched.length, ptResult.unverified], [1, false]);
+  eq('zero cv.md experience entries is unverified, not a clean pass',
+    checkTitles([], parseTailoredExperience({ experience: [{ company: 'Empresa Alfa', role: 'Analista', dates: '2021-2024' }] })).unverified, true);
+  eq('no pairable entry is unverified, not a clean pass',
+    checkTitles(ptEntries, parseTailoredExperience({ experience: [{ company: 'Outra', role: 'Analista', dates: '2021-2024' }] })).unverified, true);
+
   // CLI exit-code contract (modes/pdf.md Step 17a relies on this distinction):
   // a genuine input failure (missing/malformed cv.md or payload) must exit
   // non-zero so the pipeline stops and repairs the input, while a completed
@@ -524,6 +578,23 @@ function runSelfTest() {
     const mismatchRun = runCli(['mismatch.json', '--summary']);
     eq('CLI exits 0 for a completed comparison that finds a title mismatch (warn-only)', mismatchRun.status, 0);
     eq('the exit-0 mismatch run still prints the warning', /title mismatch/i.test(mismatchRun.stdout), true);
+
+    // A cv.md with no recognised experience is warn-only too, but must never
+    // print the clean-result line: nothing was compared.
+    const studyOnlyDir = mkdtempSync(join(tmpdir(), 'cv-title-check-unverified-'));
+    try {
+      writeFileSync(join(studyOnlyDir, 'cv.md'), '## Formação\n\n### Universidade Exemplo -- Porto\n\n**Licenciatura**\n2015-2019\n');
+      writeFileSync(join(studyOnlyDir, 'payload.json'), JSON.stringify({
+        experience: [{ company: 'Universidade Exemplo', role: 'Licenciatura', dates: '2015-2019' }],
+      }));
+      const unverifiedRun = runCli(['payload.json', '--summary'], studyOnlyDir);
+      eq('CLI exits 0 when cv.md has no recognised experience (warn-only)', unverifiedRun.status, 0);
+      eq('the unverified run never prints the clean-result line', /No title drift found/i.test(unverifiedRun.stdout), false);
+      eq('the unverified run says UNVERIFIED', /UNVERIFIED/.test(unverifiedRun.stdout), true);
+      eq('the unverified JSON run marks unverified', JSON.parse(runCli(['payload.json'], studyOnlyDir).stdout).unverified, true);
+    } finally {
+      rmSync(studyOnlyDir, { recursive: true, force: true });
+    }
 
     // A completed comparison that finds an ambiguous {company, dates} group
     // is likewise warn-only, not a failure.
@@ -598,7 +669,11 @@ if (isMainModule(import.meta.url)) {
       console.log('\nCV Title Consistency Check');
       console.log('─'.repeat(40));
       console.log(`Entries compared: ${result.matched.length + result.mismatches.length}`);
-      if (result.mismatches.length === 0) {
+      if (result.unverified) {
+        console.log(cvEntries.length === 0
+          ? `⚠️  UNVERIFIED — no experience entries recognised in ${CV_PATH} (expected "## Work Experience" or "## Experiência profissional" with "### Company -- Location", a **Title** line and a dates line). Nothing was checked.`
+          : '⚠️  UNVERIFIED — no tailored entry shares {company, dates} with cv.md. Nothing was checked.');
+      } else if (result.mismatches.length === 0) {
         console.log('✅ No title drift found — every matched entry uses cv.md\'s canonical title.');
       } else {
         console.log(`⚠️  ${result.mismatches.length} title mismatch(es) found:`);

@@ -2,11 +2,16 @@
 import { pass, fail, run, NODE, ROOT, lastRunFailure } from './helpers.mjs';
 import { join } from 'path';
 import { pathToFileURL } from 'url';
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import assert from 'node:assert/strict';
 
 console.log('\nstats.mjs — lifetime pipeline stats aggregator (#1604)');
+const cliRoot = mkdtempSync(join(tmpdir(), 'career-ops-stats-cli-'));
+const statsCli = (...args) => run(NODE, [join(ROOT, 'stats.mjs'), ...args], { env: {
+  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('CAREER_OPS_'))),
+  CAREER_OPS_ROOT: cliRoot,
+} });
 try {
   const stats = await import(pathToFileURL(join(ROOT, 'stats.mjs')).href);
   const states = [...Array(10).fill('Applied'), ...Array(5).fill('Responded'), ...Array(2).fill('Interview'), ...Array(12).fill('Rejected')];
@@ -265,7 +270,7 @@ try {
 
   // CLI smoke — must emit the full contract with null sections in a checkout
   // with no user data (exactly the CI environment).
-  const cliOut = run(NODE, [join(ROOT, 'stats.mjs')]);
+  const cliOut = statsCli();
   const parsed = JSON.parse(cliOut);
   if (parsed && parsed.metadata && 'tracker' in parsed && 'scan' in parsed && 'portals' in parsed
       && 'followups' in parsed && 'funnel' in parsed && 'runs' in parsed) {
@@ -273,7 +278,7 @@ try {
   } else {
     fail(`stats.mjs CLI missing sections: ${parsed ? Object.keys(parsed).join(',') : cliOut}`);
   }
-  const summaryOut = run(NODE, [join(ROOT, 'stats.mjs'), '--summary']);
+  const summaryOut = statsCli('--summary');
   if (summaryOut && summaryOut.includes('Pipeline Stats')) {
     pass('stats.mjs --summary renders the human table');
   } else {
@@ -281,7 +286,7 @@ try {
   }
 
   // --help smoke: must print usage, exit 0, and not read any data file.
-  const helpOut = run(NODE, [join(ROOT, 'stats.mjs'), '--help']);
+  const helpOut = statsCli('--help');
   if (helpOut && helpOut.includes('Usage:') && helpOut.includes('--summary') && helpOut.includes('--help|-h')) {
     pass('stats.mjs --help prints the usage block and exits 0');
   } else {
@@ -289,7 +294,7 @@ try {
   }
 
   // -h alias smoke: same behavior as --help.
-  const hOut = run(NODE, [join(ROOT, 'stats.mjs'), '-h']);
+  const hOut = statsCli('-h');
   if (hOut && hOut.includes('Usage:') && hOut.includes('--help|-h')) {
     pass('stats.mjs -h prints the usage block and exits 0');
   } else {
@@ -297,7 +302,7 @@ try {
   }
 
   // Unknown flag smoke: must fail cleanly and report the invalid-flag message.
-  const bogusOut = run(NODE, [join(ROOT, 'stats.mjs'), '--bogus']);
+  const bogusOut = statsCli('--bogus');
   const bogusFailure = lastRunFailure();
   const bogusOutput = `${bogusFailure?.stdout ?? ''}\n${bogusFailure?.stderr ?? ''}`;
   if (bogusOut === null && bogusFailure?.status !== 0 && /invalid|unrecognized|unknown/i.test(bogusOutput)) {
@@ -307,30 +312,20 @@ try {
   }
 
   // --summary cold-classification integration (#2123): the CLI reads its
-  // fixed data/ paths, so exercise it against real (temporary) tracker +
-  // follow-ups files at those exact paths, then restore whatever was there.
-  const liveAppsFile = join(ROOT, 'data', 'applications.md');
-  const liveFupsFile = join(ROOT, 'data', 'follow-ups.md');
-  const { existsSync, readFileSync: readFileSyncNode, mkdirSync } = await import('fs');
-  const dataDirExisted = existsSync(join(ROOT, 'data'));
-  const appsExisted = existsSync(liveAppsFile);
-  const fupsExisted = existsSync(liveFupsFile);
-  const appsBackup = appsExisted ? readFileSyncNode(liveAppsFile, 'utf-8') : null;
-  const fupsBackup = fupsExisted ? readFileSyncNode(liveFupsFile, 'utf-8') : null;
-  try {
-    if (!dataDirExisted) mkdirSync(join(ROOT, 'data'), { recursive: true });
-    writeFileSync(liveAppsFile, coldTrackerMd);
-    writeFileSync(liveFupsFile, coldFollowupsMd);
-    const coldSummaryOut = run(NODE, [join(ROOT, 'stats.mjs'), '--summary']);
-    if (coldSummaryOut && coldSummaryOut.includes('3 active (2 live, 1 cold)')) {
-      pass('stats.mjs --summary integrates live/cold counts into the existing Tracker line');
-    } else {
-      fail(`stats.mjs --summary missing live/cold breakdown: ${coldSummaryOut}`);
-    }
-  } finally {
-    if (appsBackup !== null) writeFileSync(liveAppsFile, appsBackup); else if (!appsExisted) rmSync(liveAppsFile, { force: true });
-    if (fupsBackup !== null) writeFileSync(liveFupsFile, fupsBackup); else if (!fupsExisted) rmSync(liveFupsFile, { force: true });
+  // fixed data/ paths within a disposable root, with no installed data touched.
+  const liveAppsFile = join(cliRoot, 'data', 'applications.md');
+  const liveFupsFile = join(cliRoot, 'data', 'follow-ups.md');
+  mkdirSync(join(cliRoot, 'data'), { recursive: true });
+  writeFileSync(liveAppsFile, coldTrackerMd);
+  writeFileSync(liveFupsFile, coldFollowupsMd);
+  const coldSummaryOut = statsCli('--summary');
+  if (coldSummaryOut && coldSummaryOut.includes('3 active (2 live, 1 cold)')) {
+    pass('stats.mjs --summary integrates live/cold counts into the existing Tracker line');
+  } else {
+    fail(`stats.mjs --summary missing live/cold breakdown: ${coldSummaryOut}`);
   }
 } catch (e) {
   fail(`stats.mjs tests crashed: ${e.message}`);
+} finally {
+  rmSync(cliRoot, { recursive: true, force: true });
 }

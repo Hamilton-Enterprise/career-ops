@@ -2,8 +2,8 @@ import { buildConversationContext } from "@/lib/assistant-history.mjs";
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
 import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from "@/lib/clis";
 import { careerOpsRoot, readMemory, doctorState } from "@/lib/career-ops";
-import { CAPS } from "@/lib/worker-capabilities.mjs";
-import { scopeFrom } from "@/lib/claude-invocation.mjs";
+import { ACTION_CAPABILITIES } from "@/lib/worker-capabilities.mjs";
+import { CLAUDE_READ_ONLY_ISOLATION, scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
 
 // Deny list DERIVED, never hand-written: every one of the six advisor argvs
@@ -117,11 +117,10 @@ export async function POST(req: Request) {
         "--include-partial-messages",
         "--permission-mode",
         "acceptEdits",
-        // --strict-mcp-config with no --mcp-config loads ZERO MCP servers, so the
-        // tool lists here describe everything this agent can reach. Required for a
-        // non-writing worker: without it a user MCP server could supply a write tool
-        // the capability record forbids, and cli-fencing refuses to certify that (#2507).
-        "--strict-mcp-config",
+        // No MCP server and no hook, so the tool lists here describe everything
+        // this agent can reach. Required for a non-writing worker: cli-fencing
+        // refuses to certify an argv without it (#2507).
+        ...CLAUDE_READ_ONLY_ISOLATION,
         "--allowedTools",
         ADVISOR_SCOPE.allowed,
         "--disallowedTools",
@@ -138,7 +137,7 @@ export async function POST(req: Request) {
       binPath,
       args,
       { cwd: careerOpsRoot(), env: process.env },
-      { cliId, capabilities: CAPS.networkReadOnly },
+      { cliId, capabilities: ACTION_CAPABILITIES.assistant },
     );
   } catch (e) {
     // Fencing refuses an argv that contradicts the capability record. Report it
@@ -192,7 +191,7 @@ export async function POST(req: Request) {
       // runs with its default access, and that must be visible rather than
       // inferred from which CLI happens to be selected (#2507). This stream is
       // plain text, so the notice is a leading line rather than an event.
-      const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: CAPS.networkReadOnly });
+      const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: ACTION_CAPABILITIES.assistant });
       if (fencing.notice) safeEnqueue(`⚠️ ${fencing.notice}
 
 `);

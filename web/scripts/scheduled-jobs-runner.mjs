@@ -17,6 +17,8 @@ import { scheduledRunnerResourcePath, scheduledStorePath } from "../src/lib/sche
 import { buildMarketPlan, classifyMarketLocation, cleanMarkets } from "../src/lib/market-presets.mjs";
 import { serializePortals } from "../src/lib/core/portals-serialize.mjs";
 import { mergeDiscoveredOffers, parseMarketReceipt } from "../src/lib/core/market-merge.mjs";
+import { buildSearchPlan } from "../src/lib/search-plan.mjs";
+import { matchesOccupationTerms } from "../src/lib/occupation-match.mjs";
 import { getCareerOpsRoot } from "../../path-resolver.mjs";
 
 const CODE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -161,51 +163,101 @@ export function extractRolesFound(engine, stdout) {
   return match ? Number(match[1]) : 0;
 }
 
-function writeJobPortals(root, job, marketOnly = false) {
-  if (!isSafeScheduledId(job.id)) throw new Error("Invalid scheduled job identifier.");
-  const portalsPath = path.join(root, "portals.yml");
-  const base = yaml.load(fs.readFileSync(portalsPath, "utf8"));
-  if (!base || typeof base !== "object") throw new Error("portals.yml must contain a mapping");
-
-  const filters = job.filters || {};
-  const list = (value) => Array.isArray(value)
+function listStrings(value) {
+  return Array.isArray(value)
     ? value.filter((item) => typeof item === "string" && item.trim())
     : [];
-  const positive = list(filters.positive);
+}
+
+function loadPortalsBase(root) {
+  const base = yaml.load(fs.readFileSync(path.join(root, "portals.yml"), "utf8"));
+  if (!base || typeof base !== "object") throw new Error("portals.yml must contain a mapping");
+  return base;
+}
+
+/** Employment may fall back to portals.yml; freelance never inherits those positives. */
+function resolveSearchTerms(job, base) {
+  const filters = job.filters || {};
+  const positive = listStrings(filters.positive);
   const fallbackPositive = Array.isArray(base.title_filter?.positive)
     ? base.title_filter.positive.filter((value) => typeof value === "string" && value.trim())
     : [];
-  const searchTerms = positive.length ? positive : filters.opportunityType === "freelance" ? [] : fallbackPositive;
-  if (filters.opportunityType !== "freelance" && !positive.length && !fallbackPositive.length) {
+  const freelance = filters.opportunityType === "freelance";
+  if (!freelance && !positive.length && !fallbackPositive.length) {
     throw new Error("Scheduled scans require title keywords in the job or portals.yml title_filter.positive.");
   }
+  return positive.length ? positive : freelance ? [] : fallbackPositive;
+}
+
+/** Normalize a job's filters without mutating the stored snapshot.
+ *  @param {{filters?: Record<string, unknown>}} job @param {string[]} searchTerms */
+export function exploreFiltersFromJob(job, searchTerms) {
+  const filters = job.filters || {};
+  return {
+    opportunityType: filters.opportunityType === "freelance" ? "freelance" : "employment",
+    positive: listStrings(searchTerms),
+    negative: listStrings(filters.negative),
+    allow: listStrings(filters.allow),
+    block: listStrings(filters.block),
+    blockHard: listStrings(filters.blockHard),
+    alwaysAllow: listStrings(filters.alwaysAllow),
+    sinceDays: numericFilter(filters.sinceDays, 7, 1, 60),
+    ats: Array.isArray(filters.ats) ? [...filters.ats] : [],
+    markets: cleanMarkets(filters.markets),
+    limitPerAts: numericFilter(filters.limitPerAts, 150, 50, 500),
+  };
+}
+
+/** Same post-scan eligibility as Explore precise (`runDiscoveryPass`).
+ *  @param {import('../src/lib/explore').DiscoveredOffer[]} offers
+ *  @param {ReturnType<typeof buildSearchPlan>} searchPlan */
+export function selectPreciseOffers(offers, searchPlan) {
+  const filters = searchPlan.effectiveFilters;
+  const plan = buildMarketPlan(filters.markets, filters.positive, filters.opportunityType, searchPlan);
+  return offers.filter((offer) =>
+    classifyMarketLocation(offer, plan).accepted &&
+    matchesOccupationTerms(offer.title, filters.positive));
+}
+
+/** Direct Explore precise filter over a market receipt — parity helper for tests.
+ *  @param {string} stdout @param {number|null} exitCode
+ *  @param {ReturnType<typeof buildSearchPlan>} searchPlan */
+export function preciseOffersFromMarketReceipt(stdout, exitCode, searchPlan) {
+  const filters = searchPlan.effectiveFilters;
+  const plan = buildMarketPlan(filters.markets, filters.positive, filters.opportunityType, searchPlan);
+  const marketRun = parseMarketReceipt(stdout, exitCode, plan);
+  return selectPreciseOffers(marketRun.offers, searchPlan);
+}
+
+function writeJobPortals(root, job, searchPlan, plan, marketOnly = false) {
+  if (!isSafeScheduledId(job.id)) throw new Error("Invalid scheduled job identifier.");
+  const base = loadPortalsBase(root);
+  const filters = searchPlan.effectiveFilters;
   base.title_filter = {
     ...(base.title_filter || {}),
-    positive: searchTerms,
-    negative: Array.isArray(filters.negative) ? filters.negative : [],
+    positive: filters.positive,
+    negative: filters.negative,
   };
   if (base.title_filter_full) base.title_filter_full = { ...base.title_filter_full, ...base.title_filter };
   base.location_filter = {
     ...(base.location_filter || {}),
-    allow: Array.isArray(filters.allow) ? filters.allow : [],
-    block: Array.isArray(filters.block) ? filters.block : [],
-    block_hard: Array.isArray(filters.blockHard) ? filters.blockHard : [],
-    always_allow: Array.isArray(filters.alwaysAllow) ? filters.alwaysAllow : [],
+    allow: filters.allow,
+    block: filters.block,
+    block_hard: filters.blockHard,
+    always_allow: filters.alwaysAllow,
   };
-
-  const plan = buildMarketPlan(filters.markets, searchTerms, filters.opportunityType);
 
   const tempDir = path.join(root, "data", "tmp");
   fs.mkdirSync(tempDir, { recursive: true });
   const tempPath = path.join(tempDir, `scheduled-${job.id}-${randomUUID()}.yml`);
   if (marketOnly) {
     fs.writeFileSync(tempPath, serializePortals({
-      positive: searchTerms,
-      negative: list(filters.negative),
-      allow: list(filters.allow),
-      block: list(filters.block),
-      blockHard: list(filters.blockHard),
-      alwaysAllow: list(filters.alwaysAllow),
+      positive: filters.positive,
+      negative: filters.negative,
+      allow: filters.allow,
+      block: filters.block,
+      blockHard: filters.blockHard,
+      alwaysAllow: filters.alwaysAllow,
     }, plan.jobBoards, plan.locationPolicy.strict), "utf8");
   } else {
     if (plan.jobBoards.length) {
@@ -223,7 +275,28 @@ function firstErrorLine(result) {
   return String(raw).split(/\r?\n/).find(Boolean)?.slice(0, 300) || "Scan failed";
 }
 
-function acceptedAtsOffers(stdout, plan) {
+function atsIncompleteness(receipt) {
+  const notes = [];
+  if (receipt.capHit === true) notes.push("ATS (partial): company cap reached.");
+  if (receipt.stoppedEarly === true) notes.push("ATS (partial): stopped early.");
+  if (Number.isFinite(Number(receipt.postingsDroppedNoDate)) && Number(receipt.postingsDroppedNoDate) > 0) {
+    notes.push(`ATS (partial): ${Number(receipt.postingsDroppedNoDate)} postings dropped without a date.`);
+  }
+  for (const [source, state] of Object.entries(receipt.datasetStatus || {})) {
+    if (state !== "ok") notes.push(`${source} (${state})`);
+  }
+  if (Array.isArray(receipt.errors)) {
+    for (const error of receipt.errors) {
+      if (!error || typeof error !== "object") continue;
+      const company = typeof error.company === "string" && error.company.trim() ? error.company.trim() : "ATS";
+      const message = typeof error.error === "string" && error.error.trim() ? error.error.trim() : "failed";
+      notes.push(`${company} (error): ${message}`);
+    }
+  }
+  return notes;
+}
+
+function acceptedAtsOffers(stdout, searchPlan) {
   let receipt;
   try {
     receipt = JSON.parse(stdout);
@@ -231,11 +304,13 @@ function acceptedAtsOffers(stdout, plan) {
     throw new Error("The ATS scanner did not return valid JSON.");
   }
   if (!receipt || !Array.isArray(receipt.offers)) throw new Error("The ATS scanner did not return an offers list.");
-  return receipt.offers.map((offer) => {
+  const incomplete = atsIncompleteness(receipt);
+  const offers = selectPreciseOffers(receipt.offers.map((offer) => {
     const source = typeof offer?.source === "string" && offer.source.trim() ? offer.source.trim() : "ats-full";
     return { ...offer, source, ats: source.replace(/-full$/, "") };
   }).filter((offer) => offer && typeof offer.url === "string" && typeof offer.company === "string" &&
-    typeof offer.title === "string" && classifyMarketLocation(offer, plan).accepted);
+    typeof offer.title === "string"), searchPlan);
+  return { offers, incomplete, partial: incomplete.length > 0 };
 }
 
 function persistOffers(root, offers, spawnFn = spawnSync) {
@@ -295,15 +370,31 @@ export function executeJob(root, job, options = {}) {
     try {
       const commands = buildScanCommands(job);
       if (!commands.length) throw new Error("Scheduled scans require at least one ATS or market.");
-      const plan = buildMarketPlan(job.filters?.markets, job.filters?.positive, job.filters?.opportunityType);
+      // Precise only: scheduled runs never auto-broaden. The job snapshot is not mutated.
+      const searchTerms = resolveSearchTerms(job, loadPortalsBase(root));
+      const searchPlan = buildSearchPlan(exploreFiltersFromJob(job, searchTerms), "precise");
+      const plan = buildMarketPlan(
+        searchPlan.effectiveFilters.markets,
+        searchPlan.effectiveFilters.positive,
+        searchPlan.effectiveFilters.opportunityType,
+        searchPlan,
+      );
       const marketScoped = plan.opportunityType === "freelance" || plan.markets.length > 0;
       let accepted = [];
       let rolesFound = 0;
       let completed = true;
+      let partial = false;
+      const incompleteSources = [];
       for (const command of commands) {
         let tempPortals = null;
         try {
-          tempPortals = writeJobPortals(root, job, plan.opportunityType === "freelance" || (job.engine !== "portals" && command.script === "scan.mjs"));
+          tempPortals = writeJobPortals(
+            root,
+            job,
+            searchPlan,
+            plan,
+            plan.opportunityType === "freelance" || (job.engine !== "portals" && command.script === "scan.mjs"),
+          );
           const result = spawnFn(
             process.execPath,
             [command.script, ...command.args],
@@ -316,7 +407,8 @@ export function executeJob(root, job, options = {}) {
               windowsHide: true,
             },
           );
-          if (result.status !== 0) {
+          if (result.error || result.signal || (result.status !== 0 &&
+              !(marketScoped && command.script === "scan.mjs" && result.status === 2))) {
             lastError = firstErrorLine(result);
             completed = false;
             break;
@@ -324,11 +416,19 @@ export function executeJob(root, job, options = {}) {
           if (marketScoped) {
             let offers;
             if (command.script === "scan-ats-full.mjs") {
-              offers = acceptedAtsOffers(result.stdout || "", plan);
+              const ats = acceptedAtsOffers(result.stdout || "", searchPlan);
+              offers = ats.offers;
+              if (ats.partial) partial = true;
+              incompleteSources.push(...ats.incomplete);
             } else {
               const marketRun = parseMarketReceipt(result.stdout || "", result.status, plan);
-              if (!marketRun.valid || marketRun.status === "failed") throw new Error("The market scanner did not complete a valid run.");
+              if (!marketRun.valid || marketRun.status === "failed" || (result.status === 2 && !marketRun.offers.length)) {
+                throw new Error("The market scanner did not complete a valid run.");
+              }
               offers = marketRun.offers;
+              if (marketRun.status === "partial") partial = true;
+              incompleteSources.push(...marketRun.sources.filter(source => source.state !== "ok")
+                .map(source => `${source.source} (${source.state}): ${source.message || "Incomplete source."}`));
             }
             accepted = mergeDiscoveredOffers(accepted, offers);
           } else {
@@ -346,13 +446,16 @@ export function executeJob(root, job, options = {}) {
       }
 
       if (completed) {
-        if (marketScoped) rolesFound = persistOffers(root, accepted, writerSpawnFn);
+        if (marketScoped) {
+          accepted = selectPreciseOffers(accepted, searchPlan);
+          rolesFound = persistOffers(root, accepted, writerSpawnFn);
+        }
         return {
           state: "success",
           attempt,
           rolesFound,
           durationMs: Date.now() - startedAt,
-          message: `Scan finished with ${rolesFound} matching role${rolesFound === 1 ? "" : "s"}.`,
+          message: `${partial ? "Partial scan" : "Scan"} finished with ${rolesFound} matching role${rolesFound === 1 ? "" : "s"}.${incompleteSources.length ? ` Incomplete sources: ${incompleteSources.join("; ")}` : ""}`,
         };
       }
     } catch (error) {

@@ -38,9 +38,11 @@ func presentJavaScriptPrompt(_ prompt: String, defaultText: String?, in window: 
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate,
+                         WKScriptMessageHandler {
     private var window: NSWindow!
     private var webView: WKWebView!
+    private var webPreferences: WebPreferenceStore?
     private var server: Process?
     private var probe: Process?
     private var timer: Timer?
@@ -50,24 +52,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private var closing = false
     private var quitting = false
     private var failureShown = false
+    private var runtimeNotice: String?
     private var outputPipe: Pipe?
     private var log: FileHandle?
     private let outputQueue = DispatchQueue(label: "io.career-ops.local.output")
-    private let preferences = UserDefaults.standard
+    private var preferences = UserDefaults.standard
     private let logURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Career Ops/server.log")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let selfBundle = Bundle.main.bundleURL
+        // Same bundle id is shared by side-by-side candidates; only hand off to
+        // another process of THIS install path.
         if let existing = NSRunningApplication.runningApplications(withBundleIdentifier: "io.career-ops.local")
-            .first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
+            .first(where: {
+                $0.processIdentifier != ProcessInfo.processInfo.processIdentifier
+                    && isSameAppInstall($0.bundleURL, selfBundle)
+            }) {
             existing.activate(options: [.activateAllWindows])
             NSApp.terminate(nil)
             return
         }
-        if let defaultsURL = Bundle.main.url(forResource: "Defaults", withExtension: "plist"),
-           let defaults = NSDictionary(contentsOf: defaultsURL) as? [String: Any] {
-            for (key, value) in defaults where preferences.object(forKey: key) == nil {
-                preferences.set(value, forKey: key)
-            }
+        let bundled = Bundle.main.url(forResource: "Defaults", withExtension: "plist")
+            .flatMap { NSDictionary(contentsOf: $0) as? [String: Any] }
+        preferences = loadInstallPreferences(bundleURL: selfBundle, bundledDefaults: bundled)
+        if let runtimePath = Bundle.main.object(forInfoDictionaryKey: "CareerOpsRuntimePath") as? String,
+           preferences.object(forKey: "CareerOpsRuntimePath") == nil {
+            preferences.set(runtimePath, forKey: "CareerOpsRuntimePath")
         }
         let menu = NSMenu()
         let appItem = NSMenuItem()
@@ -89,7 +99,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         window.minSize = NSSize(width: 640, height: 480)
         window.center()
         window.isReleasedWhenClosed = false
-        webView = WKWebView(frame: window.contentView!.bounds)
+        let webConfiguration = WKWebViewConfiguration()
+        webConfiguration.userContentController.add(self, name: webPreferenceHandlerName)
+        webView = WKWebView(frame: window.contentView!.bounds, configuration: webConfiguration)
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -124,18 +136,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         return .terminateLater
     }
 
-    private func configuration() -> LaunchConfiguration {
+    private func configuration() -> (config: LaunchConfiguration, notice: String?) {
         func path(_ key: String) -> URL { URL(fileURLWithPath: preferences.string(forKey: key) ?? "") }
-        return LaunchConfiguration(checkout: path("CareerOpsCheckoutPath"), node: path("CareerOpsNodePath"),
-                                   dataRoot: preferences.string(forKey: "CareerOpsDataRootPath").map { URL(fileURLWithPath: $0) })
+        return resolveLaunchConfiguration(checkout: path("CareerOpsCheckoutPath"), node: path("CareerOpsNodePath"),
+                                          dataRoot: optionalPathPreference(preferences.string(forKey: "CareerOpsDataRootPath")),
+                                          runtimePath: preferences.string(forKey: "CareerOpsRuntimePath"),
+                                          buildSHA: Bundle.main.object(forInfoDictionaryKey: "CareerOpsBuildSHA") as? String)
     }
 
     private func start() {
         failureShown = false
         generation = UUID()
         let token = generation
-        let config = configuration()
-        if let error = validateConfiguration(config) { fail(error); return }
+        webPreferences = nil
+        installPreferenceScript()
+        let (config, notice) = configuration()
+        runtimeNotice = notice
+        window.subtitle = notice == nil ? "" : "Runtime indisponível: a usar a pasta do projeto. Detalhes no registo."
+        if let error = validateConfiguration(config) { fail([error, notice].compactMap { $0 }.joined(separator: "\n\n")); return }
         let process = Process()
         let pipe = Pipe()
         probe = process
@@ -175,8 +193,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             }
             log = try FileHandle(forWritingTo: logURL)
             try log?.seekToEnd()
-            try log?.write(contentsOf: Data("\n--- Arranque \(Date()) ---\n".utf8))
+            try log?.write(contentsOf: Data("\n--- Arranque \(Date()) a partir de \(config.codeRoot.path) ---\n".utf8))
+            if let runtimeNotice { try log?.write(contentsOf: Data("\(runtimeNotice)\n".utf8)) }
         } catch { fail("Não foi possível abrir o registo local: \(error.localizedDescription)"); return }
+        webPreferences = WebPreferenceStore(defaults: preferences, dataRoot: effectiveDataRoot(config))
+        installPreferenceScript()
         let process = Process()
         let pipe = Pipe()
         var parser = ServerURLParser()
@@ -184,8 +205,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         outputPipe = pipe
         origin = nil
         process.executableURL = config.node
-        process.arguments = [config.checkout.appendingPathComponent("web/server.mjs").path, "start", "-p", "0"]
-        process.currentDirectoryURL = config.checkout.appendingPathComponent("web")
+        process.arguments = [config.codeRoot.appendingPathComponent("web/server.mjs").path, "start", "-p", "0"]
+        process.currentDirectoryURL = config.codeRoot.appendingPathComponent("web")
         process.environment = serverEnvironment(config, inherited: ProcessInfo.processInfo.environment)
         process.standardOutput = pipe
         process.standardError = pipe
@@ -217,6 +238,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                 self.fail("O servidor não respondeu em 30 segundos. Consulte o registo e tente novamente.")
             }
         } catch { fail("Não foi possível iniciar o servidor: \(error.localizedDescription)") }
+    }
+
+    private func installPreferenceScript() {
+        let controller = webView.configuration.userContentController
+        controller.removeAllUserScripts()
+        guard let webPreferences else { return }
+        controller.addUserScript(WKUserScript(source: webPreferenceUserScript(snapshot: webPreferences.snapshot(),
+                                                                              generation: generation.uuidString),
+                                              injectionTime: .atDocumentStart, forMainFrameOnly: true))
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        let frameOrigin = message.frameInfo.securityOrigin
+        let sender = WebPreferenceSender(isOurWebView: message.webView === webView, isMainFrame: message.frameInfo.isMainFrame,
+                                         scheme: frameOrigin.protocol, host: frameOrigin.host, port: frameOrigin.port)
+        guard let webPreferences,
+              let change = webPreferenceChange(message.body, from: sender, origin: origin, generation: generation.uuidString),
+              webPreferences.apply(change) else { return }
+        installPreferenceScript()
     }
 
     private func checkReady(_ url: URL, token: UUID) {

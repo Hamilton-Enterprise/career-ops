@@ -1,7 +1,6 @@
-import { NextResponse } from "next/server";
 import fs from "node:fs";
 import path from "node:path";
-import { careerOpsRoot } from "@/lib/career-ops";
+import { careerOpsRoot, rootScript } from "@/lib/career-ops";
 import { setInboxSkip } from "@/lib/inbox-skip.mjs";
 
 export const runtime = "nodejs";
@@ -30,21 +29,20 @@ export async function POST(req: Request) {
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: "Pedido inválido." }, { status: 400 });
+    return Response.json({ error: "Pedido inválido." }, { status: 400 });
   }
 
   const url = typeof body.url === "string" ? body.url : "";
   if (body.done !== undefined && typeof body.done !== "boolean") {
-    return NextResponse.json({ error: "O estado concluído tem de ser verdadeiro ou falso." }, { status: 400 });
+    return Response.json({ error: "O estado concluído tem de ser verdadeiro ou falso." }, { status: 400 });
   }
   const done = body.done !== false;
 
-  const root = careerOpsRoot();
-  const file = path.join(root, "data", "pipeline.md");
-  const lockModule = path.join(root, "pipeline-lock.mjs");
+  const file = path.join(careerOpsRoot(), "data", "pipeline.md");
+  const lockModule = rootScript("pipeline-lock");
   if (!fs.existsSync(lockModule)) {
-    return NextResponse.json(
-      { error: "Esta ação exige os scripts do career-ops; a instalação atual contém apenas dados.", code: "core-script-missing" },
+    return Response.json(
+      { error: "Esta ação exige os scripts do career-ops, que não foram encontrados na pasta do código.", code: "core-script-missing" },
       { status: 503 },
     );
   }
@@ -53,7 +51,7 @@ export async function POST(req: Request) {
     const result = await setInboxSkip(file, url, done, { lockModule });
     if (!result.ok) {
       const code = result.error;
-      return NextResponse.json(
+      return Response.json(
         { error: ERROR_MSG[code] ?? "Não foi possível alterar a oportunidade.", code },
         {
           status: ERROR_HTTP[code] ?? 400,
@@ -61,8 +59,8 @@ export async function POST(req: Request) {
         },
       );
     }
-    return NextResponse.json({ ok: true, done, matched: result.matched, changed: result.changed });
+    return Response.json({ ok: true, done, matched: result.matched, changed: result.changed });
   } catch {
-    return NextResponse.json({ error: "Não foi possível guardar a alteração." }, { status: 500 });
+    return Response.json({ error: "Não foi possível guardar a alteração." }, { status: 500 });
   }
 }
