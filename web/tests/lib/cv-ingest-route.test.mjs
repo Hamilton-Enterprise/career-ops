@@ -56,7 +56,17 @@ else if (behavior === "silent-fail") process.exitCode = 7;
 else if (behavior === "hang") { say("A ler o CV…\\n<<cv:start>>\\n# CV"); setInterval(() => {}, 1000); }
 `);
   }
-  const values = { PATH: bins, CAREER_OPS_ROOT: data, CAREER_OPS_DATA_DIR: data, CAREER_OPS_CODE_ROOT: code, TMPDIR: tmp };
+  // Windows os.tmpdir() reads TEMP/TMP, not TMPDIR — set all three so the
+  // route's mkdtemp and this fixture's tempDirs() watch the same directory.
+  const values = {
+    PATH: bins,
+    CAREER_OPS_ROOT: data,
+    CAREER_OPS_DATA_DIR: data,
+    CAREER_OPS_CODE_ROOT: code,
+    TMPDIR: tmp,
+    TEMP: tmp,
+    TMP: tmp,
+  };
   const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
   Object.assign(process.env, values);
   const records = () => (fs.existsSync(recordFile) ? fs.readFileSync(recordFile, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : []);
