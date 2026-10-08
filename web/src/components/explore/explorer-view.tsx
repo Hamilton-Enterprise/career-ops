@@ -9,7 +9,7 @@ import type { Application, InboxJob } from "@/lib/career-ops";
 import { normalizeTextKey } from "@/lib/core/normalize-text-key.mjs";
 import { paramsToFilters, paramsToAi, filtersToAssistedIntent, type ExploreFilters } from "@/lib/explore";
 import { FilterBuilder } from "./filter-builder";
-import { DiscoveringState } from "./discovering-state";
+import { DiscoveringState, SearchReceipt } from "./discovering-state";
 import { AiHuntView } from "./ai-hunt-view";
 import { ExploreModeToggle } from "./explore-mode-toggle";
 import { AiSearchBox } from "./ai-search-box";
@@ -71,6 +71,8 @@ export function ExplorerView({
     const sp = new URLSearchParams(window.location.search);
     const ai = paramsToAi(sp);
     if (ai !== null) {
+      const active = paramsToFilters(sp);
+      initFilters(active, active.opportunityType === "freelance" ? seed.filters : undefined);
       setMode("ai");
       setAiIntent(ai);
     } else if (sp.get("view") === "fresh") {
@@ -232,6 +234,7 @@ export function ExplorerView({
 
       {!scanRunning && !isAi && (
         <>
+          <SearchReceipt />
           {phase === "empty-current" && (
             <EmptyState
               tone="good"

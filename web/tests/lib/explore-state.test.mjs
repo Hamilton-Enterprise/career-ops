@@ -27,9 +27,30 @@ test('terminal offers replace provisional duplicates with merged fields and orig
   const first = { url: 'https://example.test/job', company: 'Acme', title: 'Designer', location: '', postedAt: '', ats: 'greenhouse', source: 'greenhouse-full' };
   let offers = applyDiscoveryOfferEvent([], { kind: 'offer', offer: first });
   offers = applyDiscoveryOfferEvent(offers, { kind: 'offer', offer: { ...first, source: 'landingjobs-api' } });
+  assert.equal(offers.length, 1, 'provisional events upsert by URL');
   const final = { ...first, location: 'Lisboa', sources: ['greenhouse-full', 'landingjobs-api'] };
   assert.deepEqual(applyDiscoveryOfferEvent(offers, { kind: 'done', offers: [final], count: 1 }), [final]);
   assert.deepEqual(applyDiscoveryOfferEvent(offers, { kind: 'done', offers: [], count: 0 }), []);
+});
+
+test('direct sorting ranks by proximity with date, company and URL ties', () => {
+  const offers = [
+    { url: 'z', company: 'B', postedAt: '2026-10-08', match: { total: 90 } },
+    { url: 'b', company: 'A', postedAt: '2026-10-08', match: { total: 90 } },
+    { url: 'a', company: 'A', postedAt: '2026-10-08', match: { total: 90 } },
+    { url: 'new', company: 'A', postedAt: '2026-10-09', match: { total: 80 } },
+    { url: 'old', company: 'A', postedAt: '', match: { total: 90 } },
+  ];
+  assert.deepEqual(discoveryState.sortDiscoveryOffers(offers, 'match').map(o => o.url), ['a', 'b', 'z', 'old', 'new']);
+  assert.deepEqual(discoveryState.sortDiscoveryOffers([...offers].reverse(), 'match').map(o => o.url), ['a', 'b', 'z', 'old', 'new']);
+  assert.equal(discoveryState.sortDiscoveryOffers(offers, 'fresh')[0].url, 'new');
+});
+
+test('new broad pass clears precise source counts and retains completed zero counts', () => {
+  const precise = { greenhouse: { state: 'ok', matches: 0 }, wttj: { state: 'ok', matches: 3 } };
+  assert.deepEqual(updateDiscoverySources(precise, { kind: 'phaseStart', phase: 'broad', sinceDays: 30, free: true }), {});
+  const final = updateDiscoverySources({}, { kind: 'sourceDone', source: 'wttj', count: 0 });
+  assert.deepEqual(final.wttj, { state: 'ok', matches: 0 });
 });
 
 test('generic source events and authoritative summary retain failures and partial ATS coverage', () => {

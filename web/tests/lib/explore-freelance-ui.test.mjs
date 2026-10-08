@@ -69,6 +69,9 @@ test("the existing provider preserves snapshots and applies assistant patches wi
   const effects = [];
   const writes = [];
   const storedResults = new Map();
+  const urls = [];
+  globalThis.window = { history: { replaceState: (_a, _b, url) => urls.push(url) } };
+  t.after(() => { delete globalThis.window; });
   for (const name of ["localStorage", "sessionStorage"]) {
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
     Object.defineProperty(globalThis, name, { configurable: true, value: {
@@ -132,13 +135,15 @@ test("the existing provider preserves snapshots and applies assistant patches wi
   // and both settled result sets must survive the switch within this tab.
   storedResults.set("career-ops:explore-results:employment", JSON.stringify({
     v: 1, mode: "scan", phase: "results",
+    filters: employment, sort: "company", searchPhase: "broad", expansion: { phase: "broad", changes: ["Janela de pesquisa: 7 → 30 dias."], originalSinceDays: 7, effectiveSinceDays: 30, termsAdded: [], locationsAdded: [] },
     offers: [{ url: "https://example.test/job", title: "Farmácia", company: "Acme", location: "Lisboa" }],
     matchCount: 1, companiesScanned: 4, companiesAvailable: 4, capHit: false, droppedNoDate: 0,
-    sources: { greenhouse: { state: "ok" } }, partial: false, status: "1 oferta encontrada.", error: "",
+    sources: { greenhouse: { state: "ok", matches: 1 } }, partial: false, status: "1 oferta encontrada.", error: "",
     scannerMissing: false, added: [], aiTrace: [], aiCost: { searches: 0, candidates: 0, fetches: 0 }, aiIntent: "",
   }));
   storedResults.set("career-ops:explore-results:freelance", JSON.stringify({
     v: 1, mode: "scan", phase: "empty-current", offers: [], matchCount: 0,
+    filters: { ...explore.DEFAULT_FILTERS, opportunityType: "freelance", positive: ["Flutter"], markets: ["remote"] }, sort: "match", searchPhase: "precise", expansion: null,
     companiesScanned: 1, companiesAvailable: 1, capHit: false, droppedNoDate: 0,
     sources: { wttj: { state: "ok" } }, partial: false, status: "Nenhuma oferta encontrada.", error: "",
     scannerMissing: false, added: [], aiTrace: [], aiCost: { searches: 0, candidates: 0, fetches: 0 }, aiIntent: "",
@@ -150,20 +155,47 @@ test("the existing provider preserves snapshots and applies assistant patches wi
   ctx = render();
   assert.equal(ctx.phase, "results");
   assert.equal(ctx.offers[0].title, "Farmácia");
+  assert.equal(ctx.sort, "company");
+  assert.equal(ctx.searchPhase, "broad");
+  assert.deepEqual(ctx.expansion.changes, ["Janela de pesquisa: 7 → 30 dias."]);
+  ctx.initFilters(employment);
+  ctx = render();
   ctx.setFilters({ ...ctx.filters, opportunityType: "freelance" });
   ctx = render();
   assert.equal(ctx.phase, "empty-current");
   assert.equal(ctx.companiesScanned, 1);
   assert.deepEqual(ctx.offers, []);
+  assert.equal(ctx.expansion, null);
+  assert.equal(ctx.sort, "match");
+  assert.equal(new URL(urls.at(-1), 'https://example.test').searchParams.get('opportunity'), 'freelance');
+  assert.equal(new URL(urls.at(-1), 'https://example.test').searchParams.get('q'), 'Flutter');
+  const freelanceUrl = urls.at(-1);
   ctx.setFilters({ ...ctx.filters, opportunityType: "employment" });
   ctx = render();
   assert.equal(ctx.phase, "results");
   assert.equal(ctx.offers[0].title, "Farmácia");
+  assert.equal(ctx.sources.greenhouse.matches, 1);
+  assert.equal(ctx.searchPhase, "broad");
+  assert.equal(new URL(urls.at(-1), 'https://example.test').searchParams.get('q'), 'Farmácia,iOS');
+  ctx.setSort('fresh');
+  ctx = render();
+  effects.at(-1)();
+  assert.equal(JSON.parse(storedResults.get('career-ops:explore-results:employment')).sort, 'fresh');
+  slots.length = 0;
+  ctx = render();
+  ctx.initFilters(explore.paramsToFilters(new URL(freelanceUrl, 'https://example.test').searchParams), employment);
+  ctx = render();
+  assert.equal(ctx.filters.opportunityType, 'freelance');
+  assert.equal(ctx.phase, 'empty-current');
+  ctx.reset();
+  assert.equal(storedResults.has('career-ops:explore-results:freelance'), false);
+  assert.equal(storedResults.has('career-ops:explore-results:employment'), true);
 });
 
 test("the existing explorer page passes the employment seed when opening a freelance URL", async (t) => {
   const calls = [];
-  const context = { filters: employment, offers: [], sources: {}, mode: "scan", phase: "idle", initFilters: (...args) => calls.push(args) };
+  const aiCalls = [];
+  const context = { filters: employment, offers: [], sources: {}, mode: "scan", phase: "idle", initFilters: (...args) => calls.push(args), setMode: mode => aiCalls.push(['mode', mode]), setAiIntent: intent => aiCalls.push(['intent', intent]) };
   const dependencies = new Proxy({
     react: { ...React, useEffect: (fn) => fn(), useMemo: (fn) => fn(), useRef: (initial) => ({ current: initial }), useState: (initial) => [initial, () => {}] },
     "@/lib/explore": explore, "@/lib/cn": { cn }, "@/lib/fonts": { instrumentSerif: { className: "serif" } },
@@ -180,6 +212,12 @@ test("the existing explorer page passes the employment seed when opening a freel
   assert.equal(calls[0][0].opportunityType, "freelance");
   assert.deepEqual(calls[0][0].positive, ["Flutter"]);
   assert.deepEqual(calls[0][1], employment);
+  window.location.search = '?mode=ai&opportunity=freelance&q=Flutter&intent=Find%20Flutter';
+  ExplorerView({ seed: { filters: employment, seededFrom: ["perfil"] }, inboxSnapshot: [], appsSnapshot: [], rootExists: true });
+  assert.equal(calls.length, 2, 'assisted URL initializes the active opportunity type before intent');
+  assert.equal(calls[1][0].opportunityType, 'freelance');
+  assert.deepEqual(calls[1][0].positive, ['Flutter']);
+  assert.deepEqual(aiCalls, [['mode', 'ai'], ['intent', 'Find Flutter']]);
 });
 
 test("freelance filters expose the explicit mode selector and editable shortcuts", async () => {

@@ -60,6 +60,16 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
   const freelance = offer.opportunityType === "freelance";
   const fresh = freshness(offer.postedAt) || "Data não indicada";
   const provenance = offerProvenance(offer);
+  const match = offer.match;
+  const band = match ? match.total >= 85 ? "Muito próxima" : match.total >= 65 ? "Próxima" : "Possível" : "";
+  const salary = [offer.salary?.min, offer.salary?.max].filter((value) => typeof value === "number").map((value) => value!.toLocaleString("pt-PT")).join("–");
+  const facts = [
+    salary ? `Salário: ${salary}${offer.salary?.currency ? ` ${offer.salary.currency}` : ""}${offer.salary?.period ? ` / ${offer.salary.period}` : ""}` : "",
+    offer.contractType?.trim() ? `Contrato: ${offer.contractType}` : "",
+    offer.hours?.trim() ? `Horário: ${offer.hours}` : "",
+    offer.applicationDeadline ? `Prazo: ${offer.applicationDeadline}` : "",
+    typeof offer.vacancyCount === "number" ? `Vagas: ${offer.vacancyCount}` : "",
+  ].filter(Boolean);
 
   const evaluate = () => {
     addToPipeline([offer]); // evaluating implies it's in the pipeline — record it
@@ -91,6 +101,7 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
 
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
         <span className="text-muted">{fresh}</span>
+        {match && <span className="rounded border border-brand/25 bg-brand-soft px-1.5 py-0.5 font-medium text-brand" title={`Proximidade aos critérios: ${match.total}/100`} aria-label={`${band}. Proximidade aos critérios: ${match.total}/100`}>{band}</span>}
         {freelance && (
           <span className="rounded border border-brand/25 bg-brand-soft px-1.5 py-0.5 font-medium text-brand">Freelance</span>
         )}
@@ -107,7 +118,7 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
             · corresponde a <span className="text-brand/80">{offer.matchedKeyword}</span>
           </span>
         )}
-        {offer.fit && (
+        {offer.fit && !match && (
           <span
             className={cn(
               "rounded border px-1 py-0.5 text-[11px] font-medium",
@@ -124,6 +135,8 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
 
       <p className="text-[12px] leading-snug text-muted">{provenance.origins.length === 1 ? "Origem" : "Origens"}: {provenance.origins.join(" · ") || "Não indicada"}</p>
       {provenance.eligibilityUnknown && <p className="text-[12px] leading-snug text-muted">Países elegíveis não indicados</p>}
+      {match?.reasons.filter(reason => reason.trim()).slice(0, 2).map(reason => <p key={reason} className="text-[12px] leading-snug text-muted">{reason}</p>)}
+      {facts.length > 0 && <p className="text-[12px] leading-snug text-muted">{facts.join(" · ")}</p>}
 
       {offer.why && (
         <p className="text-[12px] leading-snug text-brand/80">{offer.why}</p>

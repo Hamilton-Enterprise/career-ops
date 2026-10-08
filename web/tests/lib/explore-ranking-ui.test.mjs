@@ -1,0 +1,162 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { createRequire } from 'node:module';
+import * as React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { loadBindings, transform } from 'next/dist/build/swc/index.js';
+import * as state from '../../src/lib/explore-state.mjs';
+import * as explore from '../../src/lib/explore.ts';
+import * as exploreAi from '../../src/lib/explore-ai.ts';
+
+await loadBindings();
+const require = createRequire(import.meta.url);
+let context;
+const icon = () => React.createElement('span');
+async function load(filename, deps = {}) {
+  const { code } = await transform(fs.readFileSync(new URL(`../../src/components/explore/${filename}`, import.meta.url), 'utf8'), {
+    filename, jsc: { parser: { syntax: 'typescript', tsx: true }, transform: { react: { runtime: 'automatic' } } }, module: { type: 'commonjs' },
+  });
+  const module = { exports: {} };
+  new Function('require', 'module', 'exports', code)(id => ({
+    'lucide-react': new Proxy({}, { get: () => icon }), '@/lib/cn': { cn: (...v) => v.filter(Boolean).join(' ') },
+    '@/lib/fonts': { instrumentSerif: { className: 'serif' } }, '@/lib/explore-state.mjs': state,
+    './explore-provider': { useExplore: () => context },
+    '@/components/jobs/job-store': { useJobs: () => ({ jobs: [], startJob() {} }) },
+    '@/components/cost/cost-badge': { CostBadge: () => null }, '@/components/apply/apply-backdrop': { ApplyBackdrop: () => null },
+    ...deps,
+  }[id] ?? require(id)), module, module.exports);
+  return module.exports;
+}
+const { DiscoveryCard } = await load('discovery-card.tsx');
+const { SearchReceipt } = await load('discovering-state.tsx');
+const { ResultsList } = await load('results-list.tsx', { './discovery-card': { DiscoveryCard }, './discovering-state': { SearchReceipt } });
+const offer = { url: 'https://example.test/job', company: 'Acme', title: 'Sales Assistant', location: 'Lisboa', postedAt: '2026-10-08', source: 'wttj-api', ats: 'wttj-api' };
+const render = (Component, props) => renderToStaticMarkup(React.createElement(Component, props));
+const base = () => ({ mode: 'scan', sort: 'match', setSort() {}, sources: {}, searchPhase: 'precise', expansion: null,
+  added: new Set(), adding: new Set(), addToPipeline() {}, running: false, companiesScanned: 0 });
+
+test('direct results default to proximity and AI keeps recent/company controls', () => {
+  context = base();
+  const html = render(ResultsList, { offers: [{ ...offer, inPipeline: false }] });
+  assert.match(html, /aria-pressed="true"[^>]*>Proximidade</);
+  context.mode = 'ai';
+  const ai = render(ResultsList, { offers: [{ ...offer, verification: 'unconfirmed', why: 'Found for your request.', inPipeline: false }] });
+  assert.doesNotMatch(ai, />Proximidade</);
+  assert.match(ai, /aria-pressed="true"[^>]*>Recentes</);
+  assert.match(ai, /Found for your request/);
+});
+
+test('proximity bands expose totals accessibly, reasons and only supplied facts', () => {
+  context = base();
+  for (const [total, label] of [[90, 'Muito próxima'], [70, 'Próxima'], [40, 'Possível']]) {
+    const html = render(DiscoveryCard, { offer: { ...offer, match: { total, reasons: ['Função equivalente: Sales Assistant.', 'Localização: mesma cidade (Lisboa).'] } }, inPipeline: false });
+    assert.match(html, new RegExp(`>${label}<`));
+    assert.match(html, new RegExp(`title="Proximidade aos critérios: ${total}/100"`));
+    assert.doesNotMatch(html, new RegExp(`>${total}(?:/100)?<`));
+    assert.match(html, /Função equivalente: Sales Assistant/);
+    assert.doesNotMatch(html, /Contrato:|Horário:|Prazo:|Vagas:|Salário:/);
+  }
+  const html = render(DiscoveryCard, { offer: { ...offer, contractType: 'Permanent', hours: '40 h/semana', applicationDeadline: '2026-11-01', vacancyCount: 2,
+    salary: { min: 2000, max: 2500, currency: 'EUR', period: 'month' } }, inPipeline: false });
+  for (const fact of ['Permanent', '40 h/semana', '2026-11-01', 'Vagas: 2', 'EUR']) assert.ok(html.includes(fact));
+});
+
+test('settled receipt shows exact expansion and all completed source states/counts', () => {
+  context = { ...base(), searchPhase: 'broad', expansion: { changes: ['Funções equivalentes: Retail Assistant.', 'Janela de pesquisa: 7 → 30 dias.'] },
+    sources: { wttj: { state: 'ok', matches: 0 }, greenhouse: { state: 'partial', matches: 2, done: 100, total: 150 }, remotive: { state: 'error', message: 'Prazo excedido' } } };
+  const html = render(SearchReceipt);
+  for (const text of ['Pesquisa alargada', 'Funções equivalentes: Retail Assistant.', '7 → 30 dias.', 'Welcome to the Jungle', '0 anúncios', '2 anúncios', '100 de 150 empresas', 'Parcial', 'Falhou', 'Prazo excedido']) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /cobertura.*%/i);
+});
+
+test('healthy zero keeps its receipt in the completed explorer layout', async () => {
+  context = { ...base(), filters: explore.DEFAULT_FILTERS, offers: [], phase: 'empty-current', initFilters() {}, setMode() {}, setAiIntent() {}, discover() {}, loadFresh() {},
+    sources: { wttj: { state: 'ok', matches: 0 } }, searchPhase: 'broad', expansion: { changes: ['Janela de pesquisa: 7 → 30 dias.'] } };
+  const placeholder = () => null;
+  const { ExplorerView } = await load('explorer-view.tsx', {
+    react: { ...React, useEffect() {} }, 'next/link': { default: placeholder }, '@/lib/explore': explore,
+    '@/lib/pt-pt': { PT_PT_LOCALE: 'pt-PT' }, '@/lib/core/normalize-text-key.mjs': { normalizeTextKey: value => value },
+    './discovering-state': { DiscoveringState: placeholder, SearchReceipt }, './filter-builder': { FilterBuilder: placeholder },
+    './ai-hunt-view': { AiHuntView: placeholder }, './explore-mode-toggle': { ExploreModeToggle: placeholder },
+    './ai-search-box': { AiSearchBox: placeholder }, './results-list': { ResultsList }, './schedule-job-action': { ScheduleJobAction: placeholder },
+  });
+  const html = render(ExplorerView, { seed: { filters: explore.DEFAULT_FILTERS, seededFrom: [] }, inboxSnapshot: [], appsSnapshot: [], rootExists: true });
+  assert.match(html, /Não foram encontradas ofertas/);
+  assert.match(html, /Pesquisa alargada/);
+  assert.match(html, /0 anúncios/);
+});
+
+test('provider persists final ranked cards and broad receipt separately for each opportunity type', async t => {
+  const slots = [], effects = [], stored = new Map(), requested = [], urls = [];
+  let cursor = 0;
+  const restore = (name, value) => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+    Object.defineProperty(globalThis, name, { configurable: true, value });
+    t.after(() => descriptor ? Object.defineProperty(globalThis, name, descriptor) : delete globalThis[name]);
+  };
+  restore('sessionStorage', { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key) });
+  restore('localStorage', { getItem: () => JSON.stringify({ cliId: 'codex' }) });
+  restore('window', { history: { replaceState: (_a, _b, url) => urls.push(url) }, setTimeout: fn => fn() });
+  const expansion = { phase: 'broad', changes: ['Janela de pesquisa: 7 → 30 dias.'], originalSinceDays: 7, effectiveSinceDays: 30, termsAdded: [], locationsAdded: [] };
+  restore('fetch', async (url, options) => {
+    if (url === '/api/explore/ai/known') return new Response(JSON.stringify({ urls: [] }));
+    if (url === '/api/explore/ai') return new Response(`<<offer:${JSON.stringify({ ...offer, why: 'Public role.' })}>>`);
+    requested.push([url, JSON.parse(options.body).opportunityType]);
+    const events = [
+      { kind: 'phaseStart', phase: 'precise', sinceDays: 7, free: true },
+      { kind: 'sourceDone', source: 'wttj', count: 0 },
+      { kind: 'expansion', ...expansion },
+      { kind: 'phaseStart', phase: 'broad', sinceDays: 30, free: true },
+      { kind: 'offer', offer }, { kind: 'offer', offer: { ...offer, location: '' } },
+      { kind: 'sourceDone', source: 'wttj', count: 1 },
+      { kind: 'summary', companiesScanned: 1, unreachable: 0, matches: 1, status: 'ok', sources: [{ source: 'wttj', state: 'ok' }] },
+      { kind: 'done', offers: [{ ...offer, vacancyCount: 2, match: { total: 95, components: { role: 60, location: 25, freshness: 5, evidence: 5 }, reasons: ['Função pedida.'] } }], count: 1 },
+    ];
+    return new Response(events.map(event => JSON.stringify(event)).join('\n') + '\n');
+  });
+  const hooks = { ...React, useState(initial) {
+    const index = cursor++;
+    if (!(index in slots)) slots[index] = typeof initial === 'function' ? initial() : initial;
+    return [slots[index], next => { slots[index] = typeof next === 'function' ? next(slots[index]) : next; }];
+  }, useRef(initial) {
+    const index = cursor++;
+    if (!(index in slots)) slots[index] = { current: initial };
+    return slots[index];
+  }, useCallback: fn => fn, useMemo: fn => fn(), useEffect: fn => effects.push(fn) };
+  const { ExploreProvider } = await load('explore-provider.tsx', {
+    react: hooks, 'next/navigation': { useRouter: () => ({ refresh() {} }) }, '@/lib/explore': explore,
+    '@/lib/explore-ai': exploreAi, '@/lib/whats-new.mjs': {}, '@/lib/explore-error.mjs': {},
+  });
+  const renderProvider = () => { cursor = 0; effects.length = 0; return ExploreProvider({ children: null }).props.value; };
+  let ctx = renderProvider();
+  ctx.initFilters({ ...explore.DEFAULT_FILTERS, ats: [], markets: ['portugal'] });
+  await renderProvider().discover();
+  ctx = renderProvider();
+  assert.equal(ctx.phase, 'results');
+  assert.equal(ctx.offers.length, 1);
+  assert.equal(ctx.offers[0].match.total, 95);
+  assert.equal(ctx.offers[0].vacancyCount, 2);
+  assert.equal(ctx.searchPhase, 'broad');
+  assert.deepEqual(ctx.expansion, expansion);
+  assert.deepEqual(ctx.sources.wttj, { state: 'ok', matches: 1, message: undefined });
+  effects.at(-1)();
+  ctx.setFilters({ ...ctx.filters, opportunityType: 'freelance' });
+  ctx = renderProvider();
+  assert.deepEqual(ctx.offers, []);
+  assert.equal(ctx.expansion, null);
+  ctx.setFilters({ ...ctx.filters, opportunityType: 'employment' });
+  assert.equal(renderProvider().offers[0].match.total, 95);
+  assert.deepEqual(requested, [['/api/explore', 'employment']]);
+  ctx = renderProvider();
+  ctx.setFilters({ ...ctx.filters, opportunityType: 'freelance' });
+  ctx = renderProvider();
+  ctx.setMode('ai');
+  ctx.setAiIntent('Find Flutter');
+  await renderProvider().discoverAI();
+  const sp = new URL(urls.at(-1), 'https://example.test').searchParams;
+  assert.equal(sp.get('opportunity'), 'freelance', 'starting assisted search keeps the active type reloadable');
+  assert.equal(sp.get('mode'), 'ai');
+  assert.equal(sp.get('intent'), 'Find Flutter');
+  assert.equal(renderProvider().offers[0].verification, 'unconfirmed');
+});

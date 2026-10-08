@@ -6,7 +6,6 @@ import {
   DEFAULT_FILTERS,
   ATS_LABEL,
   filtersToParams,
-  aiToParams,
   isBroadSearch,
   createOpportunitySnapshots,
   updateOpportunitySnapshot,
@@ -19,11 +18,13 @@ import {
   type OpportunitySnapshots,
   type OpportunityType,
   type ScanEvent,
+  type SearchPhase,
+  type SearchExpansion,
 } from "@/lib/explore";
 import { makeAiStreamParser, type AiTraceChunk } from "@/lib/explore-ai";
 import { MAX_OFFER_LIMIT } from "@/lib/whats-new.mjs";
 import { isScannerMissing } from "@/lib/explore-error.mjs";
-import { applyDiscoveryOfferEvent, updateDiscoverySources, summarizeDiscoveryState, sourceLabel, type DiscoverySourceState } from "@/lib/explore-state.mjs";
+import { applyDiscoveryOfferEvent, updateDiscoverySources, summarizeDiscoveryState, sourceLabel, type DiscoverySourceState, type DiscoverySort } from "@/lib/explore-state.mjs";
 
 export type Phase =
   | "idle"
@@ -50,6 +51,10 @@ type ExploreCtx = {
   running: boolean;
   offers: DiscoveredOffer[];
   sources: Record<string, SourceState>;
+  sort: DiscoverySort;
+  setSort: (sort: DiscoverySort) => void;
+  searchPhase: SearchPhase;
+  expansion: SearchExpansion | null;
   matchCount: number;
   companiesScanned: number;
   companiesAvailable: number;
@@ -103,6 +108,10 @@ type ResultSnapshot = {
   capHit: boolean;
   droppedNoDate: number;
   sources: Record<string, SourceState>;
+  filters: ExploreFilters;
+  sort: DiscoverySort;
+  searchPhase: SearchPhase;
+  expansion: SearchExpansion | null;
   partial: boolean;
   status: string;
   error: string;
@@ -121,6 +130,9 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [offers, setOffers] = useState<DiscoveredOffer[]>([]);
   const [sources, setSources] = useState<Record<string, SourceState>>({});
+  const [sort, setSort] = useState<DiscoverySort>("match");
+  const [searchPhase, setSearchPhase] = useState<SearchPhase>("precise");
+  const [expansion, setExpansion] = useState<SearchExpansion | null>(null);
   const [matchCount, setMatchCount] = useState(0);
   const [companiesScanned, setCompaniesScanned] = useState(0);
   // Authoritative scan-health signals (scanner --json mode, #1199): tell a capped /
@@ -154,6 +166,9 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setCapHit(!!valid?.capHit);
     setDroppedNoDate(valid?.droppedNoDate ?? 0);
     setSources(valid?.sources ?? {});
+    setSort(valid?.sort === "fresh" || valid?.sort === "company" ? valid.sort : "match");
+    setSearchPhase(valid?.searchPhase === "broad" ? "broad" : "precise");
+    setExpansion(valid?.expansion ?? null);
     setPartial(!!valid?.partial);
     setStatus(typeof valid?.status === "string" ? valid.status : "");
     setError(typeof valid?.error === "string" ? valid.error : "");
@@ -174,7 +189,19 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       snap = null;
     }
     restoreResults(snap);
+    return snap;
   }, [restoreResults]);
+
+  const rewriteUrl = useCallback((active: ExploreFilters, snap?: Pick<ResultSnapshot, "mode" | "aiIntent"> | null) => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(filtersToParams(active));
+    sp.set("opportunity", active.opportunityType);
+    if (snap?.mode === "ai") {
+      sp.set("mode", "ai");
+      if (snap.aiIntent) sp.set("intent", snap.aiIntent);
+    }
+    window.history.replaceState(null, "", `/explore?${sp}`);
+  }, []);
 
   const setFilters = useCallback((f: ExploreFilters) => {
     touched.current = true;
@@ -185,11 +212,18 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     snapshotsRef.current = state.snapshots;
     filtersRef.current = state.filters;
     setFiltersState(state.filters);
-    if (changedType) restoreResultsFor(state.filters.opportunityType);
-  }, [restoreResultsFor]);
+    if (changedType) rewriteUrl(state.filters, restoreResultsFor(state.filters.opportunityType));
+  }, [restoreResultsFor, rewriteUrl]);
   const initFilters = useCallback((f: ExploreFilters, employmentSeed?: ExploreFilters) => {
     if (touched.current) return;
     snapshotsRef.current = createOpportunitySnapshots(f, employmentSeed);
+    for (const type of ["employment", "freelance"] as const) {
+      if (type === f.opportunityType) continue;
+      try {
+        const saved = JSON.parse(sessionStorage.getItem(resultKey(type)) || "null") as ResultSnapshot | null;
+        if (saved?.v === 1 && saved.filters?.opportunityType === type) snapshotsRef.current = updateOpportunitySnapshot(snapshotsRef.current, saved.filters);
+      } catch { /* unavailable session storage */ }
+    }
     const active = structuredClone(snapshotsRef.current[f.opportunityType]);
     filtersRef.current = active;
     setFiltersState(active);
@@ -210,6 +244,9 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setPartial(false);
     setError("");
     setScannerMissing(false);
+    setSort("match");
+    setSearchPhase("precise");
+    setExpansion(null);
     setStatus("A iniciar a pesquisa nas fontes selecionadas…");
     const init: Record<string, SourceState> = {};
     if (f.opportunityType === "employment") for (const a of f.ats) init[a] = { state: "queued" };
@@ -267,6 +304,16 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
             sourceStates = updateDiscoverySources(sourceStates, ev);
             setSources(sourceStates);
             switch (ev.kind) {
+              case "phaseStart":
+                setSearchPhase(ev.phase);
+                setPhase("scanning");
+                setStatus(ev.phase === "broad" ? "Pesquisa alargada · a consultar as fontes…" : "Pesquisa precisa · a consultar as fontes…");
+                break;
+              case "expansion": {
+                const { kind: _kind, ...receipt } = ev;
+                setExpansion(receipt);
+                break;
+              }
               case "sourceStart":
                 setPhase("scanning");
                 setStatus(`A consultar ${sourceLabel(ev.source)}`);
@@ -379,6 +426,9 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setDroppedNoDate(0);
     setPartial(false);
     setSources({});
+    setSort("fresh");
+    setSearchPhase("precise");
+    setExpansion(null);
     setError("");
     try {
       // A finite ceiling, not `all`: explorer-view renders every offer it gets,
@@ -455,17 +505,16 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     snapshotsRef.current = state.snapshots;
     filtersRef.current = state.filters;
     setFiltersState(state.filters);
-    if (state.filters.opportunityType !== previousType) restoreResultsFor(state.filters.opportunityType);
+    if (state.filters.opportunityType !== previousType) rewriteUrl(state.filters, restoreResultsFor(state.filters.opportunityType));
     if (opts?.run) void discover();
-  }, [discover, restoreResultsFor]);
+  }, [discover, restoreResultsFor, rewriteUrl]);
 
   const reset = useCallback(() => {
     runningRef.current = false;
     restoreResults(null);
     try {
       sessionStorage.removeItem(RESULTS_KEY);
-      sessionStorage.removeItem(resultKey("employment"));
-      sessionStorage.removeItem(resultKey("freelance"));
+      sessionStorage.removeItem(resultKey(filtersRef.current.opportunityType));
     } catch {
       /* ignore */
     }
@@ -495,7 +544,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setError("");
     setScannerMissing(false);
     setStatus("A iniciar a pesquisa na web pública…");
-    if (typeof window !== "undefined") window.history.replaceState(null, "", `/explore?${aiToParams(intent)}`);
+    rewriteUrl(filtersRef.current, { mode: "ai", aiIntent: intent });
 
     let knownUrls = new Set<string>();
     try {
@@ -578,7 +627,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     } else {
       setPhase("empty-loose");
     }
-  }, []);
+  }, [rewriteUrl]);
 
   // Switch surface but PRESERVE the current results + filters — toggling scan↔AI must
   // not throw away a completed search (disc#5). A new search (discover/discoverAI)
@@ -603,23 +652,24 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     try {
       const snap: ResultSnapshot = {
         v: 1, mode, phase, offers, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, sources,
+        filters, sort, searchPhase, expansion,
         partial, status, error, scannerMissing, added: [...added], aiTrace, aiCost, aiIntent,
       };
       sessionStorage.setItem(resultKey(filters.opportunityType), JSON.stringify(snap));
     } catch {
       /* sessionStorage full/unavailable — non-fatal */
     }
-  }, [filters.opportunityType, phase, mode, offers, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, sources, partial, status, error, scannerMissing, added, aiTrace, aiCost, aiIntent]);
+  }, [filters, sort, searchPhase, expansion, phase, mode, offers, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, sources, partial, status, error, scannerMissing, added, aiTrace, aiCost, aiIntent]);
 
   const value = useMemo(
     () => ({
       filters, setFilters, initFilters, phase,
       running: phase === "casting" || phase === "scanning" || phase === "revealing" || phase === "hunting",
-      offers, sources, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, status, partial, error, scannerMissing, added, adding,
+      offers, sources, sort, setSort, searchPhase, expansion, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, status, partial, error, scannerMissing, added, adding,
       discover, loadFresh, addToPipeline, applyPatch, reset,
       mode, setMode, aiIntent, setAiIntent, discoverAI, aiTrace, aiCost,
     }),
-    [filters, setFilters, initFilters, phase, offers, sources, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, status, partial, error, scannerMissing, added, adding, discover, loadFresh, addToPipeline, applyPatch, reset, mode, setMode, aiIntent, discoverAI, aiTrace, aiCost],
+    [filters, setFilters, initFilters, phase, offers, sources, sort, searchPhase, expansion, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, status, partial, error, scannerMissing, added, adding, discover, loadFresh, addToPipeline, applyPatch, reset, mode, setMode, aiIntent, setAiIntent, discoverAI, aiTrace, aiCost],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

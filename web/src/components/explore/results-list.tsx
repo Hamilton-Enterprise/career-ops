@@ -7,27 +7,26 @@ import type { DiscoveredOffer } from "@/lib/explore";
 import { CostBadge } from "@/components/cost/cost-badge";
 import { DiscoveryCard } from "./discovery-card";
 import { useExplore } from "./explore-provider";
-import { discoverySourceReasons, summarizeDiscoveryState } from "@/lib/explore-state.mjs";
+import { discoverySourceReasons, summarizeDiscoveryState, sortDiscoveryOffers, type DiscoverySort } from "@/lib/explore-state.mjs";
 
 export type EnrichedOffer = DiscoveredOffer & { inPipeline: boolean; evaluatedN?: string };
 
 export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
-  const { companiesScanned, sources, partial, error, addToPipeline, added, mode, running } = useExplore();
+  const { companiesScanned, sources, partial, error, addToPipeline, added, mode, running, sort: directSort, setSort: setDirectSort } = useExplore();
   const isAi = mode === "ai";
   const outcome = summarizeDiscoveryState(sources, offers.length);
   const sourceReasons = discoverySourceReasons(sources);
-  const [sort, setSort] = useState<"fresh" | "company">("fresh");
+  const [aiSort, setAiSort] = useState<"fresh" | "company">("fresh");
+  const sort = isAi ? aiSort : directSort;
+  const setSort = (next: DiscoverySort) => isAi ? setAiSort(next === "company" ? "company" : "fresh") : setDirectSort(next);
   const [q, setQ] = useState("");
 
   const view = useMemo(() => {
     const needle = q.trim().toLowerCase();
     let list = offers;
     if (needle) list = list.filter((o) => o.title.toLowerCase().includes(needle) || o.company.toLowerCase().includes(needle));
-    const sorted = [...list].sort((a, b) =>
-      sort === "fresh" ? (b.postedAt || "").localeCompare(a.postedAt || "") : a.company.localeCompare(b.company),
-    );
-    return sorted;
-  }, [offers, q, sort]);
+    return isAi ? [...list].sort((a, b) => sort === "fresh" ? (b.postedAt || "").localeCompare(a.postedAt || "") : a.company.localeCompare(b.company)) : sortDiscoveryOffers(list, sort);
+  }, [offers, q, sort, isAi]);
 
   const addable = offers.filter((o) => !o.inPipeline && !o.evaluatedN && !added.has(o.url));
   const freelance = offers.length > 0 && offers.every((offer) => offer.opportunityType === "freelance");
@@ -62,7 +61,7 @@ export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
             />
           </div>
           <div className="inline-flex rounded-lg border border-border bg-surface/40 p-0.5 text-xs">
-            {(["fresh", "company"] as const).map((s) => (
+            {(isAi ? ["fresh", "company"] as const : ["match", "fresh", "company"] as const).map((s) => (
               <button
                 key={s}
                 type="button"
@@ -70,7 +69,7 @@ export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
                 aria-pressed={sort === s}
                 className={cn("min-h-[44px] min-w-[44px] rounded-md px-2.5 py-1 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand", sort === s ? "bg-brand-soft text-brand" : "text-muted hover:text-foreground")}
               >
-                {s === "fresh" ? "Recentes" : "Empresa"}
+                {s === "match" ? "Proximidade" : s === "fresh" ? "Recentes" : "Empresa"}
               </button>
             ))}
           </div>
