@@ -32,6 +32,7 @@
 - A precise pass that is capped, partial, timed out or drops undated postings must not trigger broadening; Task 2 adds orchestration tests.
 - Source selection must not include Primark or arbitrary user URLs and must keep Auchan outside the reverse-ATS sample limit; Task 3 adds planner tests.
 - Rank ties, missing dates and missing optional metrics must remain stable and honest; Task 4 adds deterministic and boundary tests.
+- Switching Employment/Freelance must update the shareable URL as well as the restored state; Task 5 closes the residual URL mismatch.
 
 ---
 
@@ -91,7 +92,7 @@ Keep this a pure local data module. Return exact aliases for `precise`, metro ad
 
 - [ ] **Step 7: Correct `titleFit`'s assistant regression with TDD**
 
-Add a failing test proving that `Sales Assistant` against `Sales Assistant` retains both role tokens and scores strong. Remove `assistant` from the generic seniority set; do not repurpose `fit` for search ranking.
+Keep `Sales Assistant` against itself as a positive regression, then add the failing distinction `Sales Manager` against target `Sales Assistant`: it must become `related` at `0.5`, not `strong` at `1`. Remove `assistant` from the generic seniority set; do not repurpose `fit` for search ranking.
 
 Run: `node --test tests/title-fit.test.mjs && cd web && node --experimental-strip-types --test tests/lib/occupation-match.test.mjs tests/lib/location-concepts.test.mjs`
 
@@ -111,8 +112,11 @@ Stage only Task 1 files and commit: `feat(search): add occupation and location c
 - Modify: `web/src/lib/explore.ts`
 - Modify: `web/src/lib/core/scan.ts`
 - Modify: `web/src/lib/core/market-scan.ts`
+- Modify: `web/src/lib/market-presets.mjs`
 - Modify: `web/src/app/api/explore/route.ts`
 - Modify: `web/tests/lib/scan-merge.test.mjs`
+- Modify: `web/tests/lib/market-presets.test.mjs`
+- Modify: `web/tests/lib/market-scan.test.mjs`
 - Create: `web/tests/lib/explore-search-ladder.test.mjs`
 
 **Interfaces:**
@@ -120,7 +124,7 @@ Stage only Task 1 files and commit: `feat(search): add occupation and location c
 - Produces: `buildSearchPlan(filters: ExploreFilters, phase: "precise" | "broad"): SearchPlan`.
 - Produces: `SearchExpansion = { phase: "broad"; changes: string[]; originalSinceDays: number; effectiveSinceDays: number; termsAdded: string[]; locationsAdded: string[] }`.
 - Extends: `ScanEvent` with `phaseStart` and `expansion` events.
-- Changes: `runMarketDiscovery(filters, searchPlan, onEvent)` and `buildMarketPlan(markets, terms, opportunityType, { occupationIds })` so directed sources use the already-resolved concepts.
+- Changes: `runMarketDiscovery(filters, onEvent, searchPlan?)` and `buildMarketPlan(markets, terms, opportunityType, { occupationIds, locationResolution }?)`; optional final arguments preserve existing callers until Task 3 supplies directed sources.
 - Preserves: existing `runDiscovery(filters, onEvent)` entry point while internally executing at most two passes.
 
 - [ ] **Step 1: Write failing pure plan tests**
@@ -132,6 +136,7 @@ Assert that:
 - unknown professions and locations stay literal;
 - expansion receipts list exact differences and remain empty when nothing changes;
 - negative title/location filters are unchanged.
+- market classification accepts Lisboa/Lisbon/Lisbonne in precise mode and bare Amadora/Sintra/Oeiras/Cascais only in broad mode, while still rejecting foreign qualifiers.
 
 - [ ] **Step 2: Run the pure plan test and verify RED**
 
@@ -141,7 +146,7 @@ Expected: FAIL because `buildSearchPlan` does not exist.
 
 - [ ] **Step 3: Implement the smallest pure `SearchPlan` builder**
 
-Produce effective filters plus occupation/location evidence. Cap expanded positive terms at 12 and leave all user-visible filters untouched.
+Produce effective filters plus occupation/location evidence. Cap expanded positive terms at 12 and leave all user-visible filters untouched. Feed the resolved location aliases into `classifyMarketLocation` so the market-receipt filter and the post-merge filter apply the same phase-aware geography as the temporary `allow` list.
 
 - [ ] **Step 4: Write failing orchestration tests**
 
@@ -169,7 +174,7 @@ The route still emits a single final `done` and carries the new events without s
 
 - [ ] **Step 8: Run the discovery regression group**
 
-Run: `cd web && node --experimental-strip-types --test tests/lib/search-plan.test.mjs tests/lib/explore-search-ladder.test.mjs tests/lib/scan-merge.test.mjs tests/lib/market-scan.test.mjs tests/lib/explore-state.test.mjs tests/lib/explore-assisted-fallback-ui.test.mjs`
+Run: `cd web && node --experimental-strip-types --test tests/lib/search-plan.test.mjs tests/lib/explore-search-ladder.test.mjs tests/lib/scan-merge.test.mjs tests/lib/market-presets.test.mjs tests/lib/market-scan.test.mjs tests/lib/explore-state.test.mjs tests/lib/explore-assisted-fallback-ui.test.mjs`
 
 Expected: PASS.
 
@@ -252,6 +257,7 @@ Stage only Task 3 files and commit: `feat(search): add directed market sources`.
 - Modify: `web/src/lib/core/scan.ts`
 - Modify: `web/src/lib/core/market-merge.mjs`
 - Modify: `web/tests/lib/market-merge.test.mjs`
+- Modify: `scan.mjs`
 - Modify: `scan-ats-full.mjs`
 - Modify: `tests/scan-json-receipt.test.mjs`
 
@@ -278,7 +284,7 @@ Score only eligible merged offers. Return both components and reasons. Do not us
 
 - [ ] **Step 4: Add failing receipt/merge preservation tests**
 
-Assert that salary plus valid optional metrics survive ATS JSON, market receipt and deduplication; invalid/negative vacancy counts and blank strings are omitted; multiple sources remain attributed; `observedAt` is the scan timestamp and not copied into `postedAt`.
+Assert that salary plus valid optional metrics survive the `scan.mjs` market receipt, ATS live events, ATS final JSON and deduplication; invalid/negative vacancy counts and blank strings are omitted; multiple sources remain attributed; `observedAt` is the scan timestamp and not copied into `postedAt`. Add the same URL first as a sparse live event and then as a richer final object; the richer fields must fill the existing offer rather than being discarded by `seen`.
 
 - [ ] **Step 5: Run boundary tests and verify RED**
 
@@ -315,6 +321,7 @@ Stage only Task 4 files and commit: `feat(search): rank opportunities with evide
 - Modify: `web/src/components/explore/discovering-state.tsx`
 - Modify: `web/src/lib/explore-state.mjs`
 - Modify: `web/tests/lib/explore-state.test.mjs`
+- Modify: `web/tests/lib/explore-freelance-ui.test.mjs`
 - Create: `web/tests/lib/explore-ranking-ui.test.mjs`
 
 **Interfaces:**
@@ -334,6 +341,7 @@ Assert that:
 - broad results show `Pesquisa alargada` plus exact changes;
 - source coverage remains visible after completion with returned counts/states;
 - switching Employment/Freelance restores each mode's own results, expansion and sources.
+- switching Employment/Freelance immediately rewrites the URL to the active snapshot and reload preserves that active type.
 
 - [ ] **Step 2: Run UI tests and verify RED**
 
@@ -391,9 +399,9 @@ Run bounded provider probes for Auchan Workday and current WTTJ markets. Confirm
 
 - [ ] **Step 4: Exercise real search flows against synthetic data**
 
-Use a synthetic `CAREER_OPS_DATA_DIR` and a production server on a free loopback port. Test:
+Use a synthetic `CAREER_OPS_DATA_DIR` and a production server on a free loopback port. First run a deterministic fixture-backed end-to-end case that must return a ranked Lisboa retail/pharmacy result and exercise the precise-to-broad transition. Then test live sources separately:
 
-- Lisboa retail/pharmacy precise then broad, with at least one concrete relevant result from an approved public source;
+- Lisboa retail/pharmacy against approved public sources, recording a concrete result when currently published and otherwise proving an honest healthy zero or incomplete state without weakening the deterministic acceptance;
 - remote websites/apps/chatbots/AI automation;
 - a healthy broad zero that prepares but does not execute assisted search;
 - a partial source run that never broadens automatically;
@@ -406,11 +414,11 @@ Inspect the real result cards at desktop and narrow-window widths: ranking order
 
 - [ ] **Step 6: Build and verify the native candidate without replacing the live app**
 
-Build into `work/recall-ranking-verification/candidate/Career Ops.app` using the existing `macos/build-app.sh`, current checkout, canonical Node and synthetic data. Verify Swift core/UI checks, plist, strict codesign, executable hash, bundle checkout path and `/api/version` SHA.
+Build the wrapper into `work/recall-ranking-verification/candidate/Career Ops.app` using the existing `macos/build-app.sh`, current checkout, canonical Node and synthetic data. Verify Swift core/UI checks, plist, strict codesign, executable hash and bundle checkout path. Record the approved `.next-recall-ranking/BUILD_ID`; the candidate may not claim runtime identity until Step 7 activates that exact build.
 
 - [ ] **Step 7: Install only after candidate gates pass**
 
-Replace the installed app using the existing recoverable installer path, relaunch it, verify the listener belongs to the new bundle and repeat the core Employment/Freelance and broad-search UI flows. Do not terminate unrelated localhost servers.
+After every candidate gate passes, terminate only the current Career Ops process. Move the existing `web/.next` to a recoverable backup under this task's `work/` evidence, atomically activate `.next-recall-ranking` as `web/.next`, and install/relaunch the verified wrapper. Confirm `/api/version` and the served `BUILD_ID` equal the approved artefact before repeating the core Employment/Freelance and broad-search UI flows. Roll back the saved `.next` and previous app if launch validation fails. Do not terminate unrelated localhost servers.
 
 - [ ] **Step 8: Update project context and commit**
 
