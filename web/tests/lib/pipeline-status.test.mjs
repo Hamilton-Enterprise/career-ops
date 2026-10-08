@@ -65,16 +65,16 @@ for (const code of [400, 404, 409, 503, 504]) {
 }
 
 test("non-JSON error and network failure remain failures", async () => {
-  await assert.rejects(saveStatus("11", "Evaluated", "Applied", async () => new Response("unavailable", { status: 503 })), /Could not save/);
+  await assert.rejects(saveStatus("11", "Evaluated", "Applied", async () => new Response("unavailable", { status: 503 })), /Não foi possível guardar o estado/);
   await assert.rejects(saveStatus("11", "Evaluated", "Applied", async () => { throw new Error("offline"); }), /offline/);
 });
 
 for (const body of [null, {}, { ok: false, status: "Applied" }, { ok: true }, { ok: true, status: "Hired" }]) {
   test(`malformed or mismatched 200 (${JSON.stringify(body)}) is not confirmation`, async () => {
-    await assert.rejects(saveStatus("11", "Evaluated", "Applied", async () => Response.json(body)), /Could not confirm/);
+    await assert.rejects(saveStatus("11", "Evaluated", "Applied", async () => Response.json(body)), /Não foi possível confirmar o estado/);
   });
 }
 
 test("HTML 200 is not confirmation", async () => {
-  await assert.rejects(saveStatus("11", "Evaluated", "Applied", async () => new Response("<html>login</html>")), /Could not confirm/);
+  await assert.rejects(saveStatus("11", "Evaluated", "Applied", async () => new Response("<html>login</html>")), /Não foi possível confirmar o estado/);
 });

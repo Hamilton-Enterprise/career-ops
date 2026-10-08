@@ -37,9 +37,9 @@ test("every /api/run kind is an action, with the record the route uses", () => {
 
 test("every spawning route declares the same record the picker shows", () => {
   // Given the files that spawn or grade each non-/api/run action. Most read
-  // ACTION_CAPABILITIES; AI search and CV import still spell a CAPS record inline
-  // (their routes belong to other tasks), so each `capabilities:` expression is
-  // resolved against both tables and must land on the action's record.
+  // ACTION_CAPABILITIES; AI search may still spell a CAPS record inline, while
+  // CV import uses ACTION_CAPABILITIES["cv-ingest"]. Each `capabilities:`
+  // expression is resolved against both tables and must land on the action's record.
   const files = {
     "ai-search": ["src/app/api/explore/ai/route.ts"],
     assistant: ["src/app/api/assistant/route.ts"],

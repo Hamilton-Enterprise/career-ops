@@ -61,13 +61,13 @@ function SourceChip({ source, s }: { source: string; s: SourceState }) {
       )}
       <div className="text-left">
         <span className="text-[13px] font-medium text-foreground">{sourceLabel(source)}</span>
-        <p className="text-[11px] text-muted">{SOURCE_STATE_LABEL[state]}</p>
-        {typeof s.matches === "number" && <p className="text-[11px] text-muted">{s.matches.toLocaleString("pt-PT")} anúncios</p>}
-        {typeof s.done === "number" && <p className="text-[11px] text-muted">{s.done.toLocaleString("pt-PT")}{typeof s.total === "number" ? ` de ${s.total.toLocaleString("pt-PT")}` : ""} empresas</p>}
-        {s.message && <p className="max-w-52 text-[11px] text-muted">{s.message === "missing-search-terms" ? "Indica uma função para consultar esta fonte" : s.message}</p>}
+        <p className="text-xs text-muted">{SOURCE_STATE_LABEL[state]}</p>
+        {typeof s.matches === "number" && <p className="text-xs text-muted">{s.matches.toLocaleString("pt-PT")} anúncios</p>}
+        {typeof s.done === "number" && <p className="text-xs text-muted">{s.done.toLocaleString("pt-PT")}{typeof s.total === "number" ? ` de ${s.total.toLocaleString("pt-PT")}` : ""} empresas</p>}
+        {s.message && <p className="max-w-52 text-xs text-muted whitespace-normal break-words">{s.message === "missing-search-terms" ? "Indica uma função para consultar esta fonte" : s.message}</p>}
       </div>
       <div className="ml-auto flex flex-col items-end gap-1">
-        {!!s.unreachable && <span className="text-[11px] text-muted">{s.unreachable} indisponíveis</span>}
+        {!!s.unreachable && <span className="text-xs text-muted">{s.unreachable} indisponíveis</span>}
         <div className="co-src__track" aria-hidden="true">
           <div className="co-src__bar" style={{ width: `${pct}%` }} />
         </div>

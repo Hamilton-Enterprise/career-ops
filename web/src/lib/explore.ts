@@ -141,7 +141,7 @@ export type ScanEvent =
   | { kind: "progress"; ats: string; scanned: number; total: number; matches: number }
   | { kind: "atsDone"; ats: string; unreachable: number }
   | { kind: "sourceStart"; source: string }
-  | { kind: "sourceDone"; source: string; count: number }
+  | { kind: "sourceDone"; source: string; count: number; state?: "ok" | "partial"; message?: string }
   | { kind: "sourceError"; source: string; message: string }
   | { kind: "offer"; offer: DiscoveredOffer }
   | {
