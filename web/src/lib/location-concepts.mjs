@@ -8,10 +8,16 @@ const COUNTRIES = [
   ["portugal", ["Portugal", "PT"]],
   ["spain", ["Espanha", "España", "Spain", "Espagne", "Spanien", "Spanje", "ES"]],
   ["united-kingdom", ["Reino Unido", "United Kingdom", "Royaume-Uni", "Vereinigtes Königreich", "Verenigd Koninkrijk", "UK", "GB"]],
-  ["switzerland", ["Suíça", "Suiza", "Switzerland", "Suisse", "Schweiz", "Zwitserland", "CH"]],
+  ["switzerland", ["Suíça", "Suiza", "Switzerland", "Suisse", "Schweiz", "Svizzera", "Zwitserland", "CH"]],
   ["luxembourg", ["Luxemburgo", "Luxembourg", "Luxemburg", "LU"]],
-  ["netherlands", ["Países Baixos", "Países Bajos", "Netherlands", "The Netherlands", "Pays-Bas", "Niederlande", "Nederland", "NL"]],
+  ["netherlands", ["Países Baixos", "Países Bajos", "Netherlands", "The Netherlands", "Pays-Bas", "Niederlande", "Nederland", "Holanda", "NL"]],
 ];
+
+/** Country-scope aliases of one market, as written in the catalog.
+ * @param {string} market @returns {string[]} */
+export function countryAliases(market) {
+  return [...(COUNTRIES.find(([id]) => id === market)?.[1] ?? [])];
+}
 const CITIES = [
   ["lisbon", "portugal", ["Lisboa", "Lisbon", "Lisbonne", "Lissabon"], LISBON_METRO],
   ["porto", "portugal", ["Porto", "Oporto"]],

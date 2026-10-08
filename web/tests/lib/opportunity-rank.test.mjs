@@ -35,7 +35,7 @@ test("country and accepted remote score 10 without kilometre inference", () => {
 });
 
 test("source-proven remote and country city evidence use the same eligible market policy", () => {
-  const remote = rankOpportunity({ ...offer, source: "remotive-api", location: "United States" }, buildSearchPlan({ ...filters, allow: [], markets: ["remote"] }, "precise"), now);
+  const remote = rankOpportunity({ ...offer, source: "remotive-api", location: "Worldwide" }, buildSearchPlan({ ...filters, allow: [], markets: ["remote"] }, "precise"), now);
   assert.equal(remote.components.location, 10);
   assert.equal(remote.geography.scope, "remote");
   assert.equal(remote.reasons[1], "Localização: trabalho remoto aceite.");
@@ -162,4 +162,41 @@ test("generic no-role searches never inherit operator role points from receipt m
     assert.equal(result.total, 40);
     assert.equal(result.reasons[0], "Sem correspondência profissional com a pesquisa.");
   }
+});
+
+test("six countries rank same city above metro above country above none with plain reasons", () => {
+  for (const [market, label, city, cityOffer, countryOffer] of [
+    ["portugal", "Portugal", "Lisboa", "Lisbon", "Porto, Portugal"],
+    ["spain", "Espanha", "Madrid", "Madrid", "Barcelona, España"],
+    ["united-kingdom", "Reino Unido", "London", "London, UK", "Manchester"],
+    ["switzerland", "Suíça", "Zürich", "Zurich", "Basel, Schweiz"],
+    ["luxembourg", "Luxemburgo", "Luxembourg City", "Luxembourg City", "Esch-sur-Alzette"],
+    ["netherlands", "Países Baixos", "Amsterdam", "Amsterdam", "Utrecht, Nederland"],
+  ]) {
+    const plan = buildSearchPlan({ ...filters, allow: [city], markets: [market] }, "broad");
+    const offers = [
+      { ...offer, url: "https://acme.example/jobs/none", location: "Paris, France" },
+      { ...offer, url: "https://acme.example/jobs/country", location: countryOffer },
+      ...(market === "portugal" ? [{ ...offer, url: "https://acme.example/jobs/metro", location: "Amadora" }] : []),
+      { ...offer, url: "https://acme.example/jobs/city", location: cityOffer },
+    ];
+    const ranked = rankOpportunities(offers, plan, now);
+    assert.deepEqual(ranked.map(item => item.url.split("/").pop()), market === "portugal" ? ["city", "metro", "country", "none"] : ["city", "country", "none"], market);
+    assert.deepEqual(ranked.map(item => item.match.components.location), market === "portugal" ? [25, 20, 10, 0] : [25, 10, 0], market);
+    const reasons = Object.fromEntries(ranked.map(item => [item.url.split("/").pop(), item.match.reasons[1]]));
+    assert.equal(reasons.city, `Localização: mesma cidade (${city}).`);
+    assert.equal(reasons.country, `Localização: país selecionado (${label}).`, market);
+    assert.equal(reasons.none, "Localização sem correspondência com os critérios.");
+    if (market === "portugal") assert.equal(reasons.metro, "Localização: Área Metropolitana de Lisboa (Amadora).");
+    for (const item of ranked) for (const reason of item.match.reasons) {
+      assert.doesNotMatch(reason, /\bkm\b|quil[oó]metro|%|probabilidade|prov[aá]vel|chance/iu, reason);
+    }
+  }
+});
+
+test("remote ranking reuses the market policy and gives no points to a foreign national restriction", () => {
+  const plan = buildSearchPlan({ ...filters, allow: [], markets: ["remote"] }, "precise");
+  const restricted = rankOpportunity({ ...offer, source: "remotive-api", location: "United States" }, plan, now);
+  assert.equal(restricted.components.location, 0);
+  assert.equal(restricted.reasons[1], "Localização sem correspondência com os critérios.");
 });
