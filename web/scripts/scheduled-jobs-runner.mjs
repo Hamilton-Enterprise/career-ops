@@ -300,6 +300,8 @@ export function executeJob(root, job, options = {}) {
       let accepted = [];
       let rolesFound = 0;
       let completed = true;
+      let partial = false;
+      const incompleteSources = [];
       for (const command of commands) {
         let tempPortals = null;
         try {
@@ -316,7 +318,8 @@ export function executeJob(root, job, options = {}) {
               windowsHide: true,
             },
           );
-          if (result.status !== 0) {
+          if (result.error || result.signal || (result.status !== 0 &&
+              !(marketScoped && command.script === "scan.mjs" && result.status === 2))) {
             lastError = firstErrorLine(result);
             completed = false;
             break;
@@ -327,8 +330,13 @@ export function executeJob(root, job, options = {}) {
               offers = acceptedAtsOffers(result.stdout || "", plan);
             } else {
               const marketRun = parseMarketReceipt(result.stdout || "", result.status, plan);
-              if (!marketRun.valid || marketRun.status === "failed") throw new Error("The market scanner did not complete a valid run.");
+              if (!marketRun.valid || marketRun.status === "failed" || (result.status === 2 && !marketRun.offers.length)) {
+                throw new Error("The market scanner did not complete a valid run.");
+              }
               offers = marketRun.offers;
+              partial = marketRun.status === "partial";
+              incompleteSources.push(...marketRun.sources.filter(source => source.state !== "ok")
+                .map(source => `${source.source} (${source.state}): ${source.message || "Incomplete source."}`));
             }
             accepted = mergeDiscoveredOffers(accepted, offers);
           } else {
@@ -352,7 +360,7 @@ export function executeJob(root, job, options = {}) {
           attempt,
           rolesFound,
           durationMs: Date.now() - startedAt,
-          message: `Scan finished with ${rolesFound} matching role${rolesFound === 1 ? "" : "s"}.`,
+          message: `${partial ? "Partial scan" : "Scan"} finished with ${rolesFound} matching role${rolesFound === 1 ? "" : "s"}.${incompleteSources.length ? ` Incomplete sources: ${incompleteSources.join("; ")}` : ""}`,
         };
       }
     } catch (error) {

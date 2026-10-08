@@ -254,6 +254,92 @@ test("combined saved searches execute both ATS and market sources with a market-
   }
 });
 
+test("saved market searches preserve partial offers and incomplete sources in completion history", async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-partial-market-"));
+  fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [designer]\n", "utf8");
+  try {
+    for (const filters of [
+      { markets: ["portugal"], positive: ["designer"] },
+      { opportunityType: "freelance", markets: [], positive: [] },
+    ]) {
+      const freelance = filters.opportunityType === "freelance";
+      const job = { id: "11111111-1111-4111-8111-111111111111", status: "active", engine: "portals", filters };
+      const store = { jobs: [job], runs: [], queue: [] };
+      const claim = claimManualJob(store, job.id);
+      let attempts = 0;
+      const result = executeJob(temp, job, {
+        spawnFn: () => {
+          attempts += 1;
+          return { status: 2, stdout: JSON.stringify({
+            version: "careerops.scan.receipt@1", dry_run: true, scanned: 1, skipped: 0,
+            offers: [
+              { url: `https://jobs.example/${freelance ? "freelance" : "employment"}`, company: "Partial", title: "Designer", location: "Lisboa, Portugal", source: freelance ? "wttj-api" : "landingjobs-api" },
+              { url: "javascript:alert(1)", company: "Invalid", title: "Designer", location: "Lisboa, Portugal", source: "wttj-api" },
+            ],
+            errors: [{ company: "Welcome to the Jungle", error: "offline" }],
+          }), stderr: "source unavailable" };
+        },
+      });
+      assert.equal(result.state, "success");
+      assert.equal(result.rolesFound, 1);
+      assert.equal(result.attempt, 1);
+      assert.equal(attempts, 1);
+      assert.match(result.message, /partial/i);
+      assert.match(result.message, /Welcome to the Jungle.*error.*offline/i);
+      await recordCompletion("unused", claim, result, store);
+      assert.equal(store.runs[0].message, result.message);
+      assert.equal(store.runs[0].rolesFound, 1);
+      assert.equal(store.queue.length, 0);
+    }
+    const pipeline = fs.readFileSync(path.join(temp, "data", "pipeline.md"), "utf8");
+    const history = fs.readFileSync(path.join(temp, "data", "scan-history.tsv"), "utf8");
+    for (const text of [pipeline, history]) {
+      assert.match(text, /https:\/\/jobs\.example\/employment/);
+      assert.match(text, /https:\/\/jobs\.example\/freelance/);
+      assert.doesNotMatch(text, /javascript:|Invalid/);
+    }
+    assert.match(pipeline, /type: freelance/);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("saved market searches reject invalid or empty partial failures without writing offers", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-partial-failure-"));
+  fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [designer]\n", "utf8");
+  const job = { id: "11111111-1111-4111-8111-111111111111", engine: "portals", filters: { markets: ["portugal"], positive: ["designer"] } };
+  const receipt = {
+    version: "careerops.scan.receipt@1", dry_run: true, scanned: 1, skipped: 0,
+    offers: [{ url: "https://jobs.example/pt", company: "PT", title: "Designer", location: "Lisboa, Portugal", source: "landingjobs-api" }],
+    errors: [{ company: "Welcome to the Jungle", error: "offline" }],
+  };
+  try {
+    for (const failure of [
+      { status: 2, stdout: "not-json" },
+      { status: 2, stdout: JSON.stringify({ ...receipt, version: "unknown" }) },
+      { status: 2, stdout: JSON.stringify({ ...receipt, offers: [] }) },
+      { status: 2, stdout: JSON.stringify({ ...receipt, offers: [{ ...receipt.offers[0], location: "United States" }] }) },
+      { status: 1, stdout: JSON.stringify(receipt) },
+      { status: 2, stdout: JSON.stringify(receipt), error: new Error("ETIMEDOUT") },
+      { status: 2, stdout: JSON.stringify(receipt), signal: "SIGTERM" },
+    ]) {
+      let attempts = 0;
+      let writes = 0;
+      const result = executeJob(temp, job, {
+        spawnFn: () => { attempts += 1; return failure; },
+        writerSpawnFn: () => { writes += 1; return { status: 0, stdout: '{"added":1}' }; },
+      });
+      assert.equal(result.state, "failed");
+      assert.equal(result.rolesFound, 0);
+      assert.equal(attempts, 3);
+      assert.equal(writes, 0);
+    }
+    assert.equal(fs.existsSync(path.join(temp, "data", "pipeline.md")), false);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test("saved Portugal searches persist and count only offers accepted by the canonical market classifier", () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-portugal-"));
   fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [designer]\n", "utf8");
