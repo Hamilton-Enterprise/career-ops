@@ -12,6 +12,7 @@ import { createInterface } from 'readline';
 import * as yaml from 'js-yaml';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { withPipelineLock } from './pipeline-lock.mjs';
+import { asciiFold } from './lib/ascii-fold.mjs';
 
 const root = getCareerOpsRoot();
 const profilePath = join(root, 'data', 'career-profile.yml');
@@ -46,7 +47,19 @@ function entityEvidenceKey(entry) {
   return `${evidenceKey(entry)}\0${facts.join('\0')}`;
 }
 
+// Portuguese headings, matched on asciiFold()ed text so accents do not matter.
+const PT_HEADINGS = [
+  [/^experiencia(?: profissional)?$/, 'experiences'],
+  [/^(?:projetos|projectos)(?: destacados)?$/, 'projects'],
+  [/^(?:formacao(?: academica)?|educacao)$/, 'education'],
+  [/^competencias(?: tecnicas)?$/, 'skills'],
+  [/^certificacoes$/, 'certifications'],
+  [/^(?:resumo|perfil)(?: profissional)?$/, 'summary'],
+];
+
 function classifyHeading(heading) {
+  const folded = asciiFold(heading);
+  for (const [re, key] of PT_HEADINGS) if (re.test(folded)) return key;
   const text = heading.toLowerCase();
   if (/^(experience|work experience|employment|professional experience|pengalaman kerja|pengalaman)$/.test(text)) return 'experiences';
   if (/^(projects?|selected projects|portfolio|proyek|proyek pilihan)$/.test(text)) return 'projects';

@@ -4,9 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback, type CliResolution } from "@/lib/clis";
 import { careerOpsRoot } from "@/lib/career-ops";
-import { CAPS } from "@/lib/worker-capabilities.mjs";
+import { ACTION_CAPABILITIES } from "@/lib/worker-capabilities.mjs";
+import { agentActionsFor } from "@/lib/agent-availability.mjs";
 import { CLAUDE_READ_ONLY_ISOLATION, scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
+import { CV_TEXT_MAX_CHARS, CV_UPLOAD_MAX_BYTES, cvTextLengthError, cvUploadError, cvUploadSizeMessage } from "@/lib/cv/quality";
+import { resolveCodeRoot } from "@/lib/core/code-root.mjs";
 
 // Deny list DERIVED, never hand-written: every one of the six advisor argvs
 // that spelled its own omitted MultiEdit, which --permission-mode acceptEdits
@@ -14,8 +17,9 @@ import { fencingReport } from "@/lib/cli-fencing.mjs";
 const ADVISOR_SCOPE = scopeFrom("Read,Glob,Grep");
 
 // Parse a CV (pasted text or an uploaded PDF) into clean cv.md markdown by running
-// the USER'S OWN CLI headless — the web never ships a heavyweight parser, and the
-// real CV NEVER leaves the machine (local-first, PII-safe). This route is a
+// the USER'S OWN CLI headless — the web never ships a heavyweight parser. The file
+// stays on this machine, but the chosen agent may send its content to its model
+// provider; the UI says so. This route is a
 // PROPOSER: it produces candidate markdown only; the actual write to cv.md happens
 // via the existing POST /api/cv after the user confirms (propose-then-confirm).
 export const runtime = "nodejs";
@@ -27,7 +31,7 @@ export const maxDuration = 300;
 // (exactly how the explore route handles a missing discover.md).
 function readCanonicalMode(): string | null {
   try {
-    return fs.readFileSync(path.join(careerOpsRoot(), "modes", "cv-ingest.md"), "utf8");
+    return fs.readFileSync(path.join(resolveCodeRoot(process.cwd(), process.env), "modes", "cv-ingest.md"), "utf8");
   } catch {
     return null;
   }
@@ -62,7 +66,7 @@ OUTPUT PROTOCOL:
 ${source}`;
 }
 
-const TEXT_SRC = (t: string) => `SOURCE (the user's CV, pasted as text — convert it):\n"""\n${t.slice(0, 24000)}\n"""`;
+const TEXT_SRC = (t: string) => `SOURCE (the user's CV, pasted as text — convert it):\n"""\n${t}\n"""`;
 const FILE_SRC = (p: string) => `SOURCE: the user's CV is the file at this local path — READ it with your file/Read tool, then convert it:\n${p}`;
 
 export async function POST(req: Request) {
@@ -74,36 +78,62 @@ export async function POST(req: Request) {
 
   try {
     if (ctype.includes("application/json")) {
-      const body = (await req.json()) as { text?: string; cliId?: string };
+      // Room for JSON escaping of CV_TEXT_MAX_CHARS; anything past it is over the limit.
+      const raw = await readBodyLimited(req, CV_TEXT_MAX_CHARS * 8 + 4096);
+      if (!raw) return Response.json({ error: `O texto excede o limite de ${CV_TEXT_MAX_CHARS.toLocaleString("pt-PT")} caracteres. Encurta-o ou carrega o ficheiro.` }, { status: 413 });
+      const body = JSON.parse(raw.toString("utf8")) as { text?: string; cliId?: string };
       cliId = body.cliId || "";
       const text = (body.text || "").trim();
       if (!text) return Response.json({ error: "O texto do CV está vazio." }, { status: 400 });
+      const tooLong = cvTextLengthError(text.length);
+      if (tooLong) return Response.json({ error: tooLong }, { status: 413 });
       promptSource = TEXT_SRC(text);
     } else if (ctype.includes("multipart/form-data")) {
-      const form = await req.formData();
+      // 64 KiB of room for the multipart framing around the file.
+      const limit = CV_UPLOAD_MAX_BYTES + 64 * 1024;
+      const declared = Number(req.headers.get("content-length") || 0);
+      if (declared > limit) return Response.json({ error: cvUploadSizeMessage(declared) }, { status: 413 });
+      const raw = await readBodyLimited(req, limit);
+      if (!raw) return Response.json({ error: cvUploadSizeMessage(limit + 1) }, { status: 413 });
+      const form = await new Response(new Uint8Array(raw), { headers: { "content-type": ctype } }).formData();
       cliId = String(form.get("cliId") || "");
       const file = form.get("file");
       if (!(file instanceof File)) return Response.json({ error: "Não foi recebido nenhum ficheiro." }, { status: 400 });
+      const rejected = cvUploadError(file);
+      if (rejected) return Response.json({ error: rejected.message }, { status: rejected.status });
       // Resolve first: if no CLI can run, that is the error to show, not the PDF
       // one below, which would wrongly say Claude is missing (#4607).
       resolved = resolveCliOrFallback(cliId);
       if (!resolved) return Response.json(cliUnavailableError(cliId), { status: 404 });
+      const refused = refusalFor(resolved.spec);
+      if (refused) return Response.json({ error: refused }, { status: 400 });
       // Reading a PDF/DOCX from a path needs the CLI's file tool, which only Claude
       // is granted here. Tell non-Claude users plainly instead of failing opaquely.
       // Judged on the CLI that will actually run: a stale saved id falls back to
       // the sole installed CLI, and that may well be Claude.
-      if (resolved.spec.id !== "claude" && /\.(pdf|docx)$/i.test(file.name)) {
-        return Response.json({ error: "A leitura de um PDF exige Claude Code. Em alternativa, cola o texto do CV." }, { status: 400 });
+      const binary = file.name.match(/\.(pdf|docx)$/i)?.[1].toLowerCase();
+      if (resolved.spec.id !== "claude" && binary) {
+        const kind = binary === "pdf" ? "um PDF" : "um documento Word";
+        return Response.json(
+          { error: `Nesta app, só o Claude Code tem acesso de leitura a ficheiros; o ${resolved.spec.name} não consegue abrir ${kind}. Cola o texto do CV ou escolhe o Claude Code em Configuração.` },
+          { status: 400 },
+        );
       }
       const ext = (file.name.match(/\.[a-z0-9]+$/i)?.[0] || ".pdf").toLowerCase();
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-cv-"));
-      tempFile = path.join(dir, `cv${ext}`); // outside the repo, basename-only
-      fs.writeFileSync(tempFile, Buffer.from(await file.arrayBuffer()), { mode: 0o600 }); // PII → owner-only
+      const bytes = Buffer.from(await file.arrayBuffer());
+      try {
+        tempFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-cv-")), `cv${ext}`); // outside the repo, basename-only
+        fs.writeFileSync(tempFile, bytes, { mode: 0o600 }); // PII → owner-only
+      } catch {
+        if (tempFile) cleanupTemp(tempFile);
+        return Response.json({ error: "Não foi possível guardar o ficheiro temporário; verifica o espaço em disco." }, { status: 507 });
+      }
       promptSource = FILE_SRC(tempFile);
     } else {
       return Response.json({ error: "Este formato de conteúdo não é suportado." }, { status: 400 });
     }
   } catch {
+    if (tempFile) cleanupTemp(tempFile);
     return Response.json({ error: "Pedido inválido." }, { status: 400 });
   }
 
@@ -111,6 +141,11 @@ export async function POST(req: Request) {
   if (!resolved) {
     if (tempFile) cleanupTemp(tempFile);
     return Response.json(cliUnavailableError(cliId), { status: 404 });
+  }
+  const refused = refusalFor(resolved.spec);
+  if (refused) {
+    if (tempFile) cleanupTemp(tempFile);
+    return Response.json({ error: refused }, { status: 400 });
   }
   const { spec, binPath } = resolved;
   // The CLI actually running: fencing and argv below are keyed on it.
@@ -146,11 +181,15 @@ export async function POST(req: Request) {
       binPath,
       args,
       { cwd: careerOpsRoot(), env: process.env },
-      { cliId, capabilities: CAPS.localReadOnly },
+      { cliId, capabilities: ACTION_CAPABILITIES["cv-ingest"] },
     );
-  } catch (e) {
+  } catch {
     if (tempFile) cleanupTemp(tempFile); // never leak the CV temp if spawn throws sync
-    return Response.json({ error: e instanceof Error ? e.message : "Não foi possível iniciar o agente." }, { status: 500 });
+    // The fencer's refusal is English and technical; the user gets the outcome.
+    return Response.json(
+      { error: `Não foi possível iniciar o ${spec.name} com permissões só de leitura, por isso a importação não correu. Escolhe outro agente em Configuração.` },
+      { status: 500 },
+    );
   }
 
   const encoder = new TextEncoder();
@@ -205,8 +244,9 @@ export async function POST(req: Request) {
       // stream is plain text, so the notice is a leading line rather than an event.
       // It lands in the client's `trace`, which renders only its latest line — a
       // pre-existing limit of this view, not something to work around here.
-      const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: CAPS.localReadOnly });
-      if (fencing.notice) safeEnqueue(`⚠️ ${fencing.notice}\n\n`);
+      const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: ACTION_CAPABILITIES["cv-ingest"] });
+      if (fencing.level === "none") safeEnqueue(`⚠️ O ${spec.name} não tem restrição de permissões verificada e corre com o acesso que tem por omissão.\n\n`);
+      else if (fencing.level === "partial") safeEnqueue(`⚠️ O ${spec.name} só está parcialmente restringido.\n\n`);
       if (substitution) safeEnqueue(`⚠️ ${substitution}\n\n`);
 
       child.stdout.on("data", (d: Buffer) => {
@@ -233,8 +273,11 @@ export async function POST(req: Request) {
         }
       });
       child.stderr.on("data", (d: Buffer) => {
-        const s = d.toString();
-        if (/error|not found|denied|fatal/i.test(s)) safeEnqueue(`\n[${spec.name}] ${s.trim()}\n`);
+        // Line by line, never a marker line: a CLI echoing the prompt on stderr
+        // mentions <<cv:error>> and must not be forwarded as one.
+        for (const line of d.toString().split("\n")) {
+          if (!line.includes("<<cv:") && /error|not found|denied|fatal/i.test(line)) safeEnqueue(`\n[${spec.name}] ${line.trim()}\n`);
+        }
       });
       child.on("error", (e) => {
         safeEnqueue(`\n[error launching ${spec.name}: ${e.message}]`);
@@ -260,6 +303,29 @@ export async function POST(req: Request) {
   return new Response(stream, {
     headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" },
   });
+}
+
+/** The picker's PT-PT reason this CLI cannot import a CV (agent-availability.mjs), or null. */
+function refusalFor(spec: Parameters<typeof agentActionsFor>[0]): string | null {
+  return agentActionsFor(spec).find((a) => a.id === "cv-ingest")?.reason ?? null;
+}
+
+/** The body, or null as soon as it passes `limit` bytes (Content-Length may be absent). */
+async function readBodyLimited(req: Request, limit: number): Promise<Buffer | null> {
+  const reader = req.body?.getReader();
+  if (!reader) return Buffer.alloc(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return Buffer.concat(chunks);
+    total += value.byteLength;
+    if (total > limit) {
+      void reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
 }
 
 function cleanupTemp(file: string) {

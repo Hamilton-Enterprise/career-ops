@@ -735,8 +735,9 @@ test("client components reach the notice predicate without pulling node: modules
   // (next dev --webpack 500'd every page through worker-card.tsx).
   const fs = await import("node:fs");
   const path = await import("node:path");
+  const { isUnderNestedCheckout } = await import("../../../lib/mjs-files.mjs");
   const src = new URL("../../src/", import.meta.url).pathname;
-  const files = fs.readdirSync(src, { recursive: true }).filter((f) => /\.(tsx?|mjs)$/.test(f));
+  const files = fs.readdirSync(src, { recursive: true }).filter((f) => /\.(tsx?|mjs)$/.test(f) && !isUnderNestedCheckout(src, f));
   const client = files.filter((f) => /^\s*["']use client["']/.test(fs.readFileSync(path.join(src, f), "utf8")));
   assert.ok(client.length > 0);
   for (const f of client) {

@@ -264,3 +264,30 @@ test('profile save waits for a held profile lock before merging and writing', as
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('import preview classifies Portuguese section headings, accented or not', () => {
+  const root = mkdtempSync(join(tmpdir(), 'career-profile-pt-'));
+  try {
+    mkdirSync(join(root, 'data'), { recursive: true });
+    writeFileSync(join(root, 'cv.md'), [
+      '# CV', '', '## Resumo profissional', '- Analista sintético.', '',
+      '## Experiência profissional', '### Empresa Alfa — Analista', '- Fez relatórios.', '',
+      '## Formação académica', '### Universidade Exemplo', '- Licenciatura.', '',
+      '## Projetos', '### Projeto Beta', '- Painel.', '',
+      '## Certificacoes', '- Certificado Gama', '',
+      '## Competências técnicas', '- SQL, Excel', '',
+    ].join('\n'));
+    const result = runCli(root, ['import', 'cv.md']);
+    assert.equal(result.status, 0, result.stderr);
+    for (const line of [
+      '- summary: Analista sintético.',
+      '- experiences heading: Empresa Alfa — Analista',
+      '- education heading: Universidade Exemplo',
+      '- projects heading: Projeto Beta',
+      '- certifications: Certificado Gama',
+      '- skills: SQL',
+    ]) assert.ok(result.stdout.includes(line), `missing "${line}" in:\n${result.stdout}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
