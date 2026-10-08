@@ -109,8 +109,9 @@ test("malformed receipts and fatal exits cannot masquerade as valid empty search
 });
 
 test("remote provider receipt ids prove remote work without inventing worldwide eligibility", () => {
-  const run = parseMarketReceipt(receipt([{ ...offer, source: "remoteok-api", location: "United States" }]), 0, buildMarketPlan(["remote"], []));
+  const run = parseMarketReceipt(receipt([{ ...offer, source: "remoteok-api", location: "Worldwide" }]), 0, buildMarketPlan(["remote"], []));
   assert.equal(run.offers.length, 1);
+  assert.equal(parseMarketReceipt(receipt([{ ...offer, source: "remoteok-api", location: "United States" }]), 0, buildMarketPlan(["remote"], [])).offers.length, 0);
   assert.deepEqual(run.offers[0].sources, ["remoteok-api"]);
   assert.equal(run.offers[0].verification, "unconfirmed");
 });
