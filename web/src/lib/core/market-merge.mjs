@@ -2,7 +2,7 @@ import { normalizeUrl } from "./url-key.mjs";
 import { classifyMarketLocation } from "../market-presets.mjs";
 
 /** @typedef {import('../explore').DiscoveredOffer} DiscoveredOffer */
-/** @typedef {{source:string, state:'ok'|'partial'|'error'|'skipped', message?:string}} SourceState */
+/** @typedef {{source:string, state:'ok'|'partial'|'error'|'skipped', message?:string, limit?:'query-limit'}} SourceState */
 /** @typedef {{offers:DiscoveredOffer[], sources:SourceState[], missingLocation:number, valid:boolean, status:'ok'|'partial'|'failed', scanned:number}} MarketRun */
 
 /** @param {DiscoveredOffer} offer */
@@ -130,10 +130,12 @@ export function parseMarketReceipt(output, exitCode, plan, timedOut = false) {
     if (skipped.reason !== "query-limit") continue;
     const board = plan.jobBoards.find(({ provider }) => provider === skipped.source);
     const source = sources.find(s => s.source === board?.name && s.state === "ok");
-    if (!board?.wttj || !source) continue;
+    // An unconfirmed zero is a different shortfall; runMarketDiscovery marks it.
+    if (!board?.wttj || !source || !Array.isArray(receipt.unverified_zero) || receipt.unverified_zero.includes(source.source)) continue;
     const consulted = board.wttj.queries.length;
     source.state = "partial";
-    source.message = `consultados ${consulted} de ${consulted + skipped.omitted.length} termos; os restantes só filtram títulos de outras fontes.`;
+    source.limit = "query-limit";
+    source.message = `consultados ${consulted} de ${consulted + skipped.omitted.length} termos; os restantes continuam a filtrar os títulos recebidos.`;
   }
   run.status = !run.valid ? "failed" : timedOut || exitCode !== 0 || receipt.errors.length || sources.some(s => s.state !== "ok") ? "partial" : "ok";
   return run;

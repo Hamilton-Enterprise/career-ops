@@ -506,9 +506,11 @@ async function runDiscoveryPass(searchPlan: SearchPlan, onEvent: (e: ScanEvent) 
 type Summary = Extract<ScanEvent, { kind: "summary" }>;
 
 function healthyZero(summary: Summary | undefined, filters: ExploreFilters): boolean {
-  if (!summary || summary.status !== "ok" || summary.matches !== 0 ||
-      !summary.sources?.length || summary.sources.some(source => source.state !== "ok") ||
-      summary.incomplete?.length || summary.unreachable !== 0 || (summary.missingLocation ?? 0) > 0 ||
+  // A query budget is a known limit, not an unconfirmed zero, so it may still broaden.
+  const limited = new Set(summary?.sources?.filter(source => source.state === "partial" && source.limit === "query-limit").map(source => source.source));
+  if (!summary || !(summary.status === "ok" || (summary.status === "partial" && limited.size > 0)) || summary.matches !== 0 ||
+      !summary.sources?.length || summary.sources.some(source => source.state !== "ok" && !limited.has(source.source)) ||
+      summary.incomplete?.some(source => !limited.has(source)) || summary.unreachable !== 0 || (summary.missingLocation ?? 0) > 0 ||
       !Number.isFinite(summary.companiesScanned) || summary.companiesScanned <= 0 ||
       summary.capHit === true || (summary.postingsDroppedNoDate ?? 0) > 0 ||
       Object.values(summary.datasetStatus ?? {}).some(state => state !== "ok")) return false;

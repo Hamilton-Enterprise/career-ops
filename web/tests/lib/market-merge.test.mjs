@@ -137,7 +137,10 @@ test("a WTTJ query limit is partial coverage on the WTTJ source, not a separate 
   assert.equal(run.status, "partial");
   assert.equal(run.valid, true);
   const sources = Object.fromEntries(run.sources.map(({ source, ...state }) => [source, state]));
-  assert.deepEqual(discoverySourceReasons(sources), ["Welcome to the Jungle: consultados 12 de 15 termos; os restantes só filtram títulos de outras fontes."]);
+  assert.deepEqual(discoverySourceReasons(sources), ["Welcome to the Jungle: consultados 12 de 15 termos; os restantes continuam a filtrar os títulos recebidos."]);
+  assert.equal(run.sources[1].limit, "query-limit");
+  const unverified = JSON.stringify({ ...JSON.parse(receipt([offer])), unverified_zero: ["Welcome to the Jungle"] });
+  assert.deepEqual(parseMarketReceipt(unverified, 0, plan).sources[1], { source: "Welcome to the Jungle", state: "ok" });
   const failed = parseMarketReceipt(receipt([], [{ company: "Welcome to the Jungle", error: "timeout" }]), 2, plan);
   assert.deepEqual(failed.sources.find(s => s.source === "Welcome to the Jungle"), { source: "Welcome to the Jungle", state: "error", message: "timeout" });
 });
