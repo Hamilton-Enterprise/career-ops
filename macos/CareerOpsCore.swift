@@ -104,7 +104,7 @@ func serverEnvironment(_ config: LaunchConfiguration, inherited: [String: String
 func availableDownloadDestination(_ proposed: URL?) -> URL? {
     guard let proposed, proposed.isFileURL,
           !FileManager.default.fileExists(atPath: proposed.path),
-          (try? FileManager.default.destinationOfSymbolicLink(atPath: proposed.path)) == nil else {         return nil }
+          (try? FileManager.default.destinationOfSymbolicLink(atPath: proposed.path)) == nil else { return nil }
     return proposed
 }
 
