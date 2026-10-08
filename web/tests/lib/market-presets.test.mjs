@@ -15,6 +15,33 @@ test("resolved city aliases and explicit metro terms reject even unknown foreign
   }
 });
 
+test("alternative markets cannot override a resolved city or metro country conflict", () => {
+  for (const markets of [["europe"], ["portugal", "spain"], ["united-kingdom", "remote"]]) {
+    for (const phase of ["precise", "broad"]) {
+      const plan = buildMarketPlan(markets, [], "employment", { locationResolution: resolveLocationInputs("Lisboa", phase) });
+      for (const location of ["Lisbonne, France", "Lisbon, UK", "Lisboa, Spain", "Lisbon, UK; Madrid, Spain"]) {
+        assert.deepEqual(classifyMarketLocation({ location, source: "remotive-api" }, plan), { accepted: false, reason: "outside-market" }, `${markets} ${phase} ${location}`);
+      }
+      if (phase === "broad") {
+        for (const location of ["Amadora, Spain", "Sintra, France", "Oeiras, UK", "Cascais, ES"]) {
+          assert.equal(classifyMarketLocation({ location }, plan).accepted, false, `${markets} ${location}`);
+        }
+      }
+    }
+  }
+  for (const markets of [["europe"], ["portugal", "spain"]]) {
+    const plan = buildMarketPlan(markets, [], "employment", { locationResolution: resolveLocationInputs("Lisboa", "broad") });
+    for (const location of ["Lisbonne, Portugal", "Lisbon, PT", "Amadora, Portugal", "Sintra, PT", "Lisbon Hybrid, Portugal", "Lisboa, Portugal; Madrid, Spain"]) {
+      assert.equal(classifyMarketLocation({ location }, plan).accepted, true, location);
+    }
+    // A city-resolution guard must not change literal market-only selection.
+    const literal = buildMarketPlan(markets, []);
+    assert.equal(classifyMarketLocation({ location: "Amadora, Spain" }, literal).accepted, true);
+    assert.equal(classifyMarketLocation({ location: "Madrid, Spain" }, plan).accepted, true);
+  }
+  assert.equal(classifyMarketLocation({ location: "Lisbonne, France" }, buildMarketPlan(["europe"], [])).accepted, true);
+});
+
 test("market codec defaults empty and drops unknown and duplicate selections", () => {
   assert.deepEqual(cleanMarkets(undefined), []);
   assert.deepEqual(decodeMarkets(null), []);

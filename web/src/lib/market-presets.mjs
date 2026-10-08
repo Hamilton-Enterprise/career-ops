@@ -204,6 +204,16 @@ export function classifyMarketLocation(offer, plan) {
   }
   // A bare normalized city is usable; a city in an unrelated country is not.
   const resolution = plan.locationPolicy.locationResolution;
+  // Reject conflicts before any selected country, Europe or remote can admit
+  // a resolved city through its foreign qualifier.
+  for (const group of locationGroups(location)) {
+    const parts = locationParts(group);
+    if (resolution?.locations.some(item => item.scope === "city" &&
+        parts.some(part => [...item.aliases, ...item.metroAliases].some(alias => normalized(alias) === part)) &&
+        !countryLocation(group, item.market, resolution))) {
+      return { accepted: false, reason: "outside-market" };
+    }
+  }
   const portugal = countryLocation(location, "portugal", resolution);
   const spain = countryLocation(location, "spain", resolution);
   const unitedKingdom = countryLocation(location, "united-kingdom", resolution);
