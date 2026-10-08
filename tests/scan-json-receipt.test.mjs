@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 import { atomicWriteFile, isIgnorableDirectoryFsyncError, normalizeReceiptOffer } from '../scan.mjs';
-import { parseMarketReceipt } from '../web/src/lib/core/market-merge.mjs';
 import { formatLiveOfferLine } from '../scan-ats-full.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -255,7 +254,9 @@ test('--json returns exit 2 and structured errors for a partial failure', () => 
   }
 });
 
-test('incomplete Workday pagination keeps recovered offers and marks the market receipt partial', () => {
+test('incomplete Workday pagination keeps recovered offers and marks the market receipt partial', async t => {
+  if (!existsSync(join(ROOT, 'web', 'src'))) return t.skip('web/ not present in this checkout — skipping the market receipt integration');
+  const { parseMarketReceipt } = await import('../web/src/lib/core/market-merge.mjs');
   const board = { name: 'Auchan Portugal', provider: 'workday', enabled: true, careers_url: 'https://auchanportugal.wd3.myworkdayjobs.com/auchan-retail' };
   const root = workspace(`job_boards:\n  - ${JSON.stringify(board)}\n`);
   const plan = { opportunityType: 'employment', markets: ['portugal'], jobBoards: [board], skippedSources: [], locationPolicy: { markets: ['portugal'], strict: true } };
