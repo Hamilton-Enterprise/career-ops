@@ -9,6 +9,13 @@ import "../helpers/web-ts-alias-loader.mjs";
 const { POST } = await import("../../src/app/api/run/route.ts");
 const { readLanguageConfig } = await import("../../src/lib/career-ops.ts");
 
+function writeMockCli(dir, name, source) {
+  const entry = path.join(dir, `${name}.cjs`);
+  fs.writeFileSync(entry, source);
+  fs.writeFileSync(path.join(dir, name), `#!${process.execPath}\nrequire(${JSON.stringify(entry)});\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, `${name}.ps1`), `& "node$exe" "$basedir/${name}.cjs" $args\n`);
+}
+
 function fixture(t, { market = false, pdf = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-run-split-")));
   const code = path.join(root, "engine", "checkout");
@@ -41,9 +48,9 @@ function fixture(t, { market = false, pdf = false } = {}) {
   // permissions, real processes, stream parsing and user-file paths stay real.
   const record = `const fs = require("node:fs"); const path = require("node:path");`;
   const text = pdf ? '\n<<cv-html format="a4">>\n<!DOCTYPE html><html><body>Synthetic CV</body></html>\n<</cv-html>>\n' : "Synthetic completion\n";
-  fs.writeFileSync(path.join(bins, "claude"), `#!${process.execPath}\n${record}\nconst args = process.argv.slice(2);\nfs.writeFileSync(${JSON.stringify(recordFile)}, JSON.stringify({cwd: process.cwd(), args, dataRoot: process.env.CAREER_OPS_ROOT}));\nprocess.stdout.write(JSON.stringify({type:"stream_event",event:{type:"content_block_delta",delta:{text:${JSON.stringify(text)}}}}) + "\\n");\n`, { mode: 0o755 });
-  fs.writeFileSync(path.join(bins, "codex"), `#!${process.execPath}\n${record}\nconst args = process.argv.slice(2);\nfs.writeFileSync(${JSON.stringify(recordFile)}, JSON.stringify({cwd: process.cwd(), args, dataRoot: process.env.CAREER_OPS_ROOT}));\nconst roots = args.find(arg => arg.startsWith("sandbox_workspace_write.writable_roots="));\nif (roots && JSON.parse(roots.slice(roots.indexOf("=") + 1)).includes(process.env.CAREER_OPS_ROOT)) fs.writeFileSync(path.join(process.env.CAREER_OPS_ROOT, "reports", "002-synthetic-2026-10-08.md"), "Synthetic persisted report");\nprocess.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"Synthetic completion"}}) + "\\n");\n`, { mode: 0o755 });
-  fs.writeFileSync(path.join(bins, "agent"), `#!${process.execPath}\n${record}\nfs.writeFileSync(${JSON.stringify(recordFile)}, JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2)}));\nprocess.stdout.write("Synthetic read-only completion");\n`, { mode: 0o755 });
+  writeMockCli(bins, "claude", `${record}\nconst args = process.argv.slice(2);\nfs.writeFileSync(${JSON.stringify(recordFile)}, JSON.stringify({cwd: process.cwd(), args, dataRoot: process.env.CAREER_OPS_ROOT}));\nprocess.stdout.write(JSON.stringify({type:"stream_event",event:{type:"content_block_delta",delta:{text:${JSON.stringify(text)}}}}) + "\\n");\n`);
+  writeMockCli(bins, "codex", `${record}\nconst args = process.argv.slice(2);\nfs.writeFileSync(${JSON.stringify(recordFile)}, JSON.stringify({cwd: process.cwd(), args, dataRoot: process.env.CAREER_OPS_ROOT}));\nconst roots = args.find(arg => arg.startsWith("sandbox_workspace_write.writable_roots="));\nif (roots && JSON.parse(roots.slice(roots.indexOf("=") + 1)).includes(process.env.CAREER_OPS_ROOT)) fs.writeFileSync(path.join(process.env.CAREER_OPS_ROOT, "reports", "002-synthetic-2026-10-08.md"), "Synthetic persisted report");\nprocess.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"Synthetic completion"}}) + "\\n");\n`);
+  writeMockCli(bins, "agent", `${record}\nfs.writeFileSync(${JSON.stringify(recordFile)}, JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2)}));\nprocess.stdout.write("Synthetic read-only completion");\n`);
   fs.writeFileSync(path.join(code, "generate-pdf.mjs"), `import fs from "node:fs";\nimport path from "node:path";\nconst target = process.argv[3];\nif (!fs.readFileSync(path.join(process.env.CAREER_OPS_ROOT, "cv.md"), "utf8").includes("Synthetic")) process.exit(1);\nfs.mkdirSync(path.dirname(target), {recursive:true});\nfs.writeFileSync(target, "SYNTHETIC PDF");\n`);
   fs.writeFileSync(path.join(code, "mark-pdf-ready.mjs"), `import fs from "node:fs";\nimport path from "node:path";\nfs.writeFileSync(path.join(process.env.CAREER_OPS_ROOT, "marked.json"), JSON.stringify({cwd:process.cwd(), report:process.argv[2]}));\nprocess.stdout.write('{"ok":true}');\n`);
   const values = { PATH: bins, CAREER_OPS_ROOT: data, CAREER_OPS_DATA_DIR: data, CAREER_OPS_CODE_ROOT: code, CAREER_OPS_PROFILE: undefined };
