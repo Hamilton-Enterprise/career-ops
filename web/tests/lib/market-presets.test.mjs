@@ -352,7 +352,7 @@ test("target cities and countries stay accepted with their own qualifiers", () =
 test("homonym cities with a foreign state, province or country qualifier are rejected", () => {
   for (const [market, locations] of [
     ["portugal", ["Lisboa, México", "Porto, Brasil", "Lisbon, Maine", "Lisbon, OH", "Lisboa, Estados Unidos", "Braga, Brazil"]],
-    ["spain", ["Valencia, Venezuela", "Barcelona, Venezuela", "Madrid, Iowa", "Valencia, CA", "Sevilla, Colombia", "Madrid, Nuevo México"]],
+    ["spain", ["Valencia, Venezuela", "Barcelona, Venezuela", "Madrid, Iowa", "Valencia, FL", "Sevilla, Colombia", "Madrid, Nuevo México"]],
     ["united-kingdom", ["London, Ontario", "Birmingham, Alabama", "Birmingham, AL", "Manchester, New Hampshire", "London, KY", "London, ON", "London, États-Unis"]],
     ["switzerland", ["Geneva, Illinois", "Geneva, NY", "Lucerne, California", "Zürich, Kanada"]],
     ["luxembourg", ["Luxemburg, Wisconsin", "Luxembourg, WI", "Luxemburg, Iowa"]],
@@ -408,4 +408,17 @@ test("remote selection rejects a published national restriction outside the sele
   }
   assert.equal(classifyMarketLocation({ location: "Remote (UK)" }, buildMarketPlan(["remote", "united-kingdom"], ["x"])).accepted, true);
   assert.equal(classifyMarketLocation({ location: "Remote, Germany" }, buildMarketPlan(["remote", "europe"], ["x"])).accepted, true);
+});
+
+test("a market's own ISO 3166-2 subdivision codes are not foreign qualifiers", () => {
+  for (const [market, accepted, rejected] of [
+    ["netherlands", ["Amsterdam, NH", "Utrecht, UT", "Groningen, GR", "Maastricht, LI", "Eindhoven, NB", "Utrecht, NL"], ["Amsterdam, NY", "Amsterdam, MA", "Rotterdam, TX"]],
+    ["spain", ["Málaga, MA", "Valencia, VA", "Sevilla, SE", "Valencia, V", "Madrid, MD"], ["Valencia, FL", "Madrid, IA", "Barcelona, NH"]],
+    ["switzerland", ["Bern, BE", "Neuchâtel, NE", "Appenzell, AR", "Lucerne, LU", "Geneva, GE", "Zurich, ZH"], ["Geneva, IL", "Bern, NC", "Zurich, AT", "Bern, NH"]],
+    ["united-kingdom", ["London, UK", "London, GB"], ["Birmingham, AL", "London, ON", "Manchester, NH", "London, BE"]],
+  ]) {
+    const plan = buildMarketPlan([market], ["x"]);
+    for (const location of accepted) assert.deepEqual(classifyMarketLocation({ location }, plan), { accepted: true }, `${market}: ${location}`);
+    for (const location of rejected) assert.deepEqual(classifyMarketLocation({ location }, plan), { accepted: false, reason: "outside-market" }, `${market}: ${location}`);
+  }
 });

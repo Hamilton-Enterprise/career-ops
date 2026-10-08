@@ -125,7 +125,7 @@ const MARKET_LOCATIONS = Object.fromEntries(Object.entries({
   portugal: { names: PORTUGAL, cities: PORTUGUESE_CITIES },
   spain: { names: SPAIN, cities: SPANISH_CITIES },
   "united-kingdom": { names: ["united kingdom", "great britain", "uk", "gb", "england", "scotland", "wales", "northern ireland"], cities: ["london", "edinburgh", "glasgow", "manchester", "birmingham", "bristol", "leeds", "liverpool", "cardiff", "belfast"] },
-  switzerland: { names: ["switzerland", "ch"], cities: ["zurich", "geneva", "basel", "bern", "lausanne", "lucerne", "lugano"] },
+  switzerland: { names: ["switzerland", "ch"], cities: ["zurich", "geneva", "basel", "bern", "lausanne", "lucerne", "lugano", "neuchatel", "appenzell"] },
   luxembourg: { names: ["luxembourg", "lu"], cities: ["luxembourg city", "esch-sur-alzette", "differdange"] },
   netherlands: { names: ["netherlands", "the netherlands", "holland", "nl"], cities: ["amsterdam", "rotterdam", "the hague", "utrecht", "eindhoven", "groningen", "maastricht"] },
 }).map(([market, { names, cities }]) => [market, { names: [...new Set([...names, ...countryAliases(market).map(normalized)])], cities }]));
@@ -162,8 +162,28 @@ const OTHER_COUNTRIES = [...new Set([
 ])];
 const ISO_COUNTRY_CODES = new Set(EUROPE_CODES.map(code => code.toLowerCase()));
 
-function regionCodeQualifier(group) {
-  return group.split(",").slice(1).some(part => REGION_CODES.has(part.trim()));
+// ISO 3166-2 subdivision codes (ES provinces and communities, NL provinces, CH cantons):
+// inside its own market "Amsterdam, NH" is Noord-Holland, not New Hampshire.
+const SUBDIVISION_CODES = {
+  spain: new Set([
+    "A", "AB", "AL", "AV", "B", "BA", "BI", "BU", "C", "CA", "CC", "CE", "CO", "CR", "CS", "CU", "GC", "GI", "GR", "GU",
+    "H", "HU", "J", "L", "LE", "LO", "LU", "M", "MA", "ML", "MU", "NA", "O", "OR", "P", "PM", "PO", "S", "SA", "SE", "SG",
+    "SO", "SS", "T", "TE", "TF", "TO", "V", "VA", "VI", "Z", "ZA",
+    "AN", "AR", "AS", "CB", "CL", "CM", "CN", "CT", "EX", "GA", "IB", "MC", "MD", "NC", "PV", "RI", "VC",
+  ]),
+  netherlands: new Set(["DR", "FL", "FR", "GE", "GR", "LI", "NB", "NH", "OV", "UT", "ZE", "ZH"]),
+  switzerland: new Set([
+    "AG", "AI", "AR", "BE", "BL", "BS", "FR", "GE", "GL", "GR", "JU", "LU", "NE", "NW", "OW", "SG", "SH", "SO", "SZ", "TG",
+    "TI", "UR", "VD", "VS", "ZG", "ZH",
+  ]),
+};
+
+function qualifierCodes(group) {
+  return group.split(",").slice(1).map(part => part.trim());
+}
+
+function regionCodeQualifier(group, ownCodes = new Set()) {
+  return qualifierCodes(group).some(code => REGION_CODES.has(code) && !ownCodes.has(code));
 }
 
 function namesCountry(rawLocation) {
@@ -194,6 +214,8 @@ function countryLocation(location, market, resolution) {
   return locationGroups(location).some(group => {
     const normalizedGroup = normalized(group);
     const parts = locationParts(group);
+    const ownCodes = SUBDIVISION_CODES[market] ?? new Set();
+    const ownParts = new Set(qualifierCodes(group).filter(code => ownCodes.has(code)).map(code => code.toLowerCase()));
     // ponytail: unknown qualifiers fail closed; add observed neighborhood/postcode forms to the catalog when needed.
     if (parts.some(part => resolvedCities.includes(part)) &&
         parts.some(part => !cities.includes(part) && !names.includes(part))) return false;
@@ -205,7 +227,7 @@ function countryLocation(location, market, resolution) {
       .some(name => {
         if (matchedTargets.some(targetName => targetName.includes(name))) return false;
         return parts.includes(name) || containsWord(normalizedGroup, [name]);
-      }) || parts.some(part => ISO_COUNTRY_CODES.has(part) && !targetCodes.has(part)) || regionCodeQualifier(group);
+      }) || parts.some(part => ISO_COUNTRY_CODES.has(part) && !targetCodes.has(part) && !ownParts.has(part)) || regionCodeQualifier(group, ownCodes);
     if (foreignCountry) return false;
     return targetCountry || parts.some(part => cities.includes(part));
   });
