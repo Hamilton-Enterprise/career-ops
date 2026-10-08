@@ -47,6 +47,25 @@ test('direct results default to proximity and AI keeps recent/company controls',
   assert.match(ai, /Found for your request/);
 });
 
+test('active proximity control has readable foreground and a non-color selection cue', () => {
+  context = base();
+  const html = render(ResultsList, { offers: [{ ...offer, inPipeline: false }] });
+  const active = html.match(/<button[^>]*aria-pressed="true"[^>]*>Proximidade<\/button>/)?.[0];
+  assert.ok(active);
+  assert.match(active, /text-foreground/);
+  assert.match(active, /\bunderline\b/);
+});
+
+test('proximity band is a named semantic note that exposes the numeric score', () => {
+  context = base();
+  const html = render(DiscoveryCard, { offer: { ...offer, match: { total: 95, reasons: [] } }, inPipeline: false });
+  const band = html.match(/<span[^>]*aria-label="Muito próxima\. Proximidade aos critérios: 95\/100"[^>]*>Muito próxima<\/span>/)?.[0];
+  assert.ok(band);
+  assert.match(band, /role="note"/);
+  assert.match(band, /text-foreground/);
+  assert.doesNotMatch(band, /A a F|perfil|>95/);
+});
+
 test('proximity bands expose totals accessibly, reasons and only supplied facts', () => {
   context = base();
   for (const [total, label] of [[90, 'Muito próxima'], [70, 'Próxima'], [40, 'Possível']]) {

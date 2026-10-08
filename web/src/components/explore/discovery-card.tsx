@@ -101,7 +101,7 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
 
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
         <span className="text-muted">{fresh}</span>
-        {match && <span className="rounded border border-brand/25 bg-brand-soft px-1.5 py-0.5 font-medium text-brand" title={`Proximidade aos critérios: ${match.total}/100`} aria-label={`${band}. Proximidade aos critérios: ${match.total}/100`}>{band}</span>}
+        {match && <span role="note" className="rounded border border-brand/25 bg-brand-soft px-1.5 py-0.5 font-medium text-foreground" title={`Proximidade aos critérios: ${match.total}/100`} aria-label={`${band}. Proximidade aos critérios: ${match.total}/100`}>{band}</span>}
         {freelance && (
           <span className="rounded border border-brand/25 bg-brand-soft px-1.5 py-0.5 font-medium text-brand">Freelance</span>
         )}

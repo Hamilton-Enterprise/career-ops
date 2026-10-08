@@ -67,7 +67,7 @@ export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
                 type="button"
                 onClick={() => setSort(s)}
                 aria-pressed={sort === s}
-                className={cn("min-h-[44px] min-w-[44px] rounded-md px-2.5 py-1 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand", sort === s ? "bg-brand-soft text-brand" : "text-muted hover:text-foreground")}
+                className={cn("min-h-[44px] min-w-[44px] rounded-md px-2.5 py-1 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand", sort === s ? "bg-brand-soft text-foreground underline underline-offset-4" : "text-muted hover:text-foreground")}
               >
                 {s === "match" ? "Proximidade" : s === "fresh" ? "Recentes" : "Empresa"}
               </button>
