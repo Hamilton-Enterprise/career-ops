@@ -30,9 +30,20 @@ func dataRootConflictsWithRuntime(_ dataRoot: URL, _ runtime: URL) -> Bool {
     return data == code || data.hasPrefix(code + "/") || code.hasPrefix(data + "/")
 }
 
+/// User-owned path overrides. `CareerOpsRuntimePath` is NOT here — it always
+/// comes from the install's Info.plist so an upgrade cannot keep a stale
+/// artifact SHA from a previous build.
 let installPathPreferenceKeys = [
-    "CareerOpsCheckoutPath", "CareerOpsNodePath", "CareerOpsDataRootPath", "CareerOpsRuntimePath",
+    "CareerOpsCheckoutPath", "CareerOpsNodePath", "CareerOpsDataRootPath",
 ]
+
+/// Overwrite the suite's runtime path with this install's Info.plist value.
+func syncBundleRuntimePath(_ preferences: UserDefaults, infoRuntimePath: String?) {
+    guard let infoRuntimePath else { return }
+    let trimmed = infoRuntimePath.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    preferences.set(trimmed, forKey: "CareerOpsRuntimePath")
+}
 
 /// One UserDefaults suite per .app path so a temp candidate cannot inherit the
 /// live install's CAREER_OPS_ROOT (same bundle id, shared `UserDefaults.standard`).

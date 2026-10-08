@@ -75,10 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let bundled = Bundle.main.url(forResource: "Defaults", withExtension: "plist")
             .flatMap { NSDictionary(contentsOf: $0) as? [String: Any] }
         preferences = loadInstallPreferences(bundleURL: selfBundle, bundledDefaults: bundled)
-        if let runtimePath = Bundle.main.object(forInfoDictionaryKey: "CareerOpsRuntimePath") as? String,
-           preferences.object(forKey: "CareerOpsRuntimePath") == nil {
-            preferences.set(runtimePath, forKey: "CareerOpsRuntimePath")
-        }
+        // Always the Info.plist path for THIS build — never keep a previous SHA.
+        syncBundleRuntimePath(preferences, infoRuntimePath: Bundle.main.object(forInfoDictionaryKey: "CareerOpsRuntimePath") as? String)
         let menu = NSMenu()
         let appItem = NSMenuItem()
         menu.addItem(appItem)
