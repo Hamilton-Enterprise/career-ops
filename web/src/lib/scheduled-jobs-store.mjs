@@ -113,11 +113,18 @@ export function readLockStatus(resourcePath, options = {}) {
     const active = processIsAlive(owner.pid);
     return { exists: true, active, stale: !active, owner };
   }
+  // mkdir won the race but owner.json is not written yet — treat as held for
+  // OWNERLESS_GRACE_MS so a peer does not rename the dir out from under writeFile.
   try {
-    const stale = Date.now() - fs.statSync(lockDir).mtimeMs > Math.max(staleMs, OWNERLESS_GRACE_MS);
+    const age = Date.now() - fs.statSync(lockDir).mtimeMs;
+    if (age <= OWNERLESS_GRACE_MS) {
+      return { exists: true, active: true, stale: false, owner: null };
+    }
+    const stale = age > Math.max(staleMs, OWNERLESS_GRACE_MS);
     return { exists: true, active: false, stale, owner: null };
   } catch {
-    return { exists: true, active: false, stale: true, owner: null };
+    // Dir vanished between existsSync and stat — not ours to take over.
+    return { exists: false, active: false, stale: false, owner: null };
   }
 }
 
@@ -160,6 +167,10 @@ async function withRecoveryGuard(resourcePath, options, fn) {
       fs.writeFileSync(path.join(guardDir, "owner.json"), JSON.stringify({ pid: process.pid, token, startedAt: new Date().toISOString() }), "utf8");
       break;
     } catch (error) {
+      // ENOENT after mkdir: a peer took over before owner.json landed — retry.
+      if (error?.code === "ENOENT" && created) {
+        continue;
+      }
       if (error?.code !== "EEXIST") {
         if (created) {
           try { fs.rmSync(guardDir, { recursive: true, force: true }); } catch { /* best effort */ }
@@ -206,6 +217,7 @@ async function acquireResourceLock(resourcePath, options = {}) {
         );
         return true;
       } catch (error) {
+        if (error?.code === "ENOENT" && created) return false;
         if (error?.code !== "EEXIST") {
           if (created) {
             try { fs.rmSync(lockDir, { recursive: true, force: true }); } catch { /* best effort */ }
