@@ -114,12 +114,14 @@ const behavior = ${JSON.stringify(behavior)};
 if (behavior === "ignore-term") process.on("SIGTERM", () => {});
 // A real CLI may start helpers (Codex's npm entry runs a native binary); this
 // one inherits stdio and cwd, so it holds both until it is terminated too.
-const descendantPid = behavior === "hang" ? require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "inherit" }).pid : undefined;
+// "escape" detaches it into its own session on POSIX, out of reach of the
+// process-group kill, while it keeps the inherited stdout open.
+const descendantPid = behavior === "hang" || behavior === "escape" ? require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "inherit", detached: behavior === "escape" }).pid : undefined;
 fs.appendFileSync(${JSON.stringify(recordFile)}, JSON.stringify({ id: ${JSON.stringify(id)}, args, cwd: process.cwd(), pid: process.pid, descendantPid, resultDir, home: process.env.HOME }) + "\\n");
 process.stderr.write("fatal SECRET_FROM_STDERR query=PRIVATE_PROMPT\\n");
 if (behavior === "empty") {
   process.exitCode = 0;
-} else if (behavior === "hang" || behavior === "ignore-term") {
+} else if (behavior === "hang" || behavior === "escape" || behavior === "ignore-term") {
   setInterval(() => {}, 1000);
 } else if (behavior === "failure" || behavior === "whitespace-failure") {
   if (behavior === "whitespace-failure") process.stdout.write("   ");
@@ -259,6 +261,21 @@ for (const { id, name } of agents) {
     await waitFor(() => isDead(descendantPid), "cancelled child's descendant remains alive");
     // Removal follows the child's close (stdio released), which follows the deaths above.
     await waitFor(() => !fs.existsSync(cwd), "cancel must remove cwd once the process tree has released it");
+    assertPreserved(f);
+  });
+
+  test(`${id}: a descendant that escapes the tree kill and holds stdout cannot keep the directory`, async (t) => {
+    const f = fixture(t, "escape");
+    const response = await invoke(id);
+    assert.equal(response.status, 200);
+    await waitFor(() => f.records().length === 1, "fixture never started");
+    const { cwd, pid, descendantPid } = f.records()[0];
+    assert.ok(descendantPid, "fixture never started its descendant");
+    const reader = response.body.getReader();
+    await reader.cancel();
+    assert.equal((await reader.read()).done, true, "the response stream is closed");
+    await waitFor(() => isDead(pid), "cancelled child remains alive");
+    await waitFor(() => !fs.existsSync(cwd), "cancel must remove cwd even while an escaped descendant holds stdout");
     assertPreserved(f);
   });
 

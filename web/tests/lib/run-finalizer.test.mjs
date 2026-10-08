@@ -65,6 +65,24 @@ test("independent runs keep independent write guards", () => {
   assert.equal(second.releases(), 1);
 });
 
+test("a close that never arrives can be replaced by workerGone, still only once", () => {
+  const run = fixture();
+  run.finish();
+  run.finish.workerGone();
+  assert.equal(run.releases(), 1);
+  run.child.emit("close", null);
+  run.finish.workerGone();
+  assert.equal(run.releases(), 1);
+});
+
+test("workerGone alone does not release a run still finishing its follow-up work", () => {
+  const run = fixture();
+  run.finish.workerGone();
+  assert.equal(run.releases(), 0);
+  run.finish();
+  assert.equal(run.releases(), 1);
+});
+
 test("a real worker remains guarded while it finishes after cancellation", { timeout: 10_000 }, async (t) => {
   // IPC keeps the child alive without launching an AI CLI or touching user data.
   // It also lets this exercise the same lifetime on Windows and POSIX.

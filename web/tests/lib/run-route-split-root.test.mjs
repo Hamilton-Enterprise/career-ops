@@ -8,6 +8,25 @@ import "../helpers/web-ts-alias-loader.mjs";
 
 const { POST } = await import("../../src/app/api/run/route.ts");
 const { readLanguageConfig } = await import("../../src/lib/career-ops.ts");
+const { isTrackerWriting } = await import("../../src/lib/core/run-registry.ts");
+
+async function waitFor(predicate, message) {
+  for (let i = 0; i < 500; i++) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.fail(message);
+}
+
+function isDead(pid) {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (e) {
+    if (e.code !== "ESRCH") throw e;
+    return true;
+  }
+}
 
 function writeMockCli(dir, name, source) {
   const entry = path.join(dir, `${name}.cjs`);
@@ -16,7 +35,7 @@ function writeMockCli(dir, name, source) {
   fs.writeFileSync(path.join(dir, `${name}.ps1`), `& "node$exe" "$basedir/${name}.cjs" $args\n`);
 }
 
-function fixture(t, { market = false, pdf = false } = {}) {
+function fixture(t, { market = false, pdf = false, hang = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-run-split-")));
   const code = path.join(root, "engine", "checkout");
   const data = path.join(root, "user-data");
@@ -48,7 +67,10 @@ function fixture(t, { market = false, pdf = false } = {}) {
   // permissions, real processes, stream parsing and user-file paths stay real.
   const record = `const fs = require("node:fs"); const path = require("node:path");`;
   const text = pdf ? '\n<<cv-html format="a4">>\n<!DOCTYPE html><html><body>Synthetic CV</body></html>\n<</cv-html>>\n' : "Synthetic completion\n";
-  writeMockCli(bins, "claude", `${record}\nconst args = process.argv.slice(2);\nfs.writeFileSync(${JSON.stringify(recordFile)}, JSON.stringify({cwd: process.cwd(), args, dataRoot: process.env.CAREER_OPS_ROOT}));\nprocess.stdout.write(JSON.stringify({type:"stream_event",event:{type:"content_block_delta",delta:{text:${JSON.stringify(text)}}}}) + "\\n");\n`);
+  // `hang` starts a descendant detached into its own session (out of reach of a
+  // POSIX process-group kill) that keeps the inherited stdout open, then waits.
+  const hangSource = `const descendantPid = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "inherit", detached: true }).pid;\nfs.writeFileSync(${JSON.stringify(recordFile)}, JSON.stringify({cwd: process.cwd(), args, pid: process.pid, descendantPid}));\nsetInterval(() => {}, 1000);\n`;
+  writeMockCli(bins, "claude", `${record}\nconst args = process.argv.slice(2);\nfs.writeFileSync(${JSON.stringify(recordFile)}, JSON.stringify({cwd: process.cwd(), args, dataRoot: process.env.CAREER_OPS_ROOT}));\nprocess.stdout.write(JSON.stringify({type:"stream_event",event:{type:"content_block_delta",delta:{text:${JSON.stringify(text)}}}}) + "\\n");\n${hang ? hangSource : ""}`);
   writeMockCli(bins, "codex", `${record}\nconst args = process.argv.slice(2);\nfs.writeFileSync(${JSON.stringify(recordFile)}, JSON.stringify({cwd: process.cwd(), args, dataRoot: process.env.CAREER_OPS_ROOT}));\nconst roots = args.find(arg => arg.startsWith("sandbox_workspace_write.writable_roots="));\nif (roots && JSON.parse(roots.slice(roots.indexOf("=") + 1)).includes(process.env.CAREER_OPS_ROOT)) fs.writeFileSync(path.join(process.env.CAREER_OPS_ROOT, "reports", "002-synthetic-2026-10-08.md"), "Synthetic persisted report");\nprocess.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"Synthetic completion"}}) + "\\n");\n`);
   writeMockCli(bins, "agent", `${record}\nfs.writeFileSync(${JSON.stringify(recordFile)}, JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2)}));\nprocess.stdout.write("Synthetic read-only completion");\n`);
   fs.writeFileSync(path.join(code, "generate-pdf.mjs"), `import fs from "node:fs";\nimport path from "node:path";\nconst target = process.argv[3];\nif (!fs.readFileSync(path.join(process.env.CAREER_OPS_ROOT, "cv.md"), "utf8").includes("Synthetic")) process.exit(1);\nfs.mkdirSync(path.dirname(target), {recursive:true});\nfs.writeFileSync(target, "SYNTHETIC PDF");\n`);
@@ -60,6 +82,12 @@ function fixture(t, { market = false, pdf = false } = {}) {
     else process.env[key] = value;
   }
   t.after(() => {
+    if (hang && fs.existsSync(recordFile)) {
+      const { pid, descendantPid } = JSON.parse(fs.readFileSync(recordFile, "utf8"));
+      for (const id of [pid, descendantPid].filter(Boolean)) {
+        try { process.kill(id, "SIGKILL"); } catch { /* already reaped */ }
+      }
+    }
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -102,6 +130,20 @@ for (const kind of ["evaluate", "pdf", "fix-portal"]) {
     }
   });
 }
+
+test("cancelling an evaluation releases the tracker guard even while an escaped descendant holds stdout", async t => {
+  const f = fixture(t, { hang: true });
+  const response = await invoke("evaluate");
+  assert.equal(response.status, 200);
+  assert.equal(isTrackerWriting(), true, "evaluate holds the tracker write guard");
+  await waitFor(() => fs.existsSync(f.recordFile) && f.record().descendantPid, "fixture never started its descendant");
+  const { pid } = f.record();
+  const reader = response.body.getReader();
+  await reader.cancel();
+  assert.equal((await reader.read()).done, true, "the response stream is closed");
+  await waitFor(() => isDead(pid), "cancelled worker remains alive");
+  await waitFor(() => !isTrackerWriting(), "the tracker guard must not wait forever on a descendant's stdout");
+});
 
 test("PDF rendering and marking execute code scripts but persist artifacts in external data", async t => {
   const f = fixture(t, { pdf: true });

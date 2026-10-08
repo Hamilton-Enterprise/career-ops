@@ -1,5 +1,5 @@
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
-import { terminateCliTree } from "@/lib/cli-launch.mjs";
+import { terminateCliRun } from "@/lib/cli-launch.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -147,15 +147,18 @@ export async function POST(req: Request) {
       : spec.args(prompt);
 
   // POSIX process groups let cancellation/timeout terminate descendants too
-  // (Windows ends the tree with taskkill instead; see terminateCliTree).
+  // (Windows ends the tree with taskkill instead; see terminateCliRun).
   const useProcessGroup = process.platform !== "win32";
 
   // Declared BEFORE the spawn: fencing can refuse the argv, and the temporary
   // workspace already exists by then. Without this the refusal path would leak
   // one directory per rejected request.
+  let childCwdRemoved = false;
   const cleanupChildCwd = () => {
+    if (childCwdRemoved) return;
     try {
       fs.rmSync(childCwd, { recursive: true, force: true });
+      childCwdRemoved = true;
     } catch {
       /* best-effort temporary-directory cleanup */
     }
@@ -190,48 +193,29 @@ export async function POST(req: Request) {
   // controller and throw an uncaught "Controller is already closed" (see #1155).
   let closed = false;
   let killer: ReturnType<typeof setTimeout> | undefined;
-  let forceKill: ReturnType<typeof setTimeout> | undefined;
-
-  const isChildAlive = () => {
-    if (!useProcessGroup) return child.exitCode === null && child.signalCode === null;
-    if (!child.pid) return false;
-
-    try {
-      process.kill(-child.pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  };
 
   const clearTerminationTimers = () => {
     if (killer) {
       clearTimeout(killer);
       killer = undefined;
     }
-
-    // If the group leader exited but a descendant ignored SIGTERM, retain the
-    // SIGKILL fallback until the remaining process group is gone.
-    if (forceKill && !isChildAlive()) {
-      clearTimeout(forceKill);
-      forceKill = undefined;
-    }
   };
 
-  // The work directory is removed only on the child's `close`, never here:
-  // until the tree is gone it may still write into it, and on Windows a live
-  // process holding it as cwd makes the removal fail outright.
+  // The work directory is removed on the child's `close`, not here: until the
+  // tree is gone it may still write into it, and on Windows a live process
+  // holding it as cwd makes the removal fail outright. terminateCliRun bounds
+  // that wait; past the bound the directory goes anyway.
   const terminateChild = () => {
-    const termSent = terminateCliTree(child, "SIGTERM");
-
-    if (!termSent || forceKill) return;
-
-    forceKill = setTimeout(() => {
-      terminateCliTree(child, "SIGKILL");
-      forceKill = undefined;
-    }, 5_000);
-
-    forceKill.unref?.();
+    terminateCliRun(child, {
+      onCloseTimeout: () => {
+        console.error("[AI search worker did not close after termination]", {
+          cliId,
+          exitCode: child.exitCode ?? "running",
+          signal: child.signalCode ?? "none",
+        });
+        cleanupChildCwd();
+      },
+    });
   };
 
   const stream = new ReadableStream<Uint8Array>({

@@ -70,18 +70,26 @@ export function prepareCliLaunch(binPath, args, platform = process.platform) {
  * process group and `kill(-pid)` reaches its descendants. Windows has neither
  * process groups nor signals, and `child.kill()` ends only the direct child —
  * descendants survive holding its stdio and working directory. There the tree
- * is ended with `taskkill /T /F`, spawned without a shell. taskkill failing
- * because the tree is already gone is the expected outcome, not an error.
+ * is ended with `taskkill /T /F`, spawned without a shell from System32 so a
+ * `taskkill` earlier on PATH cannot stand in for it. taskkill failing because
+ * the tree is already gone is the expected outcome, not an error.
  *
  * @param {{ pid?: number, exitCode: number | null, signalCode: string | null, kill: (signal?: NodeJS.Signals) => boolean }} child
  * @param {NodeJS.Signals} signal Ignored on Windows, where termination is always forced.
- * @param {{ platform?: string, spawnProcess?: typeof spawn, kill?: (pid: number, signal: NodeJS.Signals) => unknown }} [deps]
+ * @param {TreeDeps} [deps]
  * @returns {boolean} Whether a termination was dispatched.
+ *
+ * @typedef {{ platform?: string, spawnProcess?: typeof spawn, kill?: (pid: number, signal: NodeJS.Signals | 0) => unknown, systemRoot?: string }} TreeDeps
  */
 export function terminateCliTree(
   child,
   signal,
-  { platform = process.platform, spawnProcess = spawn, kill = (pid, sig) => process.kill(pid, sig) } = {},
+  {
+    platform = process.platform,
+    spawnProcess = spawn,
+    kill = (pid, sig) => process.kill(pid, sig),
+    systemRoot = process.env.SystemRoot || "C:\\Windows",
+  } = {},
 ) {
   const directKill = () => {
     try {
@@ -95,7 +103,8 @@ export function terminateCliTree(
     // An exited child's PID may already belong to an unrelated process.
     if (!child.pid || child.exitCode !== null || child.signalCode !== null) return false;
     try {
-      const taskkill = spawnProcess("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+      const taskkillExe = path.win32.join(systemRoot, "System32", "taskkill.exe");
+      const taskkill = spawnProcess(taskkillExe, ["/PID", String(child.pid), "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
       });
@@ -115,4 +124,74 @@ export function terminateCliTree(
     }
   }
   return directKill();
+}
+
+const terminating = new WeakSet();
+
+/**
+ * Terminate a CLI run's tree and make the child's `close` arrive within a bound.
+ *
+ * `close` waits for every holder of the child's stdio, and that includes a
+ * descendant that escaped the tree kill (POSIX `setsid`, or a Windows grandchild
+ * orphaned before taskkill walked the tree): it would never fire, and whatever
+ * the caller releases on `close` would leak. So once the run's own tree has
+ * exited, our ends of its pipes are destroyed — a run being terminated has no
+ * output left to deliver — which lets `close` fire. SIGTERM first; SIGKILL and
+ * the same stdio release after `forceAfterMs`; if `close` still has not arrived
+ * `closeWithinMs` later, `onCloseTimeout` runs once so the caller can release
+ * without it. Repeat calls for the same child, or a child that already closed,
+ * are no-ops.
+ *
+ * @param {import("node:child_process").ChildProcess} child Spawned `detached` on POSIX.
+ * @param {TreeDeps & { forceAfterMs?: number, closeWithinMs?: number, onCloseTimeout?: () => void }} [options]
+ */
+export function terminateCliRun(child, { forceAfterMs = 5_000, closeWithinMs = 2_000, onCloseTimeout = () => {}, ...treeDeps } = {}) {
+  const exited = () => child.exitCode !== null || child.signalCode !== null;
+  const stdio = [child.stdout, child.stderr].filter((s) => s !== null && s !== undefined);
+  // Node destroys every stdio stream before it emits the child's `close`.
+  if (terminating.has(child) || (exited() && stdio.every((s) => s.destroyed))) return;
+  terminating.add(child);
+
+  const platform = treeDeps.platform ?? process.platform;
+  const kill = treeDeps.kill ?? ((pid, sig) => process.kill(pid, sig));
+  const treeAlive = () => {
+    if (platform === "win32" || !child.pid) return !exited();
+    try {
+      kill(-child.pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const releaseStdio = () => {
+    for (const s of stdio) s.destroy();
+  };
+
+  let closed = false;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let closeDeadline;
+  const forceKill = setTimeout(() => {
+    terminateCliTree(child, "SIGKILL", treeDeps);
+    releaseStdio();
+    if (closed) return;
+    closeDeadline = setTimeout(() => {
+      if (!closed) onCloseTimeout();
+    }, closeWithinMs);
+    closeDeadline.unref?.();
+  }, forceAfterMs);
+  forceKill.unref?.();
+
+  child.once("close", () => {
+    closed = true;
+    if (closeDeadline) clearTimeout(closeDeadline);
+    // A group member that ignored SIGTERM keeps the SIGKILL fallback armed.
+    if (!treeAlive()) clearTimeout(forceKill);
+  });
+  const onExit = () => {
+    if (!treeAlive()) releaseStdio();
+  };
+  if (exited()) onExit();
+  else child.once("exit", onExit);
+
+  terminateCliTree(child, "SIGTERM", treeDeps);
 }

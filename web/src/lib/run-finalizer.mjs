@@ -7,8 +7,11 @@
  * earlier on cancellation, or later after PDF rendering and marking complete.
  *
  * @param {{ once: (event: string, listener: () => void) => unknown }} child
+ * `workerGone()` stands in for a `close` that terminateCliRun gave up waiting
+ * for, so a stuck descendant cannot hold the guard forever.
+ *
  * @param {() => void} release
- * @returns {() => void}
+ * @returns {(() => void) & { workerGone: () => void }}
  */
 export function createRunFinalizer(child, release) {
   let workerClosed = false;
@@ -22,13 +25,17 @@ export function createRunFinalizer(child, release) {
     }
   };
 
-  child.once("close", () => {
+  const workerGone = () => {
     workerClosed = true;
     releaseIfFinished();
-  });
-
-  return () => {
-    runFinished = true;
-    releaseIfFinished();
   };
+  child.once("close", workerGone);
+
+  return Object.assign(
+    () => {
+      runFinished = true;
+      releaseIfFinished();
+    },
+    { workerGone },
+  );
 }
