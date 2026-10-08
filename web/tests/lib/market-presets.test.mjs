@@ -3,6 +3,11 @@ import assert from "node:assert/strict";
 import * as marketPresets from "../../src/lib/market-presets.mjs";
 import { mergeDiscoveredOffers } from "../../src/lib/core/market-merge.mjs";
 import { resolveLocationInputs } from "../../src/lib/location-concepts.mjs";
+import { readFileSync } from "node:fs";
+import * as yaml from "js-yaml";
+import { buildSearchPlan } from "../../src/lib/search-plan.mjs";
+import { matchesOccupationTerms } from "../../src/lib/occupation-match.mjs";
+import { FREELANCE_SHORTCUTS } from "../../src/lib/freelance-presets.mjs";
 
 const { cleanMarkets, encodeMarkets, decodeMarkets, buildMarketPlan, classifyMarketLocation } = marketPresets;
 
@@ -184,6 +189,47 @@ test("WTTJ uses supplied profile terms and skips when no real terms exist", () =
   const plan = buildMarketPlan(["europe"], []);
   assert.equal(plan.jobBoards.some((b) => b.provider === "wttj"), false);
   assert.deepEqual(plan.skippedSources, [{ source: "wttj", reason: "missing-search-terms" }]);
+});
+
+const templatePositives = yaml.load(readFileSync(new URL("../../../templates/portals.example.yml", import.meta.url), "utf8")).title_filter.positive;
+const searchFilters = { opportunityType: "employment", negative: [], allow: [], block: [], blockHard: [], alwaysAllow: [], sinceDays: 7, ats: [], limitPerAts: 150 };
+const wttjOf = plan => plan.jobBoards.find(board => board.provider === "wttj").wttj;
+
+test("WTTJ sends at most 12 queries, originals first, and reports the rest while titles keep every term", () => {
+  assert.equal(templatePositives.length, 37);
+  for (const phase of ["precise", "broad"]) {
+    const search = buildSearchPlan({ ...searchFilters, positive: templatePositives, markets: ["europe"] }, phase);
+    const plan = buildMarketPlan(["europe"], search.effectiveFilters.positive, "employment", search);
+    assert.deepEqual(wttjOf(plan).queries, templatePositives.slice(0, 12), phase);
+    const [skipped, ...rest] = plan.skippedSources;
+    assert.deepEqual(rest, []);
+    assert.equal(skipped.source, "wttj");
+    assert.equal(skipped.reason, "query-limit");
+    assert.deepEqual(skipped.omitted.slice(0, 25), templatePositives.slice(12), phase);
+    assert.ok(!skipped.omitted.includes("Kunstliche Intelligenz"), "accent-folded twin of an original is not a separate query");
+    assert.deepEqual(templatePositives.filter(term => !search.effectiveFilters.positive.includes(term)), []);
+    assert.equal(matchesOccupationTerms("Hyperautomation Lead", search.effectiveFilters.positive), true);
+  }
+});
+
+test("freelance WTTJ queries keep 12 of the 18 shortcut terms and report the other 6", () => {
+  const positive = [...new Set(Object.values(FREELANCE_SHORTCUTS).flat())];
+  const search = buildSearchPlan({ ...searchFilters, opportunityType: "freelance", positive, markets: ["remote"] }, "precise");
+  const plan = buildMarketPlan(["remote"], search.effectiveFilters.positive, "freelance", search);
+  assert.deepEqual(wttjOf(plan).queries, positive.slice(0, 12));
+  assert.deepEqual(plan.skippedSources, [{ source: "wttj", reason: "query-limit", omitted: positive.slice(12) }]);
+  assert.equal(matchesOccupationTerms("Senior n8n builder", search.effectiveFilters.positive), true);
+});
+
+test("12 or fewer distinct queries need no query-limit entry and drop folded spelling twins", () => {
+  const search = buildSearchPlan({ ...searchFilters, positive: ["Técnico Auxiliar de Farmácia", "Operador/a de Loja"], markets: ["portugal"] }, "broad");
+  const plan = buildMarketPlan(["portugal"], search.effectiveFilters.positive, "employment", search);
+  const { queries } = wttjOf(plan);
+  assert.deepEqual(queries.slice(0, 2), ["Técnico Auxiliar de Farmácia", "Operador/a de Loja"]);
+  for (const twin of ["Tecnico Auxiliar de Farmacia", "Operador de Loja", "Operador(a) de Loja"]) assert.ok(!queries.includes(twin), twin);
+  assert.ok(queries.includes("Pharmacy Assistant"));
+  assert.ok(queries.length <= 12);
+  assert.deepEqual(plan.skippedSources, []);
 });
 
 test("remote selects the seven existing remote feeds", () => {

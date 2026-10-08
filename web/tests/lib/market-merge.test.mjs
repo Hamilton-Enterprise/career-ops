@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildMarketPlan } from "../../src/lib/market-presets.mjs";
 import { mergeDiscoveredOffers, parseMarketReceipt } from "../../src/lib/core/market-merge.mjs";
+import { discoverySourceReasons } from "../../src/lib/explore-state.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -126,6 +127,26 @@ test("timeout and unexplained nonzero exits retain valid offers and mark sources
     assert.deepEqual(run.sources.map(s => s.state), ["error", "skipped"]);
     assert.ok(run.sources[0].message);
   }
+});
+
+test("a WTTJ query limit is partial coverage on the WTTJ source, not a separate skipped source", () => {
+  const terms = Array.from({ length: 15 }, (_, index) => `Role ${index}`);
+  const plan = buildMarketPlan(["portugal"], terms);
+  const run = parseMarketReceipt(receipt([offer]), 0, plan);
+  assert.deepEqual(run.sources.map(s => [s.source, s.state]), [["Landing.jobs", "ok"], ["Welcome to the Jungle", "partial"]]);
+  assert.equal(run.status, "partial");
+  assert.equal(run.valid, true);
+  const sources = Object.fromEntries(run.sources.map(({ source, ...state }) => [source, state]));
+  assert.deepEqual(discoverySourceReasons(sources), ["Welcome to the Jungle: feitas 12 de 15 pesquisas; os restantes termos continuam a filtrar os títulos recebidos."]);
+  assert.equal(run.queryLimitedOnly, true);
+  assert.equal(run.sources[1].limit, "query-limit");
+  const unverified = JSON.stringify({ ...JSON.parse(receipt([offer])), unverified_zero: ["Welcome to the Jungle"] });
+  assert.deepEqual(parseMarketReceipt(unverified, 0, plan).sources[1], { source: "Welcome to the Jungle", state: "ok" });
+  const failed = parseMarketReceipt(receipt([], [{ company: "Welcome to the Jungle", error: "timeout" }]), 2, plan);
+  assert.deepEqual(failed.sources.find(s => s.source === "Welcome to the Jungle"), { source: "Welcome to the Jungle", state: "error", message: "timeout. Feitas 12 de 15 pesquisas; os restantes termos continuam a filtrar os títulos recebidos." });
+  assert.equal(failed.queryLimitedOnly, false);
+  const unmatched = parseMarketReceipt(receipt([offer], [{ company: "Unknown board", error: "offline" }]), 0, plan);
+  assert.equal(unmatched.queryLimitedOnly, false);
 });
 
 test("an empty receipt with only skipped providers is not a healthy empty search", () => {
