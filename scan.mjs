@@ -65,7 +65,7 @@ import { mergeProviderPlugins } from './plugins/_engine.mjs';
 import { classifyFetchError } from './verify-portals.mjs';
 import { fingerprintText, findCrossListings } from './fingerprint-core.mjs';
 import { resolveColumns, parseTrackerRow, normalizeTextKey, extractReqNumber, REQ_NUMBER_RE } from './tracker-parse.mjs';
-import { workdayDedupKey, stripWorkdayRepostSuffix, isWorkdayJobUrl } from './providers/workday.mjs';
+import { workdayDedupKey, stripWorkdayRepostSuffix, isWorkdayJobUrl, WORKDAY_TRUNCATED_REASON } from './providers/workday.mjs';
 import { normalizeCompany } from './tracker-utils.mjs';
 import { normalizeCompanyName } from './invite-match.mjs';
 import { withPipelineLock } from './pipeline-lock.mjs';
@@ -4009,6 +4009,12 @@ async function main() {
       }
       if (!Array.isArray(jobs)) {
         throw new Error(`${provider.id}: fetch() did not return an array`);
+      }
+      if (provider.id === 'workday' && jobs.workdayTruncated !== undefined) {
+        const reason = jobs.workdayTruncated === WORKDAY_TRUNCATED_REASON.TRANSIENT
+          || jobs.workdayTruncated === WORKDAY_TRUNCATED_REASON.STRUCTURAL
+          ? jobs.workdayTruncated : 'unknown';
+        errors.push({ company: company.name, error: `workday: incomplete pagination (${reason})` });
       }
       totalFound += jobs.length;
       if (!company._isBoard && jobs.length === 0) {

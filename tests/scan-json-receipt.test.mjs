@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 import { atomicWriteFile, isIgnorableDirectoryFsyncError, normalizeReceiptOffer } from '../scan.mjs';
+import { parseMarketReceipt } from '../web/src/lib/core/market-merge.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SCAN = join(ROOT, 'scan.mjs');
@@ -20,8 +21,8 @@ function workspace(portals) {
   return root;
 }
 
-function runJson(root) {
-  return spawnSync(process.execPath, [SCAN, '--dry-run', '--json'], {
+function runJson(root, bootstrap) {
+  return spawnSync(process.execPath, bootstrap ? ['--input-type=module', '-e', bootstrap] : [SCAN, '--dry-run', '--json'], {
     cwd: root,
     env: {
       ...process.env,
@@ -197,6 +198,51 @@ test('--json returns exit 2 and structured errors for a partial failure', () => 
       company: 'Broken Co',
       error: 'unknown provider: provider-that-does-not-exist',
     }]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('incomplete Workday pagination keeps recovered offers and marks the market receipt partial', () => {
+  const board = { name: 'Auchan Portugal', provider: 'workday', enabled: true, careers_url: 'https://auchanportugal.wd3.myworkdayjobs.com/auchan-retail' };
+  const root = workspace(`job_boards:\n  - ${JSON.stringify(board)}\n`);
+  const plan = { opportunityType: 'employment', markets: ['portugal'], jobBoards: [board], skippedSources: [], locationPolicy: { markets: ['portugal'], strict: true } };
+  try {
+    for (const [marker, diagnostic] of [
+      [undefined, 'transient'], ['structural', 'structural'],
+      ['secret=never-expose\n' + 'x'.repeat(1000), 'unknown'], [{ secret: 'never-expose' }, 'unknown'],
+    ]) {
+      const bootstrap = `
+        import workday from ${JSON.stringify(new URL('../providers/workday.mjs', import.meta.url).href)};
+        globalThis.fetch = () => { throw new Error('Network forbidden in fixture'); };
+        const fetchWorkday = workday.fetch;
+        workday.fetch = async (entry, ctx) => {
+          const jobs = await fetchWorkday(entry, { ...ctx, sleep: async () => {}, fetchJson: async (_url, opts) => {
+            if (JSON.parse(opts.body).offset > 0) throw Object.assign(new Error('fixture later page unavailable'), { status: 400 });
+            return { total: 21, jobPostings: [{ title:'Operador/a de loja', externalPath:'/job/Lisboa/Operador_JR123', locationsText:'Lisboa, Portugal', postedOn:'Publicado hoje' }] };
+          }});
+          if (${marker !== undefined}) jobs.workdayTruncated = ${JSON.stringify(marker) ?? 'undefined'};
+          return jobs;
+        };
+        process.argv = [process.execPath, ${JSON.stringify(SCAN)}, '--dry-run', '--json'];
+        await import(${JSON.stringify(new URL('../scan.mjs', import.meta.url).href)});
+      `;
+      const result = runJson(root, bootstrap);
+      const receipt = JSON.parse(result.stdout);
+      assert.equal(result.status, 2, result.stderr);
+      assert.deepEqual(receipt.errors, [{ company: 'Auchan Portugal', error: `workday: incomplete pagination (${diagnostic})` }]);
+      assert.equal(receipt.offers.length, 1);
+      assert.equal(receipt.offers[0].title, 'Operador/a de loja');
+      assert.equal(receipt.offers[0].source, 'workday-api');
+      const run = parseMarketReceipt(result.stdout, result.status, plan);
+      assert.equal(run.status, 'partial');
+      assert.equal(run.valid, true);
+      assert.equal(run.sources[0].state, 'error');
+      assert.equal(run.offers.length, 1);
+      assert.equal(run.offers[0].url, 'https://auchanportugal.wd3.myworkdayjobs.com/auchan-retail/job/Lisboa/Operador_JR123');
+      assert.equal(existsSync(join(root, 'data', 'pipeline.md')), false);
+      assert.equal(existsSync(join(root, 'data', 'scan-history.tsv')), false);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
