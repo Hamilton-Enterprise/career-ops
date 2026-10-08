@@ -60,6 +60,10 @@ import { fileURLToPath, pathToFileURL } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = __dirname;
 
+export function isManagedDistribution(root = ROOT) {
+  return existsSync(join(root, '.career-ops-managed'));
+}
+
 export function createReexecMarker() {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'career-ops-reexec-')));
   const path = join(directory, 'marker');
@@ -152,6 +156,7 @@ const SYSTEM_PATHS = [
   // on an existing install, silently (once text=auto is live, git status stays
   // clean and only a second update would repair it).
   '.gitattributes',
+  '.career-ops-managed',
   'dead-boards.mjs',
   'modes/README.md',
   'modes/_shared.md',
@@ -1329,6 +1334,8 @@ export function worktreeUpdateTarget(root = ROOT, run = (...args) => gitIn(root,
  * @returns {number|null} The child's exit status, or null to run here.
  */
 function redirectToMainCheckout(cmd, argv = process.argv, env = process.env) {
+  // A marked worktree must not hand check/apply to an unmarked main checkout.
+  if ((cmd === 'check' || cmd === 'apply') && isManagedDistribution()) return null;
   if (!REDIRECTED_COMMANDS.has(cmd)) return null;
   // The user's explicit opt-out, and the loop guard for the child below.
   if (env.CAREER_OPS_UPDATE_IN_WORKTREE === '1' || env.CAREER_OPS_UPDATE_REDIRECTED === '1') return null;
@@ -3291,6 +3298,11 @@ async function checkMainChannel(local, marker, runCurlGet, localSha) {
 }
 
 async function check() {
+  if (isManagedDistribution()) {
+    const localSha = localShortSha();
+    console.log(JSON.stringify({ status: 'managed-distribution', local: localVersion(), ...(localSha ? { local_sha: localSha } : {}), update_method: 'sync-branch' }));
+    return;
+  }
   // Before any git call: on an install nested inside a foreign repository the
   // rev-parse below reads the OUTER repo's HEAD and the drift fetch writes the
   // OUTER repo's FETCH_HEAD, so check reports a phantom system-files-changed
@@ -3517,6 +3529,9 @@ export function trustsEnvTargetRef(authenticatedReexec, legacyReexec) {
 
 async function apply() {
   assertOwnGitToplevel();
+  if (isManagedDistribution()) {
+    throw new Error('Managed distribution: the official updater is disabled. Use sync/upstream-YYYY-MM-DD from upstream, run tests, then open an internal pull request to origin/main.');
+  }
   const local = localVersion();
   // Environment variables are a private one-use channel for the self-reexec;
   // they must not authorize the initial invocation (#2866).

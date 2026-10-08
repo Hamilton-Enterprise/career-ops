@@ -7,7 +7,7 @@
  * newly introduced system paths without touching user data.
  */
 
-import { copyFileSync, readFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, realpathSync } from 'fs';
+import { copyFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, realpathSync } from 'fs';
 import { execFileSync, spawnSync } from 'child_process';
 import { dirname, join, sep } from 'path';
 import { tmpdir } from 'os';
@@ -129,6 +129,105 @@ const systemPaths = extractArray('SYSTEM_PATHS');
 const userPaths = extractArray('USER_PATHS');
 const bootstrapPaths = extractArray('BOOTSTRAP_PATHS');
 
+// A real unmanaged checkout keeps the ordinary confirmation/reexec tests
+// meaningful even when this distribution carries the managed marker.
+const fixtureParent = join(process.cwd(), 'work', 'managed-updater-fixtures');
+mkdirSync(fixtureParent, { recursive: true });
+const unmanagedInstall = mkdtempSync(join(fixtureParent, 'unmanaged-'));
+process.on('exit', () => rmSync(unmanagedInstall, { recursive: true, force: true }));
+copyFileSync('update-system.mjs', join(unmanagedInstall, 'update-system.mjs'));
+writeFileSync(join(unmanagedInstall, 'VERSION'), '1.0.0\n');
+execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: unmanagedInstall });
+execFileSync('git', ['add', '.'], { cwd: unmanagedInstall });
+execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', '-c', `core.hooksPath=${join(unmanagedInstall, 'no-hooks')}`, 'commit', '-qm', 'fixture'], { cwd: unmanagedInstall });
+
+{
+  const updater = await import('./update-system.mjs');
+  const managedInstall = join(unmanagedInstall, 'managed-worktree');
+  const calls = join(unmanagedInstall, 'calls');
+  const preload = join(unmanagedInstall, 'block-update-network.mjs');
+  execFileSync('git', ['worktree', 'add', '-q', '-b', 'managed', managedInstall], { cwd: unmanagedInstall });
+  // Fence the real external-command boundary, including a redirected child.
+  // A missing guard must fail the test without fetching or mutating a fixture.
+  writeFileSync(preload, `import cp from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+import { writeFileSync } from 'node:fs';
+function inspect(command, args = []) {
+  if (command !== 'git' && command !== 'curl') return;
+  writeFileSync(process.env.MANAGED_TEST_CALLS, command + ' ' + args.join(' ') + '\\n', { flag: 'a' });
+  if (command === 'curl' || !['rev-parse', 'status', 'worktree'].includes(args[0])) throw new Error('Updater network/mutation blocked by test');
+}
+const sync = cp.execFileSync, async = cp.execFile;
+cp.execFileSync = (command, args, ...rest) => { inspect(command, args); return sync(command, args, ...rest); };
+cp.execFile = (command, args, ...rest) => {
+  try { inspect(command, args); } catch (error) { queueMicrotask(() => rest.at(-1)(error, '', '')); return; }
+  return async(command, args, ...rest);
+};
+syncBuiltinESMExports();
+`);
+  writeFileSync(join(managedInstall, '.career-ops-managed'), 'contents are not configuration\n');
+  writeFileSync(join(managedInstall, '.update-lock'), 'existing lock\n');
+  const reexec = createReexecMarker();
+  try {
+    if (typeof updater.isManagedDistribution === 'function' &&
+        updater.isManagedDistribution(managedInstall) && !updater.isManagedDistribution(unmanagedInstall)) {
+      pass('managed marker detection depends on existence in the requested root');
+    } else fail('managed marker detection depends on existence in the requested root');
+
+    const env = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import=${pathToFileURL(preload).href}`, MANAGED_TEST_CALLS: calls,
+      CAREER_OPS_UPDATE_IN_WORKTREE: '', CAREER_OPS_UPDATE_REDIRECTED: '',
+      CAREER_OPS_UPDATE_REEXEC_MARKER: reexec.path, CAREER_OPS_UPDATE_REEXEC_TOKEN: reexec.token };
+    const onlyCheckoutReads = () => readFileSync(calls, 'utf8').split('\n').filter(Boolean).every(call => call.startsWith('git rev-parse '));
+    writeFileSync(join(managedInstall, '.career-ops-managed'), '');
+    if (updater.isManagedDistribution?.(managedInstall)) pass('an empty managed marker still enables the guard');
+    else fail('an empty managed marker still enables the guard');
+    for (const args of [['check'], ['check', '--force'], ['check', '--channel', 'main']]) {
+      writeFileSync(calls, '');
+      const result = spawnSync(process.execPath, ['update-system.mjs', ...args], { cwd: managedInstall, env, encoding: 'utf8', timeout: 10000 });
+      let status;
+      try { status = JSON.parse(result.stdout); } catch { /* report below */ }
+      if (result.status === 0 && status?.status === 'managed-distribution' && status.local === '1.0.0' &&
+          /^[a-f0-9]+$/.test(status.local_sha || '') && status.update_method === 'sync-branch' &&
+          !status.remote && onlyCheckoutReads()) {
+        pass(`managed ${args.join(' ')} stays in the marked worktree without network`);
+      } else fail(`managed ${args.join(' ')} must stay in the marked worktree without network: ${applyFailure(result)} stdout=${result.stdout.trim()}`);
+    }
+    for (const args of [['apply'], ['apply', '--confirm'], ['apply', '--force', '--channel', 'main', '--confirm']]) {
+      writeFileSync(calls, '');
+      const before = execFileSync('git', ['status', '--porcelain'], { cwd: managedInstall, encoding: 'utf8' });
+      const result = spawnSync(process.execPath, ['update-system.mjs', ...args], { cwd: managedInstall, env, encoding: 'utf8', timeout: 10000 });
+      const after = execFileSync('git', ['status', '--porcelain'], { cwd: managedInstall, encoding: 'utf8' });
+      if (result.status !== 0 && /sync\/upstream-YYYY-MM-DD/.test(result.stderr) && /tests/i.test(result.stderr) && /internal pull request/i.test(result.stderr) &&
+          onlyCheckoutReads() && before === after &&
+          readFileSync(join(managedInstall, '.update-lock'), 'utf8') === 'existing lock\n' && existsSync(reexec.path)) {
+        pass(`managed ${args.join(' ')} refuses before status, target resolution, locks, reexec consumption or writes`);
+      } else fail(`managed ${args.join(' ')} must refuse before mutation: ${applyFailure(result)}`);
+    }
+    writeFileSync(calls, '');
+    const unmarked = spawnSync(process.execPath, ['update-system.mjs', 'check'], { cwd: unmanagedInstall, env, encoding: 'utf8', timeout: 10000 });
+    let unmarkedStatus;
+    try { unmarkedStatus = JSON.parse(unmarked.stdout); } catch { /* report below */ }
+    if (unmarked.status === 0 && unmarkedStatus?.status === 'offline' && /curl /.test(readFileSync(calls, 'utf8'))) {
+      pass('an unmarked CLI check still reaches the ordinary upstream release path');
+    } else fail(`an unmarked CLI check still reaches the ordinary upstream release path: ${applyFailure(unmarked)}`);
+    const ordinary = await updater.checkStatus([], {}, { localVersion: () => '1.0.0', localShortSha: () => '', readMarker: () => null,
+      curlGet: async () => JSON.stringify({ tag_name: 'career-ops-v2.0.0', published_at: '2026-10-08T00:00:00Z', body: 'new release' }) });
+    if (ordinary.status === 'update-available' && ordinary.remote === '2.0.0') pass('ordinary checkStatus retains the upstream release contract');
+    else fail('ordinary checkStatus retains the upstream release contract');
+  } finally {
+    rmSync(dirname(reexec.path), { recursive: true, force: true });
+  }
+}
+
+if (systemPaths.includes('.career-ops-managed') && existsSync('.career-ops-managed') &&
+    readFileSync('DATA_CONTRACT.md', 'utf8').split('## System Layer')[1]?.includes('`.career-ops-managed`')) {
+  pass('managed marker is shipped and documented as system-owned');
+} else fail('managed marker is shipped and documented as system-owned');
+if (/async function check\(\)[\s\S]*?isManagedDistribution\(\)[\s\S]*?managed-distribution[\s\S]*?await checkStatus/.test(source) &&
+    /async function apply\(\)\s*\{\s*assertOwnGitToplevel\(\);\s*if \(isManagedDistribution\(\)\)/.test(source)) {
+  pass('managed CLI guards precede the upstream status engine and apply side effects');
+} else fail('managed CLI guards precede the upstream status engine and apply side effects');
+
 // Ship only the shared matcher's manifest entries, as a data-only upgrade does.
 // Creating web/src accidentally activates test-all's full-web missing-file gates.
 {
@@ -181,9 +280,9 @@ function runApplyWithEnv(env, args = ['apply']) {
   // lock from another fixture or an interrupted prior run. Each initial
   // invocation must start from the same lock-free state so the assertions
   // below test the child, not test-order residue.
-  rmSync('.update-lock', { force: true, recursive: true });
+  rmSync(join(unmanagedInstall, '.update-lock'), { force: true, recursive: true });
   return spawnSync(process.execPath, ['update-system.mjs', ...args], {
-    cwd: process.cwd(),
+    cwd: unmanagedInstall,
     encoding: 'utf8',
     env: {
       ...process.env,
@@ -241,7 +340,7 @@ if (forgedReexec.status !== 0 &&
 }
 
 const legacyBranch = `backup-pre-update-99.99.99-${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}`;
-const createdLegacyBranch = spawnSync('git', ['branch', legacyBranch, 'HEAD'], { encoding: 'utf8' });
+const createdLegacyBranch = spawnSync('git', ['branch', legacyBranch, 'HEAD'], { cwd: unmanagedInstall, encoding: 'utf8' });
 const forgedLegacyReexec = runApplyWithEnv({
   CAREER_OPS_UPDATE_REEXEC: '1',
   CAREER_OPS_UPDATE_BACKUP_BRANCH: legacyBranch,
@@ -256,7 +355,7 @@ if (createdLegacyBranch.status !== 0) {
   fail(`legacy reexec with a matching backup branch can authorize initial apply without an active parent lock (${applyFailure(forgedLegacyReexec)})`);
 }
 if (createdLegacyBranch.status === 0) {
-  spawnSync('git', ['branch', '-D', legacyBranch], { encoding: 'utf8' });
+  spawnSync('git', ['branch', '-D', legacyBranch], { cwd: unmanagedInstall, encoding: 'utf8' });
 }
 
 const marker = createReexecMarker();

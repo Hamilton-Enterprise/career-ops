@@ -93,6 +93,7 @@ These files contain system logic, scripts, templates, and instructions that impr
 | File | Purpose |
 |------|---------|
 | `modes/_shared.md` | Eval-core: scoring system, global rules, tools |
+| `.career-ops-managed` | System-owned marker for this managed distribution; existence disables official update checks and apply in favour of the controlled sync branch, tests and internal pull request flow. Contents are not configuration. Rollback remains available. |
 | `modes/_writing.md` | Writing guardrails (Voice DNA / Writing Style / ATS) — loaded by the CV/cover/apply writing modes, not by evaluation (#1710) |
 | `modes/_custom.template.md` | Template seed for the user's `modes/_custom.md` |
 | `modes/_profile.template.md` | Template seed for the user's `modes/_profile.md` |
@@ -184,6 +185,8 @@ These files contain system logic, scripts, templates, and instructions that impr
 **If a file is user-owned, no update process may modify or delete it.** The only files the updater writes inside user-layer directories are the exact system-owned `.gitkeep` scaffolds listed above.
 
 **If a file is in the System Layer, it can be safely replaced with the latest version from the upstream repo.**
+
+For a managed distribution carrying `.career-ops-managed`, system changes enter through `sync/upstream-YYYY-MM-DD`, tests and an internal pull request. The official updater cannot replace customised system files: `check` returns `managed-distribution` without network access, and `apply` refuses before update side effects. Keep the marker and guard together when syncing upstream; rollback of an earlier update remains available.
 
 ## Custom Data Directory
 
