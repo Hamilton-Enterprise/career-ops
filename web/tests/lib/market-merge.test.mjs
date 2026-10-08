@@ -2,9 +2,64 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildMarketPlan } from "../../src/lib/market-presets.mjs";
 import { mergeDiscoveredOffers, parseMarketReceipt } from "../../src/lib/core/market-merge.mjs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import "../helpers/web-ts-alias-loader.mjs";
+const { runDiscovery } = await import("@/lib/core/scan");
 
 const offer = { url: "https://jobs.acme.com/42", company: "Acme", title: "Engineer", location: "Lisboa", postedAt: "", ats: "landingjobs", source: "Landing.jobs" };
 const receipt = (offers, errors = []) => JSON.stringify({ version: "careerops.scan.receipt@1", scanned: 2, skipped: 0, found: offers.length, filtered: 0, duplicates: 0, added: offers.length, added_urls: offers.map(o => o.url), offers, errors, unverified_zero: [], dry_run: true });
+
+test("receipt and canonical merge preserve only valid source metrics and combine sources", () => {
+  const metrics = { contractType: " Sem termo ", hours: " 40 h/semana ", applicationDeadline: " 2026-11-01 ", vacancyCount: 2, observedAt: "2026-10-08T12:00:00.000Z", availabilityEvidence: "feed-seen", sources: ["Landing.jobs", "Remotive"] };
+  const run = parseMarketReceipt(receipt([{ ...offer, ...metrics }]), 0, buildMarketPlan(["portugal"], []));
+  const [merged] = mergeDiscoveredOffers([{ ...offer, source: "greenhouse-full", ats: "greenhouse", vacancyCount: -1, hours: " " }], run.offers);
+  assert.equal(merged.contractType, "Sem termo");
+  assert.equal(merged.hours, "40 h/semana");
+  assert.equal(merged.applicationDeadline, "2026-11-01");
+  assert.equal(merged.vacancyCount, 2);
+  assert.equal(merged.observedAt, metrics.observedAt);
+  assert.equal(merged.availabilityEvidence, "feed-seen");
+  assert.equal(merged.postedAt, "");
+  assert.deepEqual(merged.sources, ["greenhouse-full", "Landing.jobs", "Remotive"]);
+  for (const vacancyCount of [-1, 0, 2.5, "2", null]) {
+    const invalid = parseMarketReceipt(receipt([{ ...offer, vacancyCount, contractType: " ", hours: "", applicationDeadline: " ", availabilityEvidence: "invented", observedAt: "bad" }]), 0, buildMarketPlan(["portugal"], [])).offers[0];
+    for (const field of ["vacancyCount", "contractType", "hours", "applicationDeadline", "availabilityEvidence", "observedAt"]) assert.equal(field in invalid, false, field);
+  }
+});
+
+test("sparse live ATS then richer final JSON fills fields before all-source eligible ranking", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ranking-merge-"));
+  const prior = { CAREER_OPS_ROOT: process.env.CAREER_OPS_ROOT, CAREER_OPS_CODE_ROOT: process.env.CAREER_OPS_CODE_ROOT };
+  process.env.CAREER_OPS_ROOT = root;
+  process.env.CAREER_OPS_CODE_ROOT = root;
+  fs.mkdirSync(path.join(root, "config"));
+  fs.writeFileSync(path.join(root, "config/profile.yml"), "{}");
+  t.after(() => {
+    for (const [key, value] of Object.entries(prior)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const live = { ...offer, title: "Operador de Loja", location: "", source: "greenhouse-full", ats: "greenhouse", observedAt: "2026-10-08T12:00:00.000Z" };
+  const final = { ...live, location: "Lisbon, Portugal", postedAt: "2026-10-08", contractType: "Permanent", hours: "40 h/semana", applicationDeadline: "2026-11-01", vacancyCount: 3, salary: { min: 24000, currency: "EUR" }, availabilityEvidence: "feed-seen", sources: ["greenhouse-full", "Employer"] };
+  const market = { ...offer, title: "Retail Assistant", url: "https://acme.example/market", location: "Lisboa", postedAt: "2026-10-08" };
+  fs.writeFileSync(path.join(root, "scan-ats-full.mjs"), `// --json capHit\nconsole.error(${JSON.stringify(JSON.stringify({ kind: "offer", ...live }))}); console.log(${JSON.stringify(JSON.stringify({ offers: [final], companiesAvailable: 1, companiesScanned: 1, capHit: false, datasetStatus: { greenhouse: "ok" }, unreachableBoards: 0, postingsDroppedNoDate: 0 }))});`);
+  fs.writeFileSync(path.join(root, "scan.mjs"), `console.log(${JSON.stringify(receipt([market, { ...market, url: "https://acme.example/outside", location: "Madrid, Spain" }]))});`);
+  const filters = { opportunityType: "employment", positive: ["Operador de Loja"], negative: [], allow: ["Lisboa"], block: [], blockHard: [], alwaysAllow: [], sinceDays: 7, ats: ["greenhouse"], markets: ["portugal"], limitPerAts: 150 };
+  const events = [];
+  const offers = await runDiscovery(filters, event => events.push(event));
+  assert.equal(offers.length, 2);
+  assert.equal(offers[0].url, live.url);
+  for (const field of ["contractType", "hours", "applicationDeadline", "vacancyCount", "salary", "availabilityEvidence"]) assert.deepEqual(offers[0][field], final[field], field);
+  assert.equal(offers[0].location, "Lisbon, Portugal");
+  assert.equal(offers[0].postedAt, "2026-10-08");
+  assert.deepEqual(offers[0].sources, ["greenhouse-full", "Employer"]);
+  assert.equal(offers[0].match.components.role, 60);
+  assert.equal(offers[1].match.components.role, 50);
+  assert.equal(offers[0].observedAt, offers[1].observedAt);
+  assert.equal(events.find(event => event.kind === "summary").matches, 2);
+  assert.ok(!offers.some(result => result.url.endsWith("outside")));
+});
 
 test("canonical URL merges origins in order and ATS fills empty fields", () => {
   const [merged] = mergeDiscoveredOffers([{ ...offer, url: offer.url + "?utm_source=ats", source: "greenhouse-full", ats: "greenhouse", location: "" }], [{ ...offer, postedAt: "2026-10-05", sources: ["Landing.jobs", "Remotive"] }]);

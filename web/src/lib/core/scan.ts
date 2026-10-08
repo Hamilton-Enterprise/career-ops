@@ -7,9 +7,10 @@ import { scanTimeoutMessage } from "./scan-timeout.mjs";
 import { ATS_LABEL, ATS_SOURCES, type AtsSource, type DiscoveredOffer, type ExploreFilters, type FitBand, type ScanEvent, type SearchPlan } from "@/lib/explore";
 import { mergeScanResults, timedOutMessage } from "./scan-merge.mjs";
 import { runMarketDiscovery } from "@/lib/core/market-scan";
-import { mergeDiscoveredOffers } from "./market-merge.mjs";
+import { mergeDiscoveredOffers, sourceBackedFields } from "./market-merge.mjs";
 import { buildMarketPlan, classifyMarketLocation } from "@/lib/market-presets.mjs";
 import { buildSearchPlan } from "@/lib/search-plan.mjs";
+import { rankOpportunities } from "@/lib/opportunity-rank.mjs";
 
 export type { DiscoveredOffer, ScanEvent, AtsSource } from "@/lib/explore";
 export { ATS_SOURCES } from "@/lib/explore";
@@ -65,8 +66,7 @@ function ingestJsonOffer(
   roleTargets: string[] = [],
 ): void {
   const url = (o.url || "").trim();
-  if (!url || seen.has(url) || !o.company || !o.title) return;
-  seen.add(url);
+  if (!url || !o.company || !o.title) return;
   const source = o.source || `${currentAts}-full`;
   const offer: DiscoveredOffer = {
     company: o.company,
@@ -78,9 +78,14 @@ function ingestJsonOffer(
     url,
     matchedKeyword: firstMatch(o.title, filters.positive),
     ...fitField(o.title, roleTargets),
+    ...sourceBackedFields(o),
   };
-  offers.push(offer);
-  onEvent({ kind: "offer", offer });
+  // A final JSON record can enrich an earlier sparse live event.
+  const index = seen.has(url) ? offers.findIndex(previous => previous.url === url) : -1;
+  seen.add(url);
+  if (index < 0) offers.push(offer);
+  else offers[index] = mergeDiscoveredOffers([offers[index]], [offer])[0];
+  if (index < 0) onEvent({ kind: "offer", offer });
 }
 
 /** Mirrors `parseLiveOfferLine` in scan-ats-full.mjs — keep the two in sync. */
@@ -128,7 +133,7 @@ export function scannerSupportsJson(): boolean {
   }
 }
 
-type JsonOffer = { company?: string; title?: string; url?: string; location?: string | null; postedAt?: string | null; source?: string };
+type JsonOffer = { company?: string; title?: string; url?: string; location?: string | null; postedAt?: string | null; source?: string } & Partial<Pick<DiscoveredOffer, "salary" | "contractType" | "hours" | "applicationDeadline" | "vacancyCount" | "observedAt" | "availabilityEvidence" | "sources">>;
 type ScanJson = {
   companiesAvailable?: number;
   companiesScanned?: number;
@@ -435,6 +440,7 @@ async function runAtsDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) 
 }
 
 async function runDiscoveryPass(searchPlan: SearchPlan, onEvent: (e: ScanEvent) => void): Promise<DiscoveredOffer[]> {
+  const observedAt = new Date().toISOString();
   const filters = searchPlan.effectiveFilters;
   const ats = filters.opportunityType === "freelance" ? [] : filters.ats.filter(a => ATS_SOURCES.includes(a));
   const plan = buildMarketPlan(filters.markets, filters.positive, filters.opportunityType, searchPlan);
@@ -468,11 +474,12 @@ async function runDiscoveryPass(searchPlan: SearchPlan, onEvent: (e: ScanEvent) 
   const atsOffers = atsPromise ? await atsPromise : [];
   const marketRun = marketPromise ? await marketPromise : null;
   let missingLocation = marketRun?.missingLocation ?? 0;
-  const offers = mergeDiscoveredOffers(atsOffers, marketRun?.offers ?? []).filter(offer => {
+  const eligible = mergeDiscoveredOffers(atsOffers, marketRun?.offers ?? []).filter(offer => {
     const classification = classifyMarketLocation(offer, plan);
     if (classification.reason === "missing-location") missingLocation++;
     return classification.accepted;
   });
+  const offers = rankOpportunities(eligible.map(offer => ({ ...offer, observedAt })), searchPlan, observedAt);
   const atsValid = Boolean(atsSummary) || atsOffers.length > 0;
   const sources: NonNullable<Summary["sources"]> = ats.map(source => {
     const failed = !atsValid || atsSummary?.incomplete?.includes(source);

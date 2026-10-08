@@ -2886,6 +2886,18 @@ function postedAtIsoDate(postedAt) {
   return new Date(postedAt).toISOString().slice(0, 10);
 }
 
+export function normalizeSourceFields(offer) {
+  const fields = {};
+  if (Array.isArray(offer.sources)) fields.sources = [...new Set(offer.sources.filter(value => typeof value === 'string' && value.trim()).map(value => value.trim()))];
+  for (const key of ['contractType', 'hours', 'applicationDeadline']) {
+    if (typeof offer[key] === 'string' && offer[key].trim()) fields[key] = offer[key].trim();
+  }
+  if (Number.isSafeInteger(offer.vacancyCount) && offer.vacancyCount > 0) fields.vacancyCount = offer.vacancyCount;
+  if (typeof offer.observedAt === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(offer.observedAt) && Number.isFinite(Date.parse(offer.observedAt))) fields.observedAt = offer.observedAt.trim();
+  if (['feed-seen', 'confirmed-active', 'unconfirmed'].includes(offer.availabilityEvidence)) fields.availabilityEvidence = offer.availabilityEvidence;
+  return fields;
+}
+
 export function normalizeReceiptOffer(offer) {
   return {
     company: normalizeScanScalar(offer.company),
@@ -2895,6 +2907,7 @@ export function normalizeReceiptOffer(offer) {
     url: normalizeScanUrl(offer.url),
     source: normalizeScanScalar(offer.source),
     ...(offer.salary && typeof offer.salary === 'object' ? { salary: offer.salary } : {}),
+    ...normalizeSourceFields(offer),
   };
 }
 
@@ -3610,6 +3623,7 @@ const USAGE = `Usage:
   node scan.mjs --help                       # print this usage block and exit`;
 
 async function main() {
+  const observedAt = new Date().toISOString();
   const args = process.argv.slice(2);
   validateFlags(args, KNOWN_FLAGS, USAGE, { valueFlags: VALUE_FLAGS });
   const dryRun = args.includes('--dry-run');
@@ -4572,7 +4586,7 @@ async function main() {
       duplicates: totalDupes,
       added: verifiedOffers.length,
       added_urls: verifiedOffers.map(offer => offer.url),
-      offers: verifiedOffers.map(normalizeReceiptOffer),
+      offers: verifiedOffers.map(offer => normalizeReceiptOffer({ ...offer, observedAt })),
       errors: errors.map(({ company, error }) => ({ company, error })),
       unverified_zero: unverifiedZeroTargets,
       dry_run: dryRun,

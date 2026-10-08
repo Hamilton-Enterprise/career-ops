@@ -94,6 +94,14 @@ export type DiscoveredOffer = {
   opportunityType?: OpportunityType;
   sources?: string[];
   salary?: { min?: number; max?: number; currency?: string; period?: string };
+  contractType?: string;
+  hours?: string;
+  applicationDeadline?: string;
+  vacancyCount?: number;
+  /** Discovery time; never a publication date. */
+  observedAt?: string;
+  availabilityEvidence?: "feed-seen" | "confirmed-active" | "unconfirmed";
+  match?: import("./opportunity-rank.mjs").OpportunityMatch;
   /** which positive keyword matched the title (transparency, e.g. "ai" in "Nail") */
   matchedKeyword?: string;
   /** free, zero-token triage hint computed at discovery time from the posting

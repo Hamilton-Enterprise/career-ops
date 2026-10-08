@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 
 import { atomicWriteFile, isIgnorableDirectoryFsyncError, normalizeReceiptOffer } from '../scan.mjs';
 import { parseMarketReceipt } from '../web/src/lib/core/market-merge.mjs';
+import { formatLiveOfferLine } from '../scan-ats-full.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SCAN = join(ROOT, 'scan.mjs');
@@ -120,6 +121,57 @@ test('normalizeReceiptOffer emits a date and preserves structured salary with mi
     source: 'local-parser',
     salary: { min: 125000, max: 150000, currency: 'USD' },
   });
+});
+
+const metrics = { contractType: 'Permanent', hours: '40 h/semana', applicationDeadline: '2026-11-01', vacancyCount: 3, observedAt: '2026-10-08T12:00:00.000Z', availabilityEvidence: 'feed-seen', salary: { min: 24000, currency: 'EUR' }, sources: ['Employer', 'Greenhouse'] };
+const metricJob = { company: 'Acme', title: 'Operador de Loja', url: 'https://acme.example/jobs/1', location: 'Lisboa', postedAt: Date.now(), ...metrics };
+
+test('market receipt and ATS live event retain explicit metrics, without inventing publication dates', () => {
+  for (const serialize of [normalizeReceiptOffer, job => JSON.parse(formatLiveOfferLine(job, 'greenhouse-full'))]) {
+    const result = serialize({ ...metricJob, postedAt: undefined });
+    for (const [key, value] of Object.entries(metrics)) assert.deepEqual(result[key], value, key);
+    assert.ok(!result.postedAt);
+    for (const vacancyCount of [-1, 0, 1.5, '3', NaN, Infinity]) {
+      const invalid = serialize({ ...metricJob, vacancyCount, hours: ' ', contractType: '', applicationDeadline: ' ', observedAt: 'bad', availabilityEvidence: 'guess' });
+      for (const key of ['vacancyCount', 'hours', 'contractType', 'applicationDeadline', 'observedAt', 'availabilityEvidence']) assert.equal(key in invalid, false, `${key}: ${vacancyCount}`);
+    }
+  }
+});
+
+test('actual market and ATS discovery passes stamp one observation time and preserve final metrics', () => {
+  const root = workspace('tracked_companies: []\njob_boards:\n  - name: Acme\n    provider: greenhouse\n    careers_url: https://boards.greenhouse.io/acme\n');
+  try {
+    mkdirSync(join(root, 'data/cache/ats-companies'), { recursive: true });
+    writeFileSync(join(root, 'data/cache/ats-companies/greenhouse.json'), '["acme"]');
+    for (const scanner of ['scan.mjs', 'scan-ats-full.mjs']) {
+      const started = Date.now();
+      const script = join(ROOT, scanner);
+      const bootstrap = `
+        import greenhouse from ${JSON.stringify(new URL('../providers/greenhouse.mjs', import.meta.url).href)};
+        greenhouse.fetch = async () => [${JSON.stringify(metricJob)}, { ...${JSON.stringify(metricJob)}, title:'Assistente de vendas', url:'https://acme.example/jobs/2', postedAt:null, vacancyCount:-2, contractType:' ' }];
+        globalThis.fetch = () => { throw new Error('Network forbidden in fixture'); };
+        process.argv = [process.execPath, ${JSON.stringify(script)}, '--dry-run', '--json', ${scanner === 'scan-ats-full.mjs' ? "'--ats', 'greenhouse', '--include-undated'," : ''}];
+        await import(${JSON.stringify(new URL(`../${scanner}`, import.meta.url).href)});
+      `;
+      const result = runJson(root, bootstrap);
+      assert.equal(result.status, 0, result.stderr);
+      const receipt = JSON.parse(result.stdout);
+      assert.equal(receipt.offers.length, 2, scanner);
+      const [first, second] = receipt.offers;
+      for (const key of ['contractType', 'hours', 'applicationDeadline', 'vacancyCount', 'availabilityEvidence', 'salary', 'sources']) assert.deepEqual(first[key], metrics[key], `${scanner} ${key}`);
+      assert.ok(Date.parse(first.observedAt) >= started && Date.parse(first.observedAt) <= Date.now(), scanner);
+      assert.equal(first.observedAt, second.observedAt);
+      assert.ok(!second.postedAt);
+      assert.equal('vacancyCount' in second, false);
+      assert.equal('contractType' in second, false);
+      if (scanner === 'scan-ats-full.mjs') {
+        const live = result.stderr.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line)).filter(event => event.kind === 'offer');
+        assert.equal(live.length, 2);
+        assert.equal(live[0].observedAt, first.observedAt);
+        assert.equal(live[0].vacancyCount, 3);
+      }
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('--json includes local-parser offers during dry-run without creating pipeline or history', () => {
