@@ -50,9 +50,9 @@ silent replacement while preserving review and rollback.
 
 ## Local runtime model
 
-- Canonical code checkout: `/Users/hamiltonsilva/Developer/career-ops`.
-- Persistent user data: `/Users/hamiltonsilva/Developer/career-ops-data`.
-- Installed application: `/Users/hamiltonsilva/Applications/Career Ops.app`.
+- Canonical code checkout: `~/Developer/career-ops`.
+- Persistent user data: `~/Developer/career-ops-data`.
+- Installed application: `~/Applications/Career Ops.app`.
 - Feature and contribution worktrees are temporary development surfaces only.
 - The application may run an internal loopback web server; the user launches a
   native local app and does not manage that server manually.
@@ -111,4 +111,3 @@ Completion requires:
 - a final independent whole-branch review;
 - an evidence report that records commands, revisions, settings and rollback
   artefacts without copying personal data.
-

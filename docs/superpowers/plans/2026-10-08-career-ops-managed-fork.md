@@ -14,7 +14,7 @@
 
 - Do not modify `work/20261005/career-ops-pt-pt`; it remains the upstream pull-request branch.
 - Do not stop the currently running app until the canonical replacement passes build and pre-launch checks.
-- Code, dependencies, builds and evidence stay under `/Users/hamiltonsilva/Developer`; user data stays at `/Users/hamiltonsilva/Developer/career-ops-data`.
+- Code, dependencies, builds and evidence stay under `~/Developer`; user data stays at `~/Developer/career-ops-data`.
 - Do not run the official updater on the managed distribution; upstream enters through a dated sync branch and internal pull request.
 - Do not publish a public/commercial release under the Career Ops name.
 - Do not force-push, delete an unrecoverable ref, copy personal data into evidence, or change user pipeline/CV/profile content.
@@ -85,8 +85,8 @@ Commit message: `feat: guard managed fork updates`
 ### Task 2: Ecosystem registration and operating record
 
 **Files:**
-- Modify: `/Users/hamiltonsilva/Documents/Codex/OPERATIONS/PROJECT-REGISTRY.md`
-- Create: `/Users/hamiltonsilva/Documents/Codex/BRAIN/inbox/career-ops-managed-fork.md`
+- Modify: `~/Documents/Codex/OPERATIONS/PROJECT-REGISTRY.md`
+- Create: `~/Documents/Codex/BRAIN/inbox/career-ops-managed-fork.md`
 
 **Interfaces:**
 - Consumes: the paths and repository roles fixed by the spec.
@@ -103,7 +103,7 @@ current operational branch and the personal/internal distribution boundary.
 
 - [ ] **Step 3: Verify paths and uniqueness**
 
-Run: `rg -n "Career Ops|career-ops" /Users/hamiltonsilva/Documents/Codex/OPERATIONS/PROJECT-REGISTRY.md /Users/hamiltonsilva/Documents/Codex/BRAIN/inbox/career-ops-managed-fork.md`
+Run: `rg -n "Career Ops|career-ops" ~/Documents/Codex/OPERATIONS/PROJECT-REGISTRY.md ~/Documents/Codex/BRAIN/inbox/career-ops-managed-fork.md`
 
 Expected: one canonical registry record and one card with existing absolute paths.
 
@@ -185,9 +185,9 @@ remote heads in the evidence report.
 ### Task 5: Move the installed application to the canonical checkout
 
 **Files:**
-- Modify/build: `/Users/hamiltonsilva/Applications/Career Ops.app`
+- Modify/build: `~/Applications/Career Ops.app`
 - Modify: macOS application preferences for `io.career-ops.local`
-- Evidence only under `/Users/hamiltonsilva/Developer/evidence/career-ops/`
+- Evidence only under `~/Developer/evidence/career-ops/`
 
 **Interfaces:**
 - Consumes: canonical local `main` equal to protected fork `main` and existing external data root.
@@ -224,7 +224,7 @@ the prior app/preferences until the final whole-project review is clean.
 ### Task 6: Final inspection, evidence and branch finish
 
 **Files:**
-- Create/update: `/Users/hamiltonsilva/Developer/evidence/career-ops/managed-fork-2026-10-08/report.md`
+- Create/update: `~/Developer/evidence/career-ops/managed-fork-2026-10-08/report.md`
 - Modify: `docs/contexto/memory.md` only if final evidence changes a recorded decision.
 
 **Interfaces:**
