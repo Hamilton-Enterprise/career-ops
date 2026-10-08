@@ -29,6 +29,7 @@ while (($#)); do
 done
 mkdir -p "$script_dir/../work/macos-build"
 build_dir="$(mktemp -d "$script_dir/../work/macos-build/run.XXXXXX")"
+trap 'rm -rf -- "$build_dir"; rmdir -- "$script_dir/../work/macos-build" "$script_dir/../work" 2>/dev/null || true' EXIT
 swiftc -parse-as-library "$script_dir/CareerOpsCore.swift" "$script_dir/CareerOpsCoreTests.swift" -o "$build_dir/core-tests"
 "$build_dir/core-tests"
 "$script_dir/test-install.sh"

@@ -20,8 +20,9 @@ resolve_path() {
     printf '%s%s' "$(cd "$path" && pwd -P)" "$rest"
 }
 trash_or_relative() {
-    case "$1" in
-        */../*|*/..|*/.Trash|*/.Trash/*|*/.Trashes|*/.Trashes/*) return 0 ;;
+    # APFS is usually case-insensitive, so .TRASH is the same folder as .Trash.
+    case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+        */../*|*/..|*/.trash|*/.trash/*|*/.trashes|*/.trashes/*) return 0 ;;
         /*) return 1 ;;
         *) return 0 ;;
     esac
@@ -42,11 +43,12 @@ verify_bundle() {
 # mv into an existing directory would nest the bundle instead of replacing it.
 rename() { [[ ! -e "$2" && ! -L "$2" ]] && /bin/mv -- "$1" "$2"; }
 
-if [[ -e "$destination" ]]; then
-    [[ -d "$destination" && "$(bundle_identifier "$destination")" == "$identifier" ]] || {
+check_destination() {
+    [[ ! -e "$destination" ]] || [[ -d "$destination" && "$(bundle_identifier "$destination")" == "$identifier" ]] || {
         printf '%s\n' 'O destino já existe e não é a aplicação Career Ops.' >&2; exit 2;
     }
-fi
+}
+check_destination
 
 parent="$(dirname "$destination")"
 name="$(basename "$destination")"
@@ -56,21 +58,56 @@ held="$parent/.$name.previous.$$"
 lock="$parent/.$name.install.lock"
 locked=false
 promoted=false
+copy_pid=""
 cleanup() {
+    if [[ -n "$copy_pid" ]] && kill -0 "$copy_pid" 2>/dev/null; then
+        kill "$copy_pid" 2>/dev/null || true
+        wait "$copy_pid" 2>/dev/null || true
+    fi
     if ! "$promoted"; then
         if [[ -e "$held" && ! -e "$destination" ]]; then /bin/mv -- "$held" "$destination"; fi
         rm -rf -- "$staging"
     fi
-    if "$locked"; then rmdir -- "$lock"; fi
+    if "$locked"; then rm -f -- "$lock/pid"; rmdir -- "$lock"; fi
 }
 trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-mkdir -- "$lock" 2>/dev/null || {
+acquire_lock() {
+    mkdir -- "$lock" 2>/dev/null || return 1
+    locked=true
+    printf '%s\n' "$$" > "$lock/pid"
+}
+# Only a lock whose recorded owner is gone is recovered; a missing pid file may
+# belong to a run that has not written it yet.
+recover_stale_lock() {
+    local owner
+    owner="$(cat "$lock/pid" 2>/dev/null || true)"
+    [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null || return 1
+    printf 'Encontrada uma instalação interrompida (processo %s). A recuperar antes de continuar.\n' "$owner"
+    rm -rf -- "$parent/.$name.staging.$owner"
+    if [[ -e "$parent/.$name.previous.$owner" ]]; then
+        if [[ ! -e "$destination" ]] && rename "$parent/.$name.previous.$owner" "$destination"; then
+            printf 'A versão anterior foi reposta em %s.\n' "$destination"
+        else
+            printf 'Ficou uma cópia da versão anterior em %s.\n' "$parent/.$name.previous.$owner"
+        fi
+    fi
+    rm -f -- "$lock/pid"
+    rmdir -- "$lock" 2>/dev/null
+}
+acquire_lock || { recover_stale_lock && acquire_lock; } || {
     printf 'Já está a decorrer outra instalação para este destino. Se não estiver, apague a pasta %s e tente de novo.\n' "$lock" >&2
     exit 1
 }
-locked=true
-cp -R "$bundle" "$staging"
+check_destination
+# A background copy lets the TERM trap run at once and stop it before cleanup.
+cp -R "$bundle" "$staging" &
+copy_pid=$!
+wait "$copy_pid"
+copy_pid=""
 verify_bundle "$staging" || {
     printf '%s\n' 'A nova versão não passou na verificação (assinatura, Info.plist, executável ou identificador). A aplicação instalada ficou como estava.' >&2
     exit 1

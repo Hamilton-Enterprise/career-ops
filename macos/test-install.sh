@@ -119,12 +119,79 @@ scenario trash-through-symlink
 make_app "$destination" old
 mkdir -p "$case_dir/vol/.Trashes/501" "$case_dir/home/.Trash"
 ln -s "$case_dir/home/.Trash" "$case_dir/looks-safe"
-for target in "$case_dir/looks-safe/prev" "$case_dir/vol/.Trashes/501/prev"; do
+mkdir -p "$case_dir/caps/.TRASH"
+ln -s "$case_dir/caps/.TRASH" "$case_dir/caps-link"
+for target in "$case_dir/looks-safe/prev" "$case_dir/vol/.Trashes/501/prev" "$case_dir/caps/.TRASH/prev" \
+    "$case_dir/caps-link/prev" "$case_dir/vol2/.trashes/prev"; do
     status=0; "$installer" "$case_dir/new/Career Ops.app" "$destination" "$target" > "$case_dir/out" 2>&1 || status=$?
     check "lixo ($(basename "$(dirname "$target")")): recusado" "$status" 2
 done
 check "lixo: destino intacto" "$(marker "$destination")" old
 check "lixo: nada criado no lixo" "$(find "$case_dir/home/.Trash" "$case_dir/vol/.Trashes" -mindepth 1 | wc -l | tr -d ' ')" 1
+check "lixo em maiúsculas: nada criado" "$(find "$case_dir/caps/.TRASH" -mindepth 1 | wc -l | tr -d ' ')" 0
+check "lixo em minúsculas: nada criado" "$([[ -e "$case_dir/vol2" ]] && echo created || echo absent)" absent
+
+dead_pid() { sleep 0 & local pid=$!; wait "$pid"; printf '%s' "$pid"; }
+lock_with_pid() { mkdir "$apps/.Career Ops.app.install.lock"; [[ -z "$1" ]] || printf '%s\n' "$1" > "$apps/.Career Ops.app.install.lock/pid"; }
+
+scenario stale-lock
+make_app "$destination" old
+dead="$(dead_pid)"
+lock_with_pid "$dead"
+mkdir -p "$apps/.Career Ops.app.staging.$dead/Contents"
+status=0; "$installer" "$case_dir/new/Career Ops.app" "$destination" "$previous" > "$case_dir/out" 2>&1 || status=$?
+check "trinco órfão: recuperado e instalado" "$status" 0
+check "trinco órfão: nova versão instalada" "$(marker "$destination")" new
+check "trinco órfão: anterior guardada" "$(marker "$previous/Career Ops.app.previous")" old
+check "trinco órfão: sem restos" "$(leftovers "$apps")" 0
+check "trinco órfão: recuperação anunciada" "$(grep -c 'interrompida' "$case_dir/out")" 1
+
+scenario stale-lock-hidden-previous
+dead="$(dead_pid)"
+lock_with_pid "$dead"
+make_app "$apps/.Career Ops.app.previous.$dead" old
+status=0; "$installer" "$case_dir/new/Career Ops.app" "$destination" "$previous" > "$case_dir/out" 2>&1 || status=$?
+check "trinco órfão sem destino: instalação conclui" "$status" 0
+check "trinco órfão sem destino: nova versão instalada" "$(marker "$destination")" new
+check "trinco órfão sem destino: versão escondida reposta e guardada" "$(marker "$previous/Career Ops.app.previous")" old
+check "trinco órfão sem destino: sem restos" "$(leftovers "$apps")" 0
+check "trinco órfão sem destino: reposição anunciada" "$(grep -c 'foi reposta' "$case_dir/out")" 1
+
+scenario live-lock
+make_app "$destination" old
+lock_with_pid "$$"
+status=0; "$installer" "$case_dir/new/Career Ops.app" "$destination" "$previous" > "$case_dir/out" 2>&1 || status=$?
+check "trinco ativo: recusado" "$status" 1
+check "trinco ativo: destino intacto" "$(marker "$destination")" old
+check "trinco ativo: trinco preservado" "$(cat "$apps/.Career Ops.app.install.lock/pid")" "$$"
+
+scenario lock-without-pid
+make_app "$destination" old
+lock_with_pid ""
+status=0; "$installer" "$case_dir/new/Career Ops.app" "$destination" "$previous" > "$case_dir/out" 2>&1 || status=$?
+check "trinco sem pid: recusado" "$status" 1
+check "trinco sem pid: destino intacto" "$(marker "$destination")" old
+check "trinco sem pid: trinco preservado" "$([[ -d "$apps/.Career Ops.app.install.lock" ]] && echo kept || echo removed)" kept
+
+scenario sigterm-during-copy
+make_app "$destination" old
+mkdir -p "$case_dir/bin"
+cat > "$case_dir/bin/cp" <<FAKE
+#!/bin/bash
+printf '%s\n' "\$\$" > "$case_dir/cp.pid"
+mkdir -p "\${@: -1}/Contents"
+exec sleep 30
+FAKE
+chmod +x "$case_dir/bin/cp"
+PATH="$case_dir/bin:$PATH" "$installer" "$case_dir/new/Career Ops.app" "$destination" "$previous" > "$case_dir/out" 2>&1 &
+installer_pid=$!
+for _ in $(seq 1 50); do [[ -s "$case_dir/cp.pid" ]] && break; sleep 0.1; done
+kill -TERM "$installer_pid"
+status=0; wait "$installer_pid" || status=$?
+check "SIGTERM durante a cópia: termina com erro" "$([[ "$status" != 0 ]] && echo failed || echo ok)" failed
+check "SIGTERM durante a cópia: cópia terminada" "$(kill -0 "$(cat "$case_dir/cp.pid")" 2>/dev/null && echo alive || echo dead)" dead
+check "SIGTERM durante a cópia: destino intacto" "$(marker "$destination")" old
+check "SIGTERM durante a cópia: sem restos" "$(leftovers "$apps")" 0
 
 scenario foreign-destination
 mkdir -p "$destination/Contents"
