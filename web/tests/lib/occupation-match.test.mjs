@@ -83,6 +83,30 @@ test("German retail aliases require the retail sector rather than generic sellin
   assert.equal(matchOccupationTitle("Verkäuferin im Einzelhandel", resolved)?.occupationId, "retail-assistant");
 });
 
+test("expansion never cuts originals; only additions are budgeted and reported as omitted", () => {
+  const originals = Array.from({ length: 20 }, (_, index) => `Quantum role ${index}`);
+  assert.deepEqual(expandOccupationTerms(originals, ["en"]), { terms: originals, occupations: [], omitted: [] });
+  const withConcept = [...originals, "Sales Assistant"];
+  const result = expandOccupationTerms(withConcept, ["pt", "es", "en", "fr", "de", "nl"]);
+  assert.deepEqual(result.terms.slice(0, withConcept.length), withConcept);
+  assert.ok(result.terms.includes("Assistente de Vendas"));
+});
+
+test("additions rotate across occupations and languages before repeating a cell", () => {
+  const inputs = ["Técnico de Farmácia", "Assistente de Vendas", "Operador de Loja"];
+  const result = expandOccupationTerms(inputs, ["pt", "es", "en", "nl"]);
+  assert.deepEqual(result.terms.slice(0, inputs.length), inputs);
+  // ES pharmacy aliases are accent-only twins of PT/original terms, so that cell is empty.
+  assert.deepEqual(result.terms.slice(inputs.length), [
+    "Técnico Auxiliar de Farmácia", "Operadora de Loja",
+    "Asistente de ventas", "Dependiente de tienda",
+    "Pharmacy Assistant", "Sales Assistant", "Retail Assistant",
+    "Apotheekassistent", "Verkoopassistent", "Winkelmedewerker",
+    "Ajudante de Farmácia", "Assistente de Loja",
+  ]);
+  assert.deepEqual(result.omitted, ["Auxiliar de ventas", "Dependienta de tienda", "Store Assistant", "Auxiliar de Farmácia", "Shop Assistant"]);
+});
+
 test("expansion puts user terms first, deduplicates accents/case, respects languages and the 12-term cap", () => {
   const result = expandOccupationTerms(["Ajudante de Farmácia", "Sales Assistant", "sales assistant"], ["pt", "es", "en"]);
   assert.deepEqual(result.terms.slice(0, 2), ["Ajudante de Farmácia", "Sales Assistant"]);
@@ -92,9 +116,11 @@ test("expansion puts user terms first, deduplicates accents/case, respects langu
   assert.ok(!result.terms.includes("Apotheekassistent"));
   assert.ok(result.terms.length <= 12);
   const capped = expandOccupationTerms(["Ajudante de Farmácia", "Sales Assistant"], ["pt", "es", "en", "fr", "de", "nl"], 100);
-  assert.equal(capped.terms.length, 12);
+  assert.equal(capped.terms.length, 2 + 12);
   assert.ok(capped.omitted.length > 0);
-  assert.deepEqual(expandOccupationTerms(["Sales Assistant", "Chatbots"], ["en"], 1).terms, ["Sales Assistant"]);
+  assert.ok(!capped.omitted.some(term => ["Ajudante de Farmácia", "Sales Assistant"].includes(term)));
+  assert.deepEqual(expandOccupationTerms(["Sales Assistant", "Chatbots"], ["en"], 1).terms, ["Sales Assistant", "Chatbots", "Chatbot Developer"]);
+  assert.deepEqual(expandOccupationTerms(["Sales Assistant", "Chatbots"], ["en"], 0).terms, ["Sales Assistant", "Chatbots"]);
   assert.deepEqual(expandOccupationTerms("Pharmacy Assistant", ["nl"]).terms, ["Pharmacy Assistant", "Apotheekassistent"]);
   assert.deepEqual(expandOccupationTerms("Auxiliar de Farmácia", ["pt"]).terms.filter(term => /^auxiliar de farmacia$/i.test(term.normalize("NFD").replace(/\p{M}/gu, ""))), ["Auxiliar de Farmácia"]);
 });
