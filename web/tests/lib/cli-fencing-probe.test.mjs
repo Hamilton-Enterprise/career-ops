@@ -53,23 +53,24 @@ const completeHelp = (overrides = {}) => ({
  */
 function stubCodex(t, { globalFlags, execFlags }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fencing-probe-"));
-  const bin = path.join(dir, "codex-stub.mjs");
+  const bin = path.join(dir, "codex-stub");
+  const entry = `${bin}.cjs`;
   const callLog = path.join(dir, "calls.log");
   const help = JSON.stringify({
     globalHelp: structuredHelp(globalFlags),
     execHelp: structuredHelp(execFlags),
   });
   fs.writeFileSync(
-    bin,
-    `#!/usr/bin/env node
-import fs from "node:fs";
+    entry,
+    `const fs = require("node:fs");
 const help = ${help};
 const isExec = process.argv[2] === "exec";
 fs.appendFileSync(${JSON.stringify(callLog)}, (isExec ? "exec" : "global") + "\\n");
 process.stdout.write((isExec ? help.execHelp : help.globalHelp) + "\\n");
 `,
   );
-  fs.chmodSync(bin, 0o755);
+  fs.writeFileSync(bin, `#!${process.execPath}\nrequire(${JSON.stringify(entry)});\n`, { mode: 0o755 });
+  fs.writeFileSync(`${bin}.ps1`, '& "node$exe" "$basedir/codex-stub.cjs" $args\n');
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const spawnCount = () => {
     try {
@@ -78,13 +79,12 @@ process.stdout.write((isExec ? help.execHelp : help.globalHelp) + "\\n");
       return 0;
     }
   };
-  return { bin, spawnCount };
+  return { bin, entry, spawnCount };
 }
 
-// Windows has no shebang support, so a script stub cannot be spawned as a
-// binary there. Only the two spawn-counting cases below depend on one; every
-// rule they would otherwise cover is asserted against helpSatisfiesFencing,
-// which runs everywhere.
+// The descendant-holder fixture below is deliberately POSIX-only because it
+// exercises inherited pipe handles through a shebang script. The regular stub
+// above also writes npm's Windows PowerShell wrapper and runs everywhere.
 const needsSpawnableStub = {
   skip: process.platform === "win32" ? "Windows cannot spawn a shebang script as a binary" : false,
 };
@@ -266,7 +266,7 @@ test("a binary that exists but cannot be run is refused", async (t) => {
   assert.equal(supported, false);
 });
 
-test("help output is read once per binary, whatever the caller asks of it", needsSpawnableStub, async (t) => {
+test("help output is read once per binary, whatever the caller asks of it", async (t) => {
   // Given two process spawns per read, and a Scan tab that calls this on every
   // AI search
   const { bin, spawnCount } = stubCodex(t, {
@@ -289,7 +289,7 @@ test("help output is read once per binary, whatever the caller asks of it", need
   assert.equal(spawnCount(), 2, "one --help and one `exec --help`, shared by every caller");
 });
 
-test("a replaced binary is re-read even if size and mtime are restored", needsSpawnableStub, async (t) => {
+test("a replaced binary is re-read even if size and mtime are restored", async (t) => {
   // Given an executable swapped in place — a reinstall, a build writing the same
   // length, a restore putting the timestamp back. Size and mtime can survive
   // that; the file is still a different one.
@@ -322,6 +322,32 @@ test("a replaced binary is re-read even if size and mtime are restored", needsSp
   // cannot outlive the binary it described.
   assert.ok(spawnCount() > afterFirst, `expected a re-read, spawns stayed at ${afterFirst}`);
 });
+
+test(
+  "a replaced npm target invalidates help cached for its unchanged shim",
+  { skip: process.platform !== "win32" ? "npm uses this shim + PowerShell wrapper layout on Windows" : false },
+  async (t) => {
+    // Given npm's extensionless shim and PowerShell wrapper still point at the
+    // same JS entrypoint after an in-place package upgrade
+    const { bin, entry, spawnCount } = stubCodex(t, {
+      globalFlags: [...CODEX_REQUIRED_GLOBAL_FLAGS],
+      execFlags: [...CODEX_REQUIRED_EXEC_FLAGS, ...ROUTE_EXEC_FLAGS],
+    });
+    assert.equal(await codexFencingSupported(bin, { alsoRequiresInExec: ROUTE_EXEC_FLAGS }), true);
+    const shimIdentity = fs.statSync(bin);
+    const afterFirst = spawnCount();
+
+    // When only the real target changes and its new help drops a required flag
+    const replacement = `${entry}.new`;
+    fs.writeFileSync(replacement, fs.readFileSync(entry, "utf8").replace("--search", "--nope__"));
+    fs.renameSync(replacement, entry);
+    assert.equal(fs.statSync(bin).ino, shimIdentity.ino, "the shim must remain unchanged");
+
+    // Then the target identity evicts the approval cached for the old package.
+    assert.equal(await codexFencingSupported(bin, { alsoRequiresInExec: ROUTE_EXEC_FLAGS }), false);
+    assert.ok(spawnCount() > afterFirst, `expected a re-read, spawns stayed at ${afterFirst}`);
+  },
+);
 
 // A bound, not a preference: the failure this case guards against is a promise
 // that never settles, and asserting on a value cannot catch that — the runner
@@ -361,7 +387,7 @@ spawn(process.execPath, ["-e", "setTimeout(() => {}, 30_000)"], {
   assert.equal(supported, false);
 });
 
-test("a binary that says nothing is retried rather than remembered", needsSpawnableStub, async (t) => {
+test("a binary that says nothing is retried rather than remembered", async (t) => {
   // Given a probe that produced no help at all: a spawn error, a timeout, a
   // binary killed mid-write. That is a transient condition, not a verdict about
   // the flags — caching it would strand a working Codex until the server

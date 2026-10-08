@@ -82,6 +82,13 @@ const unsupportedAgents = [
 const offer = { url: "https://example.test/jobs/42", title: "Designer", company: "Synthetic", location: "Lisboa", source: "ai-search", verification: "unconfirmed" };
 const envelope = `<<offer:${JSON.stringify(offer)}>>`;
 
+function writeMockCli(dir, name, source) {
+  const entry = path.join(dir, `${name}.cjs`);
+  fs.writeFileSync(entry, source);
+  fs.writeFileSync(path.join(dir, name), `#!${process.execPath}\nrequire(${JSON.stringify(entry)});\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, `${name}.ps1`), `& "node$exe" "$basedir/${name}.cjs" $args\n`);
+}
+
 function fixture(t, behavior = "success") {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-ai-route-test-")));
   const bins = path.join(root, "bin");
@@ -125,7 +132,7 @@ if (behavior === "empty") {
   if (["success-nonzero", "partial-failure", "invalid-failure"].includes(behavior)) process.exitCode = 7;
 }
 `;
-    fs.writeFileSync(path.join(bins, bin), script, { mode: 0o755 });
+    writeMockCli(bins, bin, script);
   }
   const values = { PATH: bins, CAREER_OPS_ROOT: data, CAREER_OPS_DATA_DIR: data, CAREER_OPS_CODE_ROOT: code };
   const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
