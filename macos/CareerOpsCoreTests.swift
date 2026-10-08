@@ -179,6 +179,29 @@ struct CareerOpsCoreTests {
         assert(noData.config.codeRoot.path == runtime.path)
         assert(validateConfiguration(noData.config, nodeVersion: "v22.6.0")?.contains("pasta de dados") == true,
                "Without a data root or checkout the artifact must not become the data root")
+
+        for raw in [nil, "", "   ", "\t\n"] as [String?] {
+            assert(optionalPathPreference(raw) == nil, "Empty/whitespace data-root preference must be absent, not cwd")
+        }
+        let emptyPref = resolveLaunchConfiguration(checkout: checkout, node: node,
+                                                   dataRoot: optionalPathPreference(""),
+                                                   runtimePath: runtime.path, buildSHA: sha)
+        assert(emptyPref.config.dataRoot == nil)
+        assert(effectiveDataRoot(emptyPref.config).path == dataRoot.resolvingSymlinksInPath().path,
+               "Empty preference must fall through to the checkout marker, never FileManager.default.currentDirectoryPath")
+        assert(serverEnvironment(emptyPref.config, inherited: [:])["CAREER_OPS_ROOT"] == dataRoot.resolvingSymlinksInPath().path)
+
+        let overlap = resolveLaunchConfiguration(checkout: checkout, node: node, dataRoot: runtime,
+                                                 runtimePath: runtime.path, buildSHA: sha)
+        assert(dataRootConflictsWithRuntime(runtime, runtime))
+        assert(dataRootConflictsWithRuntime(runtime.appendingPathComponent("nested"), runtime))
+        assert(!dataRootConflictsWithRuntime(dataRoot, runtime))
+        assert(validateConfiguration(overlap.config, nodeVersion: "v22.6.0")?.contains("não pode ser a pasta do runtime") == true,
+               "Data root equal to the runtime must refuse to start")
+        let nested = resolveLaunchConfiguration(checkout: checkout, node: node,
+                                                dataRoot: runtime.appendingPathComponent("nested"),
+                                                runtimePath: runtime.path, buildSHA: sha)
+        assert(validateConfiguration(nested.config, nodeVersion: "v22.6.0")?.contains("não pode ser a pasta do runtime") == true)
     }
 
     private static func testWebPreferences(root: URL, node: URL) throws {

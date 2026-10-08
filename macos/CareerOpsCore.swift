@@ -15,6 +15,21 @@ private func isDirectory(_ url: URL) -> Bool {
     return url.isFileURL && FileManager.default.fileExists(atPath: url.path, isDirectory: &directory) && directory.boolValue
 }
 
+/// UserDefaults path preferences treat nil, "" and whitespace as "not set".
+/// `URL(fileURLWithPath: "")` is the process cwd — never use that for an empty preference.
+func optionalPathPreference(_ raw: String?) -> URL? {
+    guard let raw else { return nil }
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    return URL(fileURLWithPath: trimmed)
+}
+
+func dataRootConflictsWithRuntime(_ dataRoot: URL, _ runtime: URL) -> Bool {
+    let data = dataRoot.standardizedFileURL.resolvingSymlinksInPath().path
+    let code = runtime.standardizedFileURL.resolvingSymlinksInPath().path
+    return data == code || data.hasPrefix(code + "/") || code.hasPrefix(data + "/")
+}
+
 func runtimeArtifactProblem(_ runtime: URL, buildSHA: String?) -> String? {
     let files = FileManager.default
     guard let buildSHA, !buildSHA.isEmpty else { return "esta aplicação não tem o commit da compilação." }
@@ -58,6 +73,9 @@ func validateConfiguration(_ config: LaunchConfiguration, nodeVersion: String? =
     }
     if config.runtime != nil, config.dataRoot == nil, !isDirectory(effectiveDataRoot(config)) {
         return "A pasta de dados não existe: \(effectiveDataRoot(config).path). Escolha a pasta de dados."
+    }
+    if let runtime = config.runtime, dataRootConflictsWithRuntime(effectiveDataRoot(config), runtime) {
+        return "A pasta de dados não pode ser a pasta do runtime (\(runtime.path)). Escolha outra pasta de dados."
     }
     guard config.node.isFileURL, !isDirectory(config.node), files.isExecutableFile(atPath: config.node.path) else {
         return "O executável Node não existe ou não pode ser executado: \(config.node.path). Escolha o executável Node."

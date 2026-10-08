@@ -135,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private func configuration() -> (config: LaunchConfiguration, notice: String?) {
         func path(_ key: String) -> URL { URL(fileURLWithPath: preferences.string(forKey: key) ?? "") }
         return resolveLaunchConfiguration(checkout: path("CareerOpsCheckoutPath"), node: path("CareerOpsNodePath"),
-                                          dataRoot: preferences.string(forKey: "CareerOpsDataRootPath").map { URL(fileURLWithPath: $0) },
+                                          dataRoot: optionalPathPreference(preferences.string(forKey: "CareerOpsDataRootPath")),
                                           runtimePath: preferences.string(forKey: "CareerOpsRuntimePath"),
                                           buildSHA: Bundle.main.object(forInfoDictionaryKey: "CareerOpsBuildSHA") as? String)
     }
