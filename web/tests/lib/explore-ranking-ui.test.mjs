@@ -107,6 +107,34 @@ test('healthy zero keeps its receipt in the completed explorer layout', async ()
   assert.match(html, /0 anúncios/);
 });
 
+test('settled first-run token status has normal-text contrast without changing its dark color', async () => {
+  context = { ...base(), filters:explore.DEFAULT_FILTERS, offers:[], phase:'results', initFilters() {}, setMode() {}, setAiIntent() {}, discover() {}, loadFresh() {} };
+  const placeholder = () => null;
+  const { ExplorerView } = await load('explorer-view.tsx', {
+    react: { ...React, useEffect() {}, useState:initial => [typeof initial === 'boolean' ? true : initial, () => {}] },
+    'next/link': { default:placeholder }, '@/lib/explore':explore,
+    '@/lib/pt-pt': { PT_PT_LOCALE:'pt-PT' }, '@/lib/core/normalize-text-key.mjs': { normalizeTextKey:value => value },
+    './discovering-state': { DiscoveringState:placeholder, SearchReceipt }, './filter-builder': { FilterBuilder:placeholder },
+    './ai-hunt-view': { AiHuntView:placeholder }, './explore-mode-toggle': { ExploreModeToggle:placeholder },
+    './ai-search-box': { AiSearchBox:placeholder }, './results-list': { ResultsList }, './schedule-job-action': { ScheduleJobAction:placeholder },
+  });
+  const html = render(ExplorerView, { seed:{ filters:explore.DEFAULT_FILTERS, seededFrom:[] }, inboxSnapshot:[], appsSnapshot:[], rootExists:true });
+  const status = html.match(/<span[^>]*>A pesquisa não usou tokens\.<\/span>/)?.[0];
+  assert.ok(status, 'the settled first-run banner must be rendered');
+  assert.match(status, /dark:text-emerald-400/);
+  // sRGB values of the existing Tailwind tokens, on the measured light banner.
+  const palette = { 600:'009966', 700:'007a55', 800:'006045' };
+  const foreground = palette[status.match(/\bclass="text-emerald-(\d+)/)?.[1]];
+  assert.ok(foreground, 'the light status must use a reviewed green token');
+  const luminance = hex => {
+    const [r, g, b] = hex.match(/\w\w/g).map(value => parseInt(value, 16) / 255)
+      .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+    return .2126 * r + .7152 * g + .0722 * b;
+  };
+  const ratio = (luminance('def0e7') + .05) / (luminance(foreground) + .05);
+  assert.ok(ratio >= 4.5, `normal text contrast ${ratio.toFixed(3)}:1 must reach 4.5:1`);
+});
+
 test('provider persists final ranked cards and broad receipt separately for each opportunity type', async t => {
   const slots = [], effects = [], stored = new Map(), requested = [], urls = [], pipelinePayloads = [];
   let cursor = 0;

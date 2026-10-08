@@ -217,7 +217,7 @@ export function ExplorerView({
             <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
               <Check className="mt-0.5 size-4 shrink-0 text-emerald-500" />
               <p className="text-[13px] leading-relaxed text-foreground">
-                Estas oportunidades correspondem aos critérios do teu perfil. <span className="text-emerald-600 dark:text-emerald-400">A pesquisa não usou tokens.</span>{filters.opportunityType === "employment" ? " Avalia uma oferta para veres a compatibilidade de A a F." : " Podes guardar as que quiseres acompanhar."}
+                Estas oportunidades correspondem aos critérios do teu perfil. <span className="text-emerald-700 dark:text-emerald-400">A pesquisa não usou tokens.</span>{filters.opportunityType === "employment" ? " Avalia uma oferta para veres a compatibilidade de A a F." : " Podes guardar as que quiseres acompanhar."}
               </p>
             </div>
           )}
