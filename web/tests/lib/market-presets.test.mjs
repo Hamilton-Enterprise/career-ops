@@ -17,7 +17,7 @@ test("Portuguese retail and pharmacy concepts place Auchan before existing marke
     assert.deepEqual(plan.jobBoards, [
       { name: "Auchan Portugal", provider: "workday", enabled: true, careers_url: "https://auchanportugal.wd3.myworkdayjobs.com/auchan-retail" },
       { name: "Landing.jobs", provider: "landingjobs", enabled: true },
-      { name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: { queries: ["Operador de Loja"], filters: "offices.country_code:PT" } },
+      { name: "Welcome to the Jungle", provider: "wttj", enabled: true, wttj: { queries: ["Operador de Loja"], filters: "offices.country_code:PT", max_hits: 300, timeout_ms: 5000 } },
     ]);
   }
 });
@@ -466,5 +466,14 @@ test("a market's own ISO 3166-2 subdivision codes are not foreign qualifiers", (
     const plan = buildMarketPlan([market], ["x"]);
     for (const location of accepted) assert.deepEqual(classifyMarketLocation({ location }, plan), { accepted: true }, `${market}: ${location}`);
     for (const location of rejected) assert.deepEqual(classifyMarketLocation({ location }, plan), { accepted: false, reason: "outside-market" }, `${market}: ${location}`);
+  }
+});
+
+test("the country-filtered WTTJ board reads up to 300 hits per query within the scan deadline", () => {
+  for (const markets of [["portugal"], ["europe"], ["spain", "france"]]) {
+    const wttj = buildMarketPlan(markets, ["Engineer"]).jobBoards.find(board => board.provider === "wttj").wttj;
+    assert.equal(wttj.max_hits, 300, markets.join(","));
+    assert.equal(wttj.timeout_ms, 5000, markets.join(","));
+    assert.match(wttj.filters, /offices\.country_code:/);
   }
 });

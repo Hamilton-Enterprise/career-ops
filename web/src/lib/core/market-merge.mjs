@@ -2,8 +2,15 @@ import { normalizeUrl } from "./url-key.mjs";
 import { classifyMarketLocation } from "../market-presets.mjs";
 
 /** @typedef {import('../explore').DiscoveredOffer} DiscoveredOffer */
-/** @typedef {{source:string, state:'ok'|'partial'|'error'|'skipped', message?:string, limit?:'query-limit'}} SourceState */
-/** @typedef {{offers:DiscoveredOffer[], sources:SourceState[], missingLocation:number, valid:boolean, status:'ok'|'partial'|'failed', scanned:number, queryLimitedOnly?:boolean}} MarketRun */
+/** @typedef {'query-limit'|'hit-budget'} KnownLimit */
+/** @typedef {{source:string, state:'ok'|'partial'|'error'|'skipped', message?:string, limits?:KnownLimit[]}} SourceState */
+/** @typedef {{offers:DiscoveredOffer[], sources:SourceState[], missingLocation:number, valid:boolean, status:'ok'|'partial'|'failed', scanned:number, knownLimitsOnly?:boolean}} MarketRun */
+
+/** A source whose only shortfall is a configured limit it reached while answering normally.
+ * @param {{state:string, limits?:readonly string[]}} source */
+export function onlyKnownLimits(source) {
+  return source.state === "partial" && Array.isArray(source.limits) && source.limits.length > 0;
+}
 
 /** @param {DiscoveredOffer} offer */
 function origins(offer) {
@@ -58,6 +65,12 @@ export function mergeDiscoveredOffers(atsOffers, marketOffers) {
   return [...merged.values()];
 }
 
+const INCOMPLETE_PAGINATION = /: incomplete pagination \((\w+)\)/;
+const PAGINATION_MESSAGE = {
+  transient: "Uma ou mais pesquisas desta fonte falharam antes do fim; a cobertura ficou incompleta.",
+  structural: "A fonte não deixou ler todos os resultados que anunciou; a cobertura ficou incompleta.",
+};
+
 /** Parse the core's versioned receipt, independently of child exit success.
  * @param {string} output @param {number|null} exitCode
  * @param {ReturnType<import('../market-presets.mjs').buildMarketPlan>} plan
@@ -82,7 +95,18 @@ export function parseMarketReceipt(output, exitCode, plan, timedOut = false) {
   run.scanned = receipt.scanned;
   for (const error of receipt.errors) {
     const state = sources.find(s => s.source === error?.company);
-    if (state) { state.state = "error"; state.message = typeof error.error === "string" ? error.error : "Falha na fonte."; }
+    if (!state) continue;
+    // scan.mjs reports a provider's truncated pagination (workday, wttj) as
+    // "<id>: incomplete pagination (<reason>)": the source answered, so it is
+    // partial, not failed. A later hard error for the same source still wins.
+    const pagination = typeof error.error === "string" ? INCOMPLETE_PAGINATION.exec(error.error) : null;
+    if (pagination && state.state !== "error") {
+      state.state = "partial";
+      state.message = PAGINATION_MESSAGE[pagination[1]] ?? "A leitura desta fonte ficou incompleta.";
+    } else {
+      state.state = "error";
+      state.message = typeof error.error === "string" ? error.error : "Falha na fonte.";
+    }
   }
   if (receipt.scanned === 0 && receipt.skipped > 0 && receipt.offers.length === 0 && receipt.errors.length === 0) {
     for (const source of sources) if (source.state === "ok") {
@@ -111,10 +135,10 @@ export function parseMarketReceipt(output, exitCode, plan, timedOut = false) {
     run.offers.push(offer);
   }
   run.offers = mergeDiscoveredOffers([], run.offers);
-  run.valid = ((exitCode === 0 || exitCode === 2 || timedOut) && sources.some(s => s.state === "ok")) || run.offers.length > 0;
+  run.valid = ((exitCode === 0 || exitCode === 2 || timedOut) && sources.some(s => s.state === "ok" || s.state === "partial")) || run.offers.length > 0;
   // Only exit 2 with identified source errors can certify the other sources.
   // A timeout or unexplained child failure leaves every remaining source incomplete.
-  if (timedOut || (exitCode !== 0 && (exitCode !== 2 || !sources.some(s => s.state === "error")))) {
+  if (timedOut || (exitCode !== 0 && (exitCode !== 2 || !sources.some(s => s.state === "error" || s.state === "partial")))) {
     for (const source of sources) if (source.state === "ok") {
       source.state = "error";
       source.message = timedOut ? "A fonte não terminou dentro do prazo." : "O scanner terminou antes de confirmar a conclusão desta fonte.";
@@ -126,22 +150,31 @@ export function parseMarketReceipt(output, exitCode, plan, timedOut = false) {
       source.message = "Um ou mais fornecedores não foram executados; o recibo não identifica quais.";
     }
   }
+  /** @param {SourceState} source @param {KnownLimit} kind @param {string} sentence */
+  const noteLimit = (source, kind, sentence) => {
+    // An unconfirmed zero is a different shortfall; runMarketDiscovery marks it.
+    if ((source.state === "ok" || onlyKnownLimits(source)) && Array.isArray(receipt.unverified_zero) && !receipt.unverified_zero.includes(source.source)) {
+      source.state = "partial";
+      source.limits = [...(source.limits ?? []), kind];
+    } else if (source.state === "ok") return;
+    source.message = source.message ? `${source.message.replace(/\.?$/u, ".")} ${sentence[0].toUpperCase()}${sentence.slice(1)}` : sentence;
+  };
   for (const skipped of plan.skippedSources) {
     if (skipped.reason !== "query-limit") continue;
     const board = plan.jobBoards.find(({ provider }) => provider === skipped.source);
     const source = sources.find(s => s.source === board?.name);
     if (!board?.wttj || !source) continue;
     const consulted = board.wttj.queries.length;
-    const cap = `feitas ${consulted} de ${consulted + skipped.omitted.length} pesquisas; os restantes termos continuam a filtrar os títulos recebidos.`;
-    // An unconfirmed zero is a different shortfall; runMarketDiscovery marks it.
-    if (source.state === "ok" && Array.isArray(receipt.unverified_zero) && !receipt.unverified_zero.includes(source.source)) {
-      source.state = "partial";
-      source.limit = "query-limit";
-      source.message = cap;
-    } else if (source.state !== "ok") source.message = source.message ? `${source.message.replace(/\.?$/u, ".")} F${cap.slice(1)}` : cap;
+    noteLimit(source, "query-limit", `feitas ${consulted} de ${consulted + skipped.omitted.length} pesquisas; os restantes termos continuam a filtrar os títulos recebidos.`);
+  }
+  for (const limit of Array.isArray(receipt.limits) ? receipt.limits : []) {
+    const source = sources.find(s => s.source === limit?.company);
+    const counts = [limit?.read, limit?.total, limit?.queries];
+    if (!source || limit.kind !== "hit-budget" || !counts.every(n => Number.isSafeInteger(n) && n > 0)) continue;
+    noteLimit(source, "hit-budget", `lidos os primeiros ${limit.read} de ${limit.total} resultados em ${limit.queries} ${limit.queries === 1 ? "pesquisa" : "pesquisas"} (limite por pesquisa).`);
   }
   run.status = !run.valid ? "failed" : timedOut || exitCode !== 0 || receipt.errors.length || sources.some(s => s.state !== "ok") ? "partial" : "ok";
-  run.queryLimitedOnly = run.status === "partial" && !timedOut && exitCode === 0 && !receipt.errors.length &&
-    sources.every(s => s.state === "ok" || s.limit === "query-limit");
+  run.knownLimitsOnly = run.status === "partial" && !timedOut && exitCode === 0 && !receipt.errors.length &&
+    sources.every(s => s.state === "ok" || onlyKnownLimits(s));
   return run;
 }

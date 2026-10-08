@@ -7,7 +7,7 @@ import { scanTimeoutMessage } from "./scan-timeout.mjs";
 import { ATS_LABEL, ATS_SOURCES, type AtsSource, type DiscoveredOffer, type ExploreFilters, type FitBand, type ScanEvent, type SearchPlan } from "@/lib/explore";
 import { mergeScanResults, timedOutMessage } from "./scan-merge.mjs";
 import { runMarketDiscovery } from "@/lib/core/market-scan";
-import { mergeDiscoveredOffers, sourceBackedFields } from "./market-merge.mjs";
+import { mergeDiscoveredOffers, onlyKnownLimits, sourceBackedFields } from "./market-merge.mjs";
 import { buildMarketPlan, classifyMarketLocation } from "@/lib/market-presets.mjs";
 import { buildSearchPlan } from "@/lib/search-plan.mjs";
 import { rankOpportunities } from "@/lib/opportunity-rank.mjs";
@@ -493,13 +493,13 @@ async function runDiscoveryPass(searchPlan: SearchPlan, onEvent: (e: ScanEvent) 
   }
   const valid = (ats.length > 0 && atsValid) || marketRun?.valid === true;
   const status = !valid ? "failed" : sources.some(s => s.state !== "ok") || atsErrors.length > 0 || marketRun?.status === "partial" ? "partial" : "ok";
-  const queryLimited = status === "partial" && atsErrors.length === 0 && marketRun !== null && "queryLimitedOnly" in marketRun && marketRun.queryLimitedOnly === true &&
-    sources.every(s => s.state === "ok" || s.limit === "query-limit");
+  const knownLimitsOnly = status === "partial" && atsErrors.length === 0 && marketRun !== null && "knownLimitsOnly" in marketRun && marketRun.knownLimitsOnly === true &&
+    sources.every(s => s.state === "ok" || onlyKnownLimits(s));
   if (!valid) onEvent({ kind: "error", message: atsErrors[0] ?? "Nenhuma fonte selecionada devolveu um resultado válido." });
   onEvent({
     ...(atsSummary ?? { kind: "summary", companiesScanned: 0, unreachable: 0, matches: 0 }),
     companiesScanned: (atsSummary?.companiesScanned ?? 0) + (marketRun?.scanned ?? 0),
-    matches: offers.length, status, sources, missingLocation, ...(queryLimited ? { queryLimited: true as const } : {}),
+    matches: offers.length, status, sources, missingLocation, ...(knownLimitsOnly ? { knownLimitsOnly: true as const } : {}),
     ...(sources.some(s => s.state !== "ok") ? { incomplete: sources.filter(s => s.state !== "ok").map(s => s.source) } : {}),
   });
   return offers;
@@ -508,8 +508,8 @@ async function runDiscoveryPass(searchPlan: SearchPlan, onEvent: (e: ScanEvent) 
 type Summary = Extract<ScanEvent, { kind: "summary" }>;
 
 function healthyZero(summary: Summary | undefined, filters: ExploreFilters): boolean {
-  // A query budget is a known limit, not an unconfirmed zero, so it may still broaden.
-  const limited = new Set(summary?.queryLimited ? summary.sources?.filter(source => source.state === "partial" && source.limit === "query-limit").map(source => source.source) : []);
+  // A known budget is not an unconfirmed zero, so it may still broaden.
+  const limited = new Set(summary?.knownLimitsOnly ? summary.sources?.filter(onlyKnownLimits).map(source => source.source) : []);
   if (!summary || !(summary.status === "ok" || (summary.status === "partial" && limited.size > 0)) || summary.matches !== 0 ||
       !summary.sources?.length || summary.sources.some(source => source.state !== "ok" && !limited.has(source.source)) ||
       summary.incomplete?.some(source => !limited.has(source)) || summary.unreachable !== 0 || (summary.missingLocation ?? 0) > 0 ||
