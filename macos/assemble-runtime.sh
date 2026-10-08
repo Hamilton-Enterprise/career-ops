@@ -30,7 +30,7 @@ fi
 
 mkdir -p "$runtime_dir"
 staging="$runtime_dir/.staging.$sha.$$"
-trap '[[ -e "$staging" ]] && { chmod -R u+w "$staging"; rm -rf -- "$staging"; }' EXIT
+trap '[[ -e "$staging" ]] && rm -rf -- "$staging"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -59,8 +59,8 @@ outside="$(find "$staging" -type l -lname '/*' -print -quit)"
 usable "$staging" || refuse 'O runtime preparado não tem o launcher, a compilação web ou a identidade esperada.'
 
 mkdir "$staging/web/.next/cache"
-chmod -R a-w "$staging"
-chmod u+w "$staging/web/.next" "$staging/web/.next/cache"
+# Files only: ~/bin/dedup-clones swaps duplicates by renaming a clone into their directory.
+find "$staging" -type f -exec chmod a-w {} +
 if [[ ! -e "$target" ]] && /bin/mv -- "$staging" "$target"; then
     printf '%s\n' "$target"
     exit 0

@@ -65,6 +65,10 @@ if [[ -e "$destination" ]]; then
     }
 fi
 runtime="$("$script_dir/assemble-runtime.sh" "$checkout" "$runtime_dir")"
+"$script_dir/smoke-runtime.sh" "$runtime" "$node_path" > "$build_dir/smoke.log" 2>&1 || {
+    cat "$build_dir/smoke.log" >&2
+    printf 'O runtime %s falhou a verificação. A aplicação instalada ficou como estava.\n' "$runtime" >&2; exit 1;
+}
 bundle="$build_dir/Career Ops.app"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
 swiftc -parse-as-library -target "$(uname -m)-apple-macosx13.0" -O "$script_dir/CareerOpsCore.swift" "$script_dir/CareerOpsApp.swift" -framework AppKit -framework WebKit -o "$bundle/Contents/MacOS/CareerOps"

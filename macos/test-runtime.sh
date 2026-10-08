@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "$0")" && pwd -P)"
 assembler="$script_dir/assemble-runtime.sh"
 root="$(mktemp -d)"
-trap 'chmod -R u+w "$root" 2>/dev/null; rm -rf -- "$root"' EXIT
+trap 'rm -rf -- "$root"' EXIT
 failures=0
 
 check() {
@@ -74,8 +74,10 @@ for private in data reports cv.md config/profile.yml .career-ops-data; do
 done
 check "sucesso: modelos do sistema presentes" "$(test -f "$artifact/config/profile.example.yml" && echo yes)" yes
 check "sucesso: ficheiros só de leitura" "$(test -w "$artifact/doctor.mjs" && echo writable || echo read-only)" read-only
-check "sucesso: pasta do código só de leitura" "$(test -w "$artifact" && echo writable || echo read-only)" read-only
-check "sucesso: cache web gravável" "$(test -w "$artifact/web/.next/cache" && echo writable)" writable
+check "sucesso: compilação web só de leitura" "$(test -w "$artifact/web/.next/BUILD_ID" && echo writable || echo read-only)" read-only
+check "sucesso: dependências só de leitura" "$(test -w "$artifact/web/node_modules/next/index.js" && echo writable || echo read-only)" read-only
+check "sucesso: pastas graváveis para clones" "$(count "$artifact" -type d ! -perm -u+w)" 0
+check "sucesso: cache web existe" "$(test -d "$artifact/web/.next/cache" && echo yes)" yes
 check "sucesso: sem staging" "$(staging_left)" 0
 check "sucesso: dados do checkout intactos" "$(cat "$checkout/cv.md")" 'private cv'
 check "sucesso: instalação partilhada intacta" "$(test -d "$shared/js-yaml/.git" && test -L "$checkout/node_modules" && echo intact)" intact
