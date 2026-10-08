@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback, type CliResolution } from "@/lib/clis";
 import { careerOpsRoot } from "@/lib/career-ops";
-import { CAPS } from "@/lib/worker-capabilities.mjs";
+import { ACTION_CAPABILITIES } from "@/lib/worker-capabilities.mjs";
+import { agentActionsFor } from "@/lib/agent-availability.mjs";
 import { CLAUDE_READ_ONLY_ISOLATION, scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
 import { CV_TEXT_MAX_CHARS, CV_UPLOAD_MAX_BYTES, cvTextLengthError, cvUploadError, cvUploadSizeMessage } from "@/lib/cv/quality";
@@ -104,6 +105,8 @@ export async function POST(req: Request) {
       // one below, which would wrongly say Claude is missing (#4607).
       resolved = resolveCliOrFallback(cliId);
       if (!resolved) return Response.json(cliUnavailableError(cliId), { status: 404 });
+      const refused = refusalFor(resolved.spec);
+      if (refused) return Response.json({ error: refused }, { status: 400 });
       // Reading a PDF/DOCX from a path needs the CLI's file tool, which only Claude
       // is granted here. Tell non-Claude users plainly instead of failing opaquely.
       // Judged on the CLI that will actually run: a stale saved id falls back to
@@ -117,8 +120,14 @@ export async function POST(req: Request) {
         );
       }
       const ext = (file.name.match(/\.[a-z0-9]+$/i)?.[0] || ".pdf").toLowerCase();
-      tempFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-cv-")), `cv${ext}`); // outside the repo, basename-only
-      fs.writeFileSync(tempFile, Buffer.from(await file.arrayBuffer()), { mode: 0o600 }); // PII → owner-only
+      const bytes = Buffer.from(await file.arrayBuffer());
+      try {
+        tempFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-cv-")), `cv${ext}`); // outside the repo, basename-only
+        fs.writeFileSync(tempFile, bytes, { mode: 0o600 }); // PII → owner-only
+      } catch {
+        if (tempFile) cleanupTemp(tempFile);
+        return Response.json({ error: "Não foi possível guardar o ficheiro temporário; verifica o espaço em disco." }, { status: 507 });
+      }
       promptSource = FILE_SRC(tempFile);
     } else {
       return Response.json({ error: "Este formato de conteúdo não é suportado." }, { status: 400 });
@@ -132,6 +141,11 @@ export async function POST(req: Request) {
   if (!resolved) {
     if (tempFile) cleanupTemp(tempFile);
     return Response.json(cliUnavailableError(cliId), { status: 404 });
+  }
+  const refused = refusalFor(resolved.spec);
+  if (refused) {
+    if (tempFile) cleanupTemp(tempFile);
+    return Response.json({ error: refused }, { status: 400 });
   }
   const { spec, binPath } = resolved;
   // The CLI actually running: fencing and argv below are keyed on it.
@@ -167,11 +181,15 @@ export async function POST(req: Request) {
       binPath,
       args,
       { cwd: careerOpsRoot(), env: process.env },
-      { cliId, capabilities: CAPS.localReadOnly },
+      { cliId, capabilities: ACTION_CAPABILITIES["cv-ingest"] },
     );
-  } catch (e) {
+  } catch {
     if (tempFile) cleanupTemp(tempFile); // never leak the CV temp if spawn throws sync
-    return Response.json({ error: e instanceof Error ? e.message : "Não foi possível iniciar o agente." }, { status: 500 });
+    // The fencer's refusal is English and technical; the user gets the outcome.
+    return Response.json(
+      { error: `Não foi possível iniciar o ${spec.name} com permissões só de leitura, por isso a importação não correu. Escolhe outro agente em Configuração.` },
+      { status: 500 },
+    );
   }
 
   const encoder = new TextEncoder();
@@ -226,8 +244,9 @@ export async function POST(req: Request) {
       // stream is plain text, so the notice is a leading line rather than an event.
       // It lands in the client's `trace`, which renders only its latest line — a
       // pre-existing limit of this view, not something to work around here.
-      const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: CAPS.localReadOnly });
-      if (fencing.notice) safeEnqueue(`⚠️ ${fencing.notice}\n\n`);
+      const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: ACTION_CAPABILITIES["cv-ingest"] });
+      if (fencing.level === "none") safeEnqueue(`⚠️ O ${spec.name} não tem restrição de permissões verificada e corre com o acesso que tem por omissão.\n\n`);
+      else if (fencing.level === "partial") safeEnqueue(`⚠️ O ${spec.name} só está parcialmente restringido.\n\n`);
       if (substitution) safeEnqueue(`⚠️ ${substitution}\n\n`);
 
       child.stdout.on("data", (d: Buffer) => {
@@ -284,6 +303,11 @@ export async function POST(req: Request) {
   return new Response(stream, {
     headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" },
   });
+}
+
+/** The picker's PT-PT reason this CLI cannot import a CV (agent-availability.mjs), or null. */
+function refusalFor(spec: Parameters<typeof agentActionsFor>[0]): string | null {
+  return agentActionsFor(spec).find((a) => a.id === "cv-ingest")?.reason ?? null;
 }
 
 /** The body, or null as soon as it passes `limit` bytes (Content-Length may be absent). */

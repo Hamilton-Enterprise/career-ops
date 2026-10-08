@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
@@ -10,6 +10,7 @@ import { cn } from "@/lib/cn";
 import { instrumentSerif } from "@/lib/fonts";
 import { cvReadiness, cvUploadError, finishCvStream, parseCvStream, type CvSeed } from "@/lib/cv/quality";
 import { DEFAULT_FILTERS, filtersToParams } from "@/lib/explore";
+import { resolveCliForAction } from "@/lib/saved-cli";
 
 type Phase = "input" | "parsing" | "review" | "saving" | "error";
 
@@ -40,6 +41,19 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
   // The last agent request, so an interrupted conversion can be retried as-is.
   const lastRequest = useRef<RequestInit | null>(null);
   const [canRetry, setCanRetry] = useState(false);
+  // PT-PT reason the configured agent cannot import a CV, from /api/clis.
+  const [blocked, setBlocked] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!cliId()) return;
+    let live = true;
+    void resolveCliForAction("cv-ingest").then((r) => {
+      if (live) setBlocked(r.blocked);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const readiness = md ? cvReadiness(md) : null;
 
@@ -122,6 +136,7 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
       setPhase("review");
       return;
     }
+    if (blocked) return;
     void runStream({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: trimmed, cliId: id }) });
   };
 
@@ -160,6 +175,7 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
       setPhase("error");
       return;
     }
+    if (blocked) return;
     const form = new FormData();
     form.append("file", file);
     form.append("cliId", id);
@@ -250,6 +266,15 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
             </button>
           </div>
         </div>
+        {blocked && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[13px] text-amber-700 dark:text-amber-300">
+            <AlertTriangle className="size-3.5 shrink-0" />
+            <span>{blocked} Para importar o CV com um agente, escolhe outro em Configuração. Ficheiros .md e .txt não precisam de agente.</span>
+            <Link href="/config" className="ml-auto inline-flex items-center gap-1 rounded-md bg-amber-500/20 px-2.5 py-1 font-medium text-amber-700 transition hover:bg-amber-500/30 dark:text-amber-200">
+              Escolher agente <ArrowRight className="size-3.5" />
+            </Link>
+          </div>
+        )}
         {phase === "error" &&
           (err === "needs-cli" ? (
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[13px] text-amber-700 dark:text-amber-300">
@@ -286,7 +311,7 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
           <Loader2 className="size-4 animate-spin text-brand" />
           <span className={`${instrumentSerif.className} text-lg text-foreground`}>{trace || "A ler o CV…"}</span>
         </div>
-        {md && <div className="co-cvtrace mt-4 max-h-40 overflow-hidden rounded-lg border border-border bg-surface/40 p-3 text-[11px] text-faint">{md.slice(0, 400)}…</div>}
+        {md && <div className="co-cvtrace mt-4 max-h-40 overflow-hidden rounded-lg border border-border bg-surface/40 p-3 text-xs text-faint">{md.slice(0, 400)}…</div>}
       </div>
     );
   }
@@ -301,7 +326,7 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
         {readiness && (
           <span
             className={cn(
-              "ml-auto inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium",
+              "ml-auto inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
               readiness.scoreable ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400",
             )}
           >

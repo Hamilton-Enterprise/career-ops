@@ -35,7 +35,7 @@ function fixture(t, behavior = "success") {
   const code = path.join(root, "checkout");
   for (const dir of [bins, data, tmp, path.join(code, "modes"), path.join(data, "modes")]) fs.mkdirSync(dir, { recursive: true });
   const recordFile = path.join(root, "invocations.jsonl");
-  for (const [id, bin] of [["claude", "claude"], ["codex", "codex"]]) {
+  for (const [id, bin] of [["claude", "claude"], ["codex", "codex"], ["gemini", "gemini"], ["opencode", "opencode"]]) {
     writeMockCli(bins, bin, `
 const fs = require("node:fs");
 const args = process.argv.slice(2);
@@ -266,7 +266,26 @@ test("a failed temp-file write removes the temp directory", async (t) => {
   t.after(() => { fs.writeFileSync = original; });
   const res = await postFile("cv.pdf", "%PDF-1.4 synthetic");
   fs.writeFileSync = original;
-  assert.ok(res.status >= 400);
+  assert.equal(res.status, 507);
+  assert.match((await res.json()).error, /ficheiro temporário.*espaço em disco/);
   assert.equal(f.records().length, 0);
   assert.deepEqual(f.tempDirs(), []);
+});
+
+test("an agent the fencer refuses is stopped before launch with a pt-PT reason", async (t) => {
+  const f = fixture(t);
+  const res = await postText("Pessoa Exemplo, analista.", "gemini");
+  assert.equal(res.status, 400);
+  const { error } = await res.json();
+  assert.equal(error, "O Gemini CLI não tem um modo de permissões verificado para esta ação.");
+  assert.doesNotMatch(error, /cli-fencing|argv/);
+  assert.equal(f.records().length, 0);
+});
+
+test("an unfenced agent's notice reaches the UI in pt-PT, not the fencer's English", async (t) => {
+  fixture(t, "success");
+  const body = await (await postText("Pessoa Exemplo, analista.", "opencode")).text();
+  assert.doesNotMatch(body, /cannot be permission-restricted|default access/);
+  assert.match(body, /OpenCode.*restrição de permissões/);
+  assert.equal(finishCvStream(body, "text").ok, true);
 });

@@ -15,6 +15,7 @@ import { loadBindings, transform } from "next/dist/build/swc/index.js";
 import "../helpers/web-ts-alias-loader.mjs";
 
 const quality = await import("../../src/lib/cv/quality.ts");
+const savedCli = await import("../../src/lib/saved-cli.ts");
 await loadBindings();
 const require = createRequire(import.meta.url);
 const { code } = await transform(fs.readFileSync(new URL("../../src/components/cv/cv-ingest.tsx", import.meta.url), "utf8"), {
@@ -27,8 +28,9 @@ const Stub = () => null;
 const FULL = "A ler o CV…\n<<cv:start>>\n# CV -- Pessoa Exemplo\n\n## Experiência profissional\n<<cv:end>>\n";
 const PARTIAL = "A ler o CV…\n<<cv:start>>\n# CV -- Pessoa Exemplo\n\n## Experiência prof";
 
-function mount(t, replies) {
+function mount(t, replies, clis = [{ id: "claude", installed: true, actions: [{ id: "cv-ingest", available: true, reason: null }] }]) {
   const calls = [];
+  let effectsRan = false;
   const slots = [];
   let cursor = 0;
   const hooks = {
@@ -44,10 +46,17 @@ function mount(t, replies) {
       return slots[i];
     },
     useCallback: (fn) => fn,
+    useEffect(fn) {
+      if (!effectsRan) {
+        effectsRan = true;
+        fn();
+      }
+    },
   };
   for (const [name, value] of Object.entries({
     localStorage: { getItem: () => '{"cliId":"claude"}' },
     fetch: async (url, init) => {
+      if (url === "/api/clis") return Response.json({ clis });
       calls.push({ url, init });
       return new Response(replies[Math.min(calls.length, replies.length) - 1]);
     },
@@ -67,6 +76,7 @@ function mount(t, replies) {
     "@/lib/cn": { cn: (...c) => c.filter(Boolean).join(" ") },
     "@/lib/fonts": { instrumentSerif: { className: "" } },
     "@/lib/cv/quality": quality,
+    "@/lib/saved-cli": savedCli,
     "@/lib/explore": { DEFAULT_FILTERS: { ats: [] }, filtersToParams: () => "" },
   }[id] ?? require(id)), module, module.exports);
   const render = () => {
@@ -122,7 +132,7 @@ test("an interrupted conversion is not reviewable, says so, and can be retried",
 
 test("a refused request shows the route's own message without a retry loop", async (t) => {
   const ui = mount(t, []);
-  globalThis.fetch = async () => Response.json({ error: "O texto tem 30 000 caracteres; o limite é 24 000." }, { status: 413 });
+  globalThis.fetch = async (url) => url === "/api/clis" ? Response.json({ clis: [] }) : Response.json({ error: "O texto tem 30 000 caracteres; o limite é 24 000." }, { status: 413 });
   await submitPaste(ui);
   const tree = await settle(ui, "o limite é 24 000");
   assert.equal(button(tree, "Tentar novamente"), null);
@@ -137,7 +147,7 @@ test("the upload note does not claim the content never leaves the computer", (t)
 test("an agent error mid-stream cancels the response, so the agent is stopped", async (t) => {
   let cancelled = false;
   const ui = mount(t, []);
-  globalThis.fetch = async () => new Response(new ReadableStream({
+  globalThis.fetch = async (url) => url === "/api/clis" ? Response.json({ clis: [] }) : new Response(new ReadableStream({
     start(c) {
       c.enqueue(new TextEncoder().encode('A ler o CV…\n<<cv:error>>{"reason":"unreadable"}\n'));
     },
@@ -159,4 +169,20 @@ test("the provider note and the save note are at least 12px", (t) => {
     const tag = src.split("\n").slice(Math.max(0, line - 2), line + 1).join("\n");
     assert.doesNotMatch(tag, /text-\[(?:[0-9]|1[01])px\]/, phrase);
   }
+});
+
+test("an agent that cannot import CVs is announced up front, and no conversion is attempted", async (t) => {
+  const reason = "O Gemini CLI não tem um modo de permissões verificado para esta ação.";
+  const ui = mount(t, [FULL], [{ id: "claude", installed: true, actions: [{ id: "cv-ingest", available: false, reason }] }]);
+  const before = await settle(ui, reason);
+  assert.ok(find(before, (n) => n.type === "a" || n.props?.href === "/config") || text(before).includes("Configuração"));
+  await submitPaste(ui);
+  const after = await settle(ui, reason);
+  assert.equal(ui.calls.length, 0, "the ingest route is never called");
+  assert.equal(text(after).includes("Revê o CV"), false);
+});
+
+test("no readable text in the component is below 12px", () => {
+  const src = fs.readFileSync(new URL("../../src/components/cv/cv-ingest.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /text-\[(?:[0-9]|1[01])px\]/);
 });
