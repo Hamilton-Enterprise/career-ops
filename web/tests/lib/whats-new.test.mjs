@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_OFFER_LIMIT,
   MAX_OFFER_LIMIT,
+  applyInboxOpportunityTypes,
   collectWhatsNew,
   resolveOfferLimit,
 } from "../../src/lib/whats-new.mjs";
@@ -117,4 +118,26 @@ test("the Explore limit still returns the complete count", () => {
 
   assert.equal(result.offers.length, MAX_OFFER_LIMIT);
   assert.equal(result.count, MAX_OFFER_LIMIT + 40);
+});
+
+test("inbox type: freelance is copied onto the matching whats-new offer", () => {
+  const url = "https://www.welcometothejungle.com/en/companies/bsport-1/jobs/senior-frontend-engineer-freelance_barcelona";
+  const offers = [
+    { url, title: "Senior Frontend Engineer - Freelance", company: "Bsport" },
+    { url: "https://example.com/job", title: "Backend", company: "Acme" },
+  ];
+  const out = applyInboxOpportunityTypes(offers, [
+    { url, company: "Bsport", role: "Senior Frontend Engineer - Freelance", opportunityType: "freelance" },
+  ]);
+  assert.equal(out[0].opportunityType, "freelance");
+  assert.equal(out[1].opportunityType, undefined);
+});
+
+test("a title that says Freelance is not enough without an inbox type label", () => {
+  const offers = [{ url: "https://example.com/x", title: "Designer Freelance", company: "X" }];
+  const out = applyInboxOpportunityTypes(offers, [
+    { url: "https://example.com/x", opportunityType: "employment" },
+    { url: "https://example.com/other", opportunityType: "freelance" },
+  ]);
+  assert.equal(out[0].opportunityType, undefined);
 });
