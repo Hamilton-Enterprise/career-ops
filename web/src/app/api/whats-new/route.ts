@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { careerOpsRoot, readApplications } from "@/lib/career-ops";
+import { careerOpsRoot, readApplications, readInbox } from "@/lib/career-ops";
 import { getNormalizeTextKey } from "@/lib/core/text-key";
 import { evaluatedKeys, isEvaluated } from "@/lib/whats-new-suppression.mjs";
 import type { DiscoveredOffer } from "@/lib/explore";
-import { collectWhatsNew, resolveOfferLimit } from "@/lib/whats-new.mjs";
+import { applyInboxOpportunityTypes, collectWhatsNew, resolveOfferLimit } from "@/lib/whats-new.mjs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,5 +57,6 @@ export async function GET(req: Request) {
   };
 
   const { offers, count } = collectWhatsNew(rows, { cutoff, toOffer, offerLimit });
-  return Response.json({ offers, count });
+  // Pipeline `type: freelance` wins over the typeless scan-history row.
+  return Response.json({ offers: applyInboxOpportunityTypes(offers, readInbox()), count });
 }

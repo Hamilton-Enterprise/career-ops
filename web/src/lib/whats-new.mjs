@@ -71,3 +71,25 @@ export function collectWhatsNew(rows, { cutoff, toOffer, offerLimit = DEFAULT_OF
 
   return { offers, count };
 }
+
+/**
+ * Attach `opportunityType` from the inbox when the same URL is already typed
+ * there. scan-history.tsv has no type column, so Hoje/whats-new would otherwise
+ * treat a pipeline `type: freelance` row as employment and show «Avaliar».
+ * Title heuristics are not used — only an explicit inbox label.
+ *
+ * @param {Array<{url: string, opportunityType?: string}>} offers
+ * @param {Array<{url?: string, opportunityType?: string}>} inbox
+ */
+export function applyInboxOpportunityTypes(offers, inbox) {
+  const freelance = new Set();
+  for (const job of inbox || []) {
+    if (job?.opportunityType === "freelance" && typeof job.url === "string" && job.url) {
+      freelance.add(job.url);
+    }
+  }
+  if (freelance.size === 0) return offers;
+  return offers.map((offer) =>
+    freelance.has(offer.url) ? { ...offer, opportunityType: "freelance" } : offer,
+  );
+}
